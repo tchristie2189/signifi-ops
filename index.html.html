@@ -253,11 +253,12 @@ function renderOverview(){
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
   const msHtml=projMs.map(m=>{
     const st=msStatus(m.date);
-    return `<div class="ms-item ${st.cls}">
+    return `<div class="ms-item ${st.cls}" onclick="openEditMs('${m.id}','${m.label}','${m.date}')" style="cursor:pointer" title="Click to edit date">
       <div class="ms-type">${TYPE_LBL[m.key]||m.key}</div>
       <div class="ms-label">${m.label}</div>
       <div class="ms-date">${fmtFull(m.date)}</div>
       <div class="ms-days ${st.dcls}">${st.txt}</div>
+      <div style="font-size:10px;color:var(--gray-300);margin-top:4px">click to edit</div>
     </div>`;
   }).join('');
   const pillsHtml=projects.map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('');
@@ -272,7 +273,10 @@ function renderOverview(){
     ${proj?`<div class="section">
       <div class="section-head">
         <div class="section-title">${proj.name} <span style="font-size:12px;font-weight:400;color:var(--gray-500)">— ${proj.client}</span></div>
-        <div class="section-meta" style="font-family:var(--mono);color:var(--red);font-size:12px">${proj.so_number}</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="section-meta" style="font-family:var(--mono);color:var(--red);font-size:12px">${proj.so_number||'No SO'}</div>
+          <button class="btn btn-primary" style="font-size:11px;padding:5px 12px" onclick="openEditProj('${proj.id}')">✏ Edit project</button>
+        </div>
       </div>
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet</div>'}</div>
     </div>`:'<div class="empty-state">No projects yet. Add one using the New Project tab.</div>'}`;
@@ -562,6 +566,106 @@ async function saveIntake(){
 function clearIntake(){document.querySelectorAll('#tab-intake input,#tab-intake select,#tab-intake textarea').forEach(el=>{el.value='';});}
 
 function closeModal(){document.getElementById('modal-root').innerHTML='';}
+
+// EDIT PROJECT
+function openEditProj(id){
+  const proj=projects.find(p=>p.id===id);
+  if(!proj)return;
+  const projMs=milestones.filter(m=>m.project_id===id);
+  const msRows=projMs.map(m=>`
+    <div style="display:grid;grid-template-columns:1fr 140px 32px;gap:8px;align-items:center;margin-bottom:8px">
+      <div style="font-size:13px;color:var(--black);font-weight:500">${m.label}</div>
+      <input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);width:100%">
+      <button onclick="deleteMs('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px;padding:2px 4px" title="Remove">×</button>
+    </div>`).join('');
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:520px" onclick="event.stopPropagation()">
+      <div class="modal-head"><span class="modal-title">Edit project</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div class="modal-body">
+        <div class="form-grid" style="margin-bottom:16px">
+          <div class="field"><label>Project name</label><input id="ep-name" value="${proj.name||''}"></div>
+          <div class="field"><label>SO number</label><input id="ep-so" value="${proj.so_number||''}" style="font-family:var(--mono)"></div>
+          <div class="field"><label>Client</label><input id="ep-client" value="${proj.client||''}"></div>
+          <div class="field"><label>Status</label>
+            <select id="ep-status">
+              <option value="active"${proj.status==='active'?' selected':''}>Active</option>
+              <option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option>
+              <option value="complete"${proj.status==='complete'?' selected':''}>Complete</option>
+            </select>
+          </div>
+          <div class="field full"><label>Notes</label><textarea id="ep-notes" style="min-height:70px">${proj.notes||''}</textarea></div>
+        </div>
+        <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px;padding-top:10px;border-top:1px solid var(--gray-100)">Milestone dates — click × to remove</div>
+        <div id="ms-edit-rows">${msRows}</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="deleteProj('${id}')">Delete project</button>
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveEditProj('${id}')">Save changes</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function saveEditProj(id){
+  const{error}=await sb.from('projects').update({
+    name:document.getElementById('ep-name').value.trim(),
+    so_number:document.getElementById('ep-so').value.trim(),
+    client:document.getElementById('ep-client').value.trim(),
+    status:document.getElementById('ep-status').value,
+    notes:document.getElementById('ep-notes').value,
+    updated_at:new Date().toISOString()
+  }).eq('id',id);
+  if(error){alert('Error: '+error.message);return;}
+  const projMs=milestones.filter(m=>m.project_id===id);
+  const msUpdates=projMs.map(m=>{
+    const el=document.getElementById('ms-'+m.id);
+    return el?sb.from('milestones').update({date:el.value}).eq('id',m.id):null;
+  }).filter(Boolean);
+  await Promise.all(msUpdates);
+  closeModal();showToast('Project updated ✓');await loadAll();
+}
+
+function openEditMs(id,label,date){
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:360px" onclick="event.stopPropagation()">
+      <div class="modal-head"><span class="modal-title">Edit milestone</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div class="modal-body">
+        <div class="field" style="margin-bottom:12px"><label>Milestone</label><input value="${label}" id="em-label-edit" style="font-family:var(--font);font-size:13px;padding:8px 11px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>
+        <div class="field"><label>Date</label><input type="date" id="em-date-edit" value="${date||''}" style="font-family:var(--font);font-size:13px;padding:8px 11px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="deleteMs('${id}')">Remove</button>
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveEditMs('${id}')">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function saveEditMs(id){
+  const{error}=await sb.from('milestones').update({
+    label:document.getElementById('em-label-edit').value.trim(),
+    date:document.getElementById('em-date-edit').value
+  }).eq('id',id);
+  if(error){alert('Error: '+error.message);return;}
+  closeModal();showToast('Date updated ✓');await loadAll();
+}
+
+async function deleteMs(id){
+  if(!confirm('Remove this milestone?'))return;
+  await sb.from('milestones').delete().eq('id',id);
+  closeModal();showToast('Milestone removed');await loadAll();
+}
+
+async function deleteProj(id){
+  if(!confirm('Delete this entire project and all its milestones? This cannot be undone.'))return;
+  await sb.from('milestones').delete().eq('project_id',id);
+  await sb.from('projects').delete().eq('id',id);
+  selectedProjId=null;closeModal();showToast('Project deleted');await loadAll();
+}
 
 // Init
 loadAll();
