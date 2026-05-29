@@ -347,6 +347,8 @@ const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date'];
 let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[];
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
 let currentUser=null,currentUserName='';
+let vinylFilter={status:'',search:'',dateFrom:'',dateTo:''};
+let planFilter={status:'',search:'',dateFrom:'',dateTo:''};
 
 // ── UTILS ──────────────────────────────────────────────────
 function today(){let t=new Date();t.setHours(0,0,0,0);return t;}
@@ -475,7 +477,7 @@ async function loadAll(){
     const ex=vinylSchedule.find(v=>v.id===p.id);
     const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl');
     const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping');
-    return ex?{...ex,date:vm?.date||ex.date,shipDate:sh?.date||ex.shipDate}:{id:p.id,name:p.name,so:p.so_number,client:p.client,vinylType:'',date:vm?.date||'',shipDate:sh?.date||'',pm:'',formFactor:'',status:'Scheduled',priority:i+1};
+    return ex?{...ex,date:vm?.date||ex.date,shipDate:sh?.date||ex.shipDate,pm:p.pm||ex.pm||'',vinylType:p.vinyl_type||ex.vinylType||'',formFactor:p.form_factor||ex.formFactor||''}:{id:p.id,name:p.name,so:p.so_number,client:p.client,vinylType:p.vinyl_type||'',date:vm?.date||'',shipDate:sh?.date||'',pm:p.pm||'',formFactor:p.form_factor||'',status:'Scheduled',priority:i+1};
   }).sort((a,b)=>a.priority-b.priority);
   planogramSchedule=projects.map((p,i)=>{
     const ex=planogramSchedule.find(v=>v.id===p.id);
@@ -501,6 +503,7 @@ function renderGlance(){
     {label:'Quality / QA',startKey:'quality-start',endKey:'quality-end',color:'#d97706'},
     {label:'UAT',startKey:'uat',endKey:'uat',color:'#16a34a'},
     {label:'Shipping',startKey:'shipping',endKey:'shipping',color:'#059669'},
+    {label:'Delivery',startKey:'delivery',endKey:'delivery',color:'#0891b2'},
     {label:'Installation',startKey:'installation',endKey:'installation',color:'#db2777'},
   ];
   const cards=projects.map(p=>{
@@ -657,47 +660,149 @@ function renderDeptView(dept){
 }
 
 // ── VINYL ──────────────────────────────────────────────────
+function applyVinylFilter(data){
+  return data.filter(item=>{
+    if(vinylFilter.status&&item.status!==vinylFilter.status)return false;
+    if(vinylFilter.search){const q=vinylFilter.search.toLowerCase();if(!(item.name||'').toLowerCase().includes(q)&&!(item.so||'').toLowerCase().includes(q)&&!(item.client||'').toLowerCase().includes(q))return false;}
+    if(vinylFilter.dateFrom&&item.date&&item.date<vinylFilter.dateFrom)return false;
+    if(vinylFilter.dateTo&&item.date&&item.date>vinylFilter.dateTo)return false;
+    return true;
+  });
+}
 function renderVinyl(){
   const el=document.getElementById('tab-vinyl');
-  const rows=vinylSchedule.map((item,i)=>`
-    <tr draggable="true" data-idx="${i}" data-type="vinyl" ondragstart="dragStart(event,${i},'vinyl')" ondragover="dragOver(event)" ondrop="dragDrop(event,${i},'vinyl')" ondragleave="dragLeave(event)">
-      <td><span class="drag-handle">⠿</span></td><td><span class="priority-num">${i+1}</span></td>
-      <td><input class="sched-input" value="${item.so||''}" style="width:100px" onchange="vs(${i},'so',this.value)"></td>
-      <td><input class="sched-input" value="${item.client||''}" onchange="vs(${i},'client',this.value)"></td>
-      <td><input class="sched-input" value="${item.name||''}" onchange="vs(${i},'name',this.value)"></td>
-      <td><select class="sched-select" onchange="vs(${i},'vinylType',this.value)">${['','Decal','Partial Vinyl','Full Vinyl'].map(t=>`<option${t===item.vinylType?' selected':''}>${t}</option>`).join('')}</select></td>
-      <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${i},'date',this.value,'vinyl')"></td>
-      <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vs(${i},'shipDate',this.value)"></td>
-      <td><input class="sched-input" value="${item.pm||''}" style="width:90px" onchange="vs(${i},'pm',this.value)"></td>
-      <td><input class="sched-input" value="${item.formFactor||''}" style="width:100px" onchange="vs(${i},'formFactor',this.value)"></td>
-      <td><select class="sched-select" onchange="vs(${i},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
-      <td><button onclick="removeSchedRow('vinyl',${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">×</button></td>
-    </tr>`).join('');
-  el.innerHTML=`<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div>
-    <div style="padding:8px 16px;font-size:11px;color:var(--gray-500)">Drag ⠿ to reorder. All fields editable inline.</div>
-    <div style="overflow-x:auto"><table class="sched-table"><thead><tr><th style="width:28px"></th><th style="width:32px">#</th><th>SO</th><th>Customer</th><th>Project Name</th><th>Type</th><th>Vinyl Date</th><th>Ship Date</th><th>PM</th><th>Form Factor</th><th>Status</th><th style="width:28px"></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('vinyl')">+ Add row</button></div></div>`;
+  const filtered=applyVinylFilter(vinylSchedule);
+  const activeFilters=[vinylFilter.status,vinylFilter.search,vinylFilter.dateFrom,vinylFilter.dateTo].filter(Boolean).length;
+  const rows=filtered.map((item,i)=>{
+    const origIdx=vinylSchedule.indexOf(item);
+    const readStyle='font-size:12px;color:var(--gray-700);padding:4px 2px;';
+    return`<tr draggable="true" data-idx="${origIdx}" data-type="vinyl" ondragstart="dragStart(event,${origIdx},'vinyl')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'vinyl')" ondragleave="dragLeave(event)">
+      <td><span class="drag-handle">⠿</span></td>
+      <td><span class="priority-num">${item.priority}</span></td>
+      <td style="${readStyle}">${item.so||'—'}</td>
+      <td style="${readStyle}">${item.client||'—'}</td>
+      <td style="${readStyle}">${item.name||'—'}</td>
+      <td style="${readStyle}">${item.vinylType||'—'}</td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vinylDateSync(${origIdx},this.value,'vinyl')" title="Syncs with project overview"></td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vinylDateSync(${origIdx},this.value,'ship')" title="Syncs with project overview"></td>
+      <td style="${readStyle}">${item.pm||'—'}</td>
+      <td style="${readStyle}">${item.formFactor||'—'}</td>
+      <td><select class="sched-select" onchange="vs(${origIdx},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
+      <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">×</button></td>
+    </tr>`;
+  }).join('');
+  el.innerHTML=`<div class="section">
+    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px"><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
+    <!-- FILTER BAR -->
+    <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
+      <input placeholder="🔍 Search name, SO, client..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:210px" value="${vinylFilter.search}" oninput="vinylFilter.search=this.value;renderVinyl()">
+      <select style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" onchange="vinylFilter.status=this.value;renderVinyl()">
+        <option value="">All statuses</option>
+        ${STATUS_OPTS.map(s=>`<option value="${s}"${vinylFilter.status===s?' selected':''}>${s}</option>`).join('')}
+      </select>
+      <input type="date" title="Vinyl date from" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${vinylFilter.dateFrom}" onchange="vinylFilter.dateFrom=this.value;renderVinyl()">
+      <span style="font-size:11px;color:var(--gray-500)">to</span>
+      <input type="date" title="Vinyl date to" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${vinylFilter.dateTo}" onchange="vinylFilter.dateTo=this.value;renderVinyl()">
+      ${activeFilters?`<button onclick="vinylFilter={status:'',search:'',dateFrom:'',dateTo:''};renderVinyl()" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear filters</button>`:''}
+      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filtered.length} of ${vinylSchedule.length} rows${activeFilters?' (filtered)':''}</span>
+    </div>
+    <div style="overflow-x:auto"><table class="sched-table"><thead><tr>
+      <th style="width:28px"></th><th style="width:32px">#</th>
+      <th onclick="sortVinyl('so')" style="cursor:pointer">SO ↕</th>
+      <th onclick="sortVinyl('client')" style="cursor:pointer">Customer ↕</th>
+      <th onclick="sortVinyl('name')" style="cursor:pointer">Project ↕</th>
+      <th>Type</th>
+      <th onclick="sortVinyl('date')" style="cursor:pointer">Vinyl Date ↕</th>
+      <th onclick="sortVinyl('shipDate')" style="cursor:pointer">Ship Date ↕</th>
+      <th>PM</th><th>Form Factor</th>
+      <th onclick="sortVinyl('status')" style="cursor:pointer">Status ↕</th>
+      <th style="width:28px"></th>
+    </tr></thead><tbody>${rows||'<tr><td colspan="12" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
+    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('vinyl')">+ Add row</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
+  </div>`;
+}
+function sortVinyl(key){
+  vinylSchedule.sort((a,b)=>{const av=a[key]||'';const bv=b[key]||'';return av.localeCompare(bv);});
+  renderVinyl();showToast('Sorted by '+key);
+}
+function applyPlanFilter(data){
+  return data.filter(item=>{
+    if(planFilter.status&&item.status!==planFilter.status)return false;
+    if(planFilter.search){const q=planFilter.search.toLowerCase();if(!(item.name||'').toLowerCase().includes(q)&&!(item.so||'').toLowerCase().includes(q)&&!(item.client||'').toLowerCase().includes(q)&&!(item.machineType||'').toLowerCase().includes(q))return false;}
+    if(planFilter.dateFrom&&item.date&&item.date<planFilter.dateFrom)return false;
+    if(planFilter.dateTo&&item.date&&item.date>planFilter.dateTo)return false;
+    return true;
+  });
 }
 function renderPlanogram(){
   const el=document.getElementById('tab-planogram');
-  const rows=planogramSchedule.map((item,i)=>`
-    <tr draggable="true" data-idx="${i}" data-type="planogram" ondragstart="dragStart(event,${i},'planogram')" ondragover="dragOver(event)" ondrop="dragDrop(event,${i},'planogram')" ondragleave="dragLeave(event)">
-      <td><span class="drag-handle">⠿</span></td><td><span class="priority-num">${i+1}</span></td>
-      <td><input class="sched-input" value="${item.so||''}" style="width:100px" onchange="ps2(${i},'so',this.value)"></td>
-      <td><input class="sched-input" value="${item.client||''}" onchange="ps2(${i},'client',this.value)"></td>
-      <td><input class="sched-input" value="${item.name||''}" onchange="ps2(${i},'name',this.value)"></td>
-      <td><input class="sched-input" value="${item.machineType||''}" style="width:120px" onchange="ps2(${i},'machineType',this.value)"></td>
-      <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${i},'date',this.value,'planogram')"></td>
-      <td><select class="sched-select" onchange="ps2(${i},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
-      <td><button onclick="removeSchedRow('planogram',${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">×</button></td>
-    </tr>`).join('');
-  el.innerHTML=`<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div>
-    <div style="padding:8px 16px;font-size:11px;color:var(--gray-500)">Drag ⠿ to reorder. All fields editable inline.</div>
-    <div style="overflow-x:auto"><table class="sched-table"><thead><tr><th style="width:28px"></th><th style="width:32px">#</th><th>SO</th><th>Customer</th><th>Project Name</th><th>Machine Type</th><th>Planogram Date</th><th>Status</th><th style="width:28px"></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('planogram')">+ Add row</button></div></div>`;
+  const filtered=applyPlanFilter(planogramSchedule);
+  const activeFilters=[planFilter.status,planFilter.search,planFilter.dateFrom,planFilter.dateTo].filter(Boolean).length;
+  const rows=filtered.map((item,i)=>{
+    const origIdx=planogramSchedule.indexOf(item);
+    return`<tr draggable="true" data-idx="${origIdx}" data-type="planogram" ondragstart="dragStart(event,${origIdx},'planogram')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'planogram')" ondragleave="dragLeave(event)">
+      <td><span class="drag-handle">⠿</span></td><td><span class="priority-num">${item.priority}</span></td>
+      <td><input class="sched-input" value="${item.so||''}" style="width:100px" onchange="ps2(${origIdx},'so',this.value)"></td>
+      <td><input class="sched-input" value="${item.client||''}" onchange="ps2(${origIdx},'client',this.value)"></td>
+      <td><input class="sched-input" value="${item.name||''}" onchange="ps2(${origIdx},'name',this.value)"></td>
+      <td><input class="sched-input" value="${item.machineType||''}" style="width:120px" onchange="ps2(${origIdx},'machineType',this.value)"></td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${origIdx},'date',this.value,'planogram')"></td>
+      <td><select class="sched-select" onchange="ps2(${origIdx},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
+      <td><button onclick="removeSchedRow('planogram',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">×</button></td>
+    </tr>`;
+  }).join('');
+  el.innerHTML=`<div class="section">
+    <div class="section-head"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div><div style="display:flex;gap:7px"><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
+    <!-- FILTER BAR -->
+    <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
+      <input placeholder="🔍 Search name, SO, client, machine..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:230px" value="${planFilter.search}" oninput="planFilter.search=this.value;renderPlanogram()">
+      <select style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" onchange="planFilter.status=this.value;renderPlanogram()">
+        <option value="">All statuses</option>
+        ${STATUS_OPTS.map(s=>`<option value="${s}"${planFilter.status===s?' selected':''}>${s}</option>`).join('')}
+      </select>
+      <input type="date" title="Date from" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${planFilter.dateFrom}" onchange="planFilter.dateFrom=this.value;renderPlanogram()">
+      <span style="font-size:11px;color:var(--gray-500)">to</span>
+      <input type="date" title="Date to" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${planFilter.dateTo}" onchange="planFilter.dateTo=this.value;renderPlanogram()">
+      ${activeFilters?`<button onclick="planFilter={status:'',search:'',dateFrom:'',dateTo:''};renderPlanogram()" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear filters</button>`:''}
+      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filtered.length} of ${planogramSchedule.length} rows${activeFilters?' (filtered)':''}</span>
+    </div>
+    <div style="overflow-x:auto"><table class="sched-table"><thead><tr>
+      <th style="width:28px"></th><th style="width:32px">#</th>
+      <th onclick="sortPlan('so')" style="cursor:pointer">SO ↕</th>
+      <th onclick="sortPlan('client')" style="cursor:pointer">Customer ↕</th>
+      <th onclick="sortPlan('name')" style="cursor:pointer">Project ↕</th>
+      <th onclick="sortPlan('machineType')" style="cursor:pointer">Machine Type ↕</th>
+      <th onclick="sortPlan('date')" style="cursor:pointer">Planogram Date ↕</th>
+      <th onclick="sortPlan('status')" style="cursor:pointer">Status ↕</th>
+      <th style="width:28px"></th>
+    </tr></thead><tbody>${rows||'<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
+    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('planogram')">+ Add row</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
+  </div>`;
+}
+function sortPlan(key){
+  planogramSchedule.sort((a,b)=>{const av=a[key]||'';const bv=b[key]||'';return av.localeCompare(bv);});
+  renderPlanogram();showToast('Sorted by '+key);
 }
 function vs(i,k,v){vinylSchedule[i][k]=v;}
 function ps2(i,k,v){planogramSchedule[i][k]=v;}
+// Vinyl date sync — updates both the local schedule AND the milestone in Supabase
+async function vinylDateSync(i,val,type){
+  vinylSchedule[i][type==='ship'?'shipDate':'date']=val;
+  const proj=projects.find(p=>p.id===vinylSchedule[i].id);
+  if(!proj)return;
+  const msKey=type==='ship'?'shipping':'vinyl';
+  const msLabel=type==='ship'?'Pack & ship':'Vinyl / branding';
+  const existing=milestones.find(m=>m.project_id===proj.id&&m.key===msKey);
+  if(existing){
+    await sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id);
+    await logActivity('updated date',msLabel,msLabel,proj.id,existing.date,val);
+  } else {
+    await sb.from('milestones').insert({project_id:proj.id,key:msKey,label:msLabel,date:val,changed_by:currentUserName});
+    await logActivity('added milestone',msLabel,msLabel,proj.id,null,val);
+  }
+  await loadAll();
+  showToast('Date synced to project overview ✓');
+}
 function vsDate(i,field,val,type){
   const data=type==='vinyl'?vinylSchedule:planogramSchedule;data[i][field]=val;
   const proj=projects.find(p=>p.id===data[i].id);
@@ -820,40 +925,57 @@ function renderIntake(){
       <div class="field"><label>Product type</label><input id="i-type" placeholder="e.g. Smart Control Drawer, Custom Locker..."></div>
       <div class="field"><label>Quantity</label><input id="i-qty" type="number" min="1" placeholder="e.g. 2"></div>
       <div class="field"><label>Delivery location</label><input id="i-loc" placeholder="City, Province, Country"></div>
+      <div class="field"><label>Project Manager</label><input id="i-pm" placeholder="PM name"></div>
+      <div class="field"><label>Vinyl type</label><select id="i-vinyl-type"><option value="">Select...</option><option>Decal</option><option>Partial Vinyl</option><option>Full Vinyl</option></select></div>
+      <div class="field"><label>Form factor</label><input id="i-form-factor" placeholder="e.g. Freestanding, Wall mount..."></div>
+
       <div class="intake-section-lbl">Key milestone dates</div>
       <div class="ms-intake-grid">
+
         <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#0f0f0f"></div>Readiness</div>
           <div class="field"><label>MO / PO release *</label><input id="i-po" type="date"></div>
           <div class="field"><label>Parts ordering start</label><input id="i-parts-start" type="date"></div>
           <div class="field"><label>Parts arrival</label><input id="i-parts-end" type="date"></div>
+          <div class="field" style="margin-top:6px"><label>Notes</label><textarea id="i-notes-readiness" placeholder="Readiness notes..." style="min-height:55px"></textarea></div>
         </div>
+
         <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#7c3aed"></div>Production</div>
           <div class="field"><label>Inventory pick</label><input id="i-inv" type="date"></div>
           <div class="field"><label>Production start *</label><input id="i-ps" type="date"></div>
           <div class="field"><label>Production end *</label><input id="i-pe" type="date"></div>
+          <div class="field"><label>Planogram sign-off</label><input id="i-plan" type="date"></div>
+          <div class="field" style="margin-top:6px"><label>Notes</label><textarea id="i-notes-production" placeholder="Production notes..." style="min-height:55px"></textarea></div>
         </div>
-        <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#d97706"></div>Quality & testing</div>
+
+        <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#2563eb"></div>UI</div>
+          <div class="field"><label>UI start</label><input id="i-ui-s" type="date"></div>
+          <div class="field"><label>UI end</label><input id="i-ui-e" type="date"></div>
+          <div class="field" style="margin-top:6px"><label>Notes</label><textarea id="i-notes-ui" placeholder="UI notes..." style="min-height:55px"></textarea></div>
+        </div>
+
+        <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#d97706"></div>Quality & Testing</div>
           <div class="field"><label>Quality start *</label><input id="i-qs" type="date"></div>
           <div class="field"><label>Quality end *</label><input id="i-qe" type="date"></div>
           <div class="field"><label>Vinyl / branding</label><input id="i-vinyl" type="date"></div>
-        </div>
-        <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#16a34a"></div>UI & UAT</div>
-          <div class="field"><label>UI start</label><input id="i-ui-s" type="date"></div>
-          <div class="field"><label>UI end</label><input id="i-ui-e" type="date"></div>
           <div class="field"><label>UAT date *</label><input id="i-uat" type="date"></div>
+          <div class="field" style="margin-top:6px"><label>Notes</label><textarea id="i-notes-quality" placeholder="Quality & testing notes..." style="min-height:55px"></textarea></div>
         </div>
+
         <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#059669"></div>Shipping</div>
           <div class="field"><label>Pack & ship *</label><input id="i-ship" type="date"></div>
           <div class="field"><label>Delivery date</label><input id="i-del" type="date"></div>
-          <div class="field"><label>Planogram sign-off</label><input id="i-plan" type="date"></div>
+          <div class="field" style="margin-top:6px"><label>Notes</label><textarea id="i-notes-shipping" placeholder="Shipping notes..." style="min-height:55px"></textarea></div>
         </div>
-        <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#db2777"></div>Delivery & install</div>
+
+        <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#db2777"></div>Delivery & Installation</div>
           <div class="field"><label>Training</label><input id="i-train" type="date"></div>
           <div class="field"><label>Installation *</label><input id="i-inst" type="date"></div>
           <div class="field"><label>Customer care start</label><input id="i-care" type="date"></div>
+          <div class="field" style="margin-top:6px"><label>Notes</label><textarea id="i-notes-install" placeholder="Installation notes..." style="min-height:55px"></textarea></div>
         </div>
+
       </div>
-      <div class="intake-section-lbl">Notes</div>
+      <div class="intake-section-lbl">General notes</div>
       <div class="field" style="grid-column:1/-1"><textarea id="i-notes" placeholder="Special requirements, IT notes, site constraints..." style="min-height:80px"></textarea></div>
     </div></div>
     <div class="form-actions"><button class="btn" onclick="clearIntake()">Clear</button><button class="btn btn-red" onclick="saveIntake()">Add to hub</button></div>
@@ -862,9 +984,41 @@ function renderIntake(){
 async function saveIntake(){
   const name=document.getElementById('i-name').value.trim();const so=document.getElementById('i-so').value.trim();const client=document.getElementById('i-client').value.trim();
   if(!name||!so||!client){alert('Please fill in project name, SO number, and client.');return;}
-  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,product_type:document.getElementById('i-type').value,quantity:parseInt(document.getElementById('i-qty').value)||null,location:document.getElementById('i-loc').value,notes:document.getElementById('i-notes').value,status:'active',changed_by:currentUserName}).select().single();
+  // Combine all section notes into the main notes field
+  const sectionNotes=[
+    document.getElementById('i-notes-readiness').value.trim(),
+    document.getElementById('i-notes-production').value.trim(),
+    document.getElementById('i-notes-ui').value.trim(),
+    document.getElementById('i-notes-quality').value.trim(),
+    document.getElementById('i-notes-shipping').value.trim(),
+    document.getElementById('i-notes-install').value.trim(),
+    document.getElementById('i-notes').value.trim(),
+  ].filter(Boolean).join('\n\n');
+  const pm=document.getElementById('i-pm').value.trim();
+  const vinylType=document.getElementById('i-vinyl-type').value;
+  const formFactor=document.getElementById('i-form-factor').value.trim();
+  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,product_type:document.getElementById('i-type').value,quantity:parseInt(document.getElementById('i-qty').value)||null,location:document.getElementById('i-loc').value,notes:sectionNotes,status:'active',changed_by:currentUserName,pm,vinyl_type:vinylType,form_factor:formFactor}).select().single();
   if(error){alert('Error: '+error.message);return;}
-  const msFields=[{id:'i-po',key:'po-release',label:'MO / PO Release'},{id:'i-parts-start',key:'arrival',label:'Parts ordering start'},{id:'i-parts-end',key:'arrival',label:'Parts arrival'},{id:'i-inv',key:'arrival',label:'Inventory pick'},{id:'i-ps',key:'production-start',label:'Production start'},{id:'i-pe',key:'production-end',label:'Production end'},{id:'i-qs',key:'quality-start',label:'Quality start'},{id:'i-qe',key:'quality-end',label:'Quality end'},{id:'i-vinyl',key:'vinyl',label:'Vinyl / branding'},{id:'i-ui-s',key:'other',label:'UI start'},{id:'i-ui-e',key:'other',label:'UI end'},{id:'i-uat',key:'uat',label:'UAT'},{id:'i-ship',key:'shipping',label:'Pack & ship'},{id:'i-del',key:'delivery',label:'Delivery'},{id:'i-plan',key:'other',label:'Planogram sign-off'},{id:'i-train',key:'training',label:'Training'},{id:'i-inst',key:'installation',label:'Installation'},{id:'i-care',key:'other',label:'Customer care start'}];
+  const msFields=[
+    {id:'i-po',key:'po-release',label:'MO / PO Release'},
+    {id:'i-parts-start',key:'arrival',label:'Parts ordering start'},
+    {id:'i-parts-end',key:'arrival',label:'Parts arrival'},
+    {id:'i-inv',key:'arrival',label:'Inventory pick'},
+    {id:'i-ps',key:'production-start',label:'Production start'},
+    {id:'i-pe',key:'production-end',label:'Production end'},
+    {id:'i-plan',key:'other',label:'Planogram sign-off'},
+    {id:'i-ui-s',key:'other',label:'UI start'},
+    {id:'i-ui-e',key:'other',label:'UI end'},
+    {id:'i-qs',key:'quality-start',label:'Quality start'},
+    {id:'i-qe',key:'quality-end',label:'Quality end'},
+    {id:'i-vinyl',key:'vinyl',label:'Vinyl / branding'},
+    {id:'i-uat',key:'uat',label:'UAT'},
+    {id:'i-ship',key:'shipping',label:'Pack & ship'},
+    {id:'i-del',key:'delivery',label:'Delivery'},
+    {id:'i-train',key:'training',label:'Training'},
+    {id:'i-inst',key:'installation',label:'Installation'},
+    {id:'i-care',key:'other',label:'Customer care start'},
+  ];
   const ins=msFields.map(f=>{const v=document.getElementById(f.id).value;return v?{project_id:proj.id,key:f.key,label:f.label,date:v,changed_by:currentUserName}:null;}).filter(Boolean);
   if(ins.length)await sb.from('milestones').insert(ins);
   await logActivity('created project',name,so,proj.id,null,client);
