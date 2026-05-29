@@ -8,72 +8,105 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
-:root{--red:#C8102E;--red-light:#fdf0f2;--red-mid:#f5c2cb;--black:#0f0f0f;--gray-900:#1a1a1a;--gray-700:#3d3d3d;--gray-500:#6b6b6b;--gray-300:#c4c4c4;--gray-100:#f2f2f2;--gray-50:#f8f8f8;--white:#ffffff;--success:#1a7a4a;--success-bg:#eaf5ef;--warning:#8a5a00;--warning-bg:#fff8e6;--purple:#7c3aed;--purple-bg:#ede9fe;--font:'DM Sans',sans-serif;--mono:'DM Mono',monospace;--radius:6px;--radius-lg:10px;}
+:root{--red:#C8102E;--red-light:#fdf0f2;--red-mid:#f5c2cb;--black:#0f0f0f;--gray-900:#1a1a1a;--gray-700:#3d3d3d;--gray-500:#6b6b6b;--gray-300:#c4c4c4;--gray-200:#e0e0e0;--gray-100:#f2f2f2;--gray-50:#f8f8f8;--white:#fff;--success:#1a7a4a;--success-bg:#eaf5ef;--warning:#8a5a00;--warning-bg:#fff8e6;--purple:#7c3aed;--purple-bg:#ede9fe;--blue:#2563eb;--blue-bg:#eff6ff;--font:'DM Sans',sans-serif;--mono:'DM Mono',monospace;--radius:6px;--radius-lg:10px;}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-html{font-size:15px;}
-body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-height:100vh;}
+body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-height:100vh;font-size:14px;}
+/* HEADER */
 .page-header{background:var(--black);position:sticky;top:0;z-index:100;}
-.header-inner{display:flex;align-items:center;justify-content:space-between;max-width:1200px;margin:0 auto;padding:0 2rem;height:54px;}
-.logo{display:flex;align-items:center;gap:10px;}
-.logo-mark{width:26px;height:26px;background:var(--red);border-radius:4px;display:flex;align-items:center;justify-content:center;}
-.logo-mark svg{width:13px;height:13px;fill:white;}
-.logo-text{font-size:13px;font-weight:600;color:white;letter-spacing:0.06em;text-transform:uppercase;}
-.nav-tabs{display:flex;gap:2px;}
-.ntab{font-size:12px;padding:6px 13px;border-radius:var(--radius);border:none;background:transparent;color:#888;cursor:pointer;font-family:var(--font);transition:all 0.15s;white-space:nowrap;}
-.ntab:hover{background:#1a1a1a;color:white;}
-.ntab.active{background:#1a1a1a;color:white;font-weight:500;}
-.header-right{display:flex;align-items:center;gap:8px;}
-.hdate{font-family:var(--mono);font-size:11px;color:#555;}
-.page-body{max-width:1200px;margin:0 auto;padding:2rem 2rem 4rem;}
-.metrics-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem;}
-.metric{background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);padding:14px 16px;}
-.metric-label{font-size:11px;color:var(--gray-500);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em;}
-.metric-val{font-size:24px;font-weight:600;color:var(--black);}
-.metric-sub{font-size:11px;color:var(--gray-500);margin-top:2px;}
+.header-inner{display:flex;align-items:center;justify-content:space-between;max-width:1300px;margin:0 auto;padding:0 1.5rem;height:52px;gap:1rem;}
+.logo{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+.logo-mark{width:24px;height:24px;background:var(--red);border-radius:4px;display:flex;align-items:center;justify-content:center;}
+.logo-mark svg{width:12px;height:12px;fill:white;}
+.logo-text{font-size:12px;font-weight:600;color:white;letter-spacing:0.06em;text-transform:uppercase;}
+.nav-tabs{display:flex;gap:1px;flex-wrap:wrap;}
+.ntab{font-size:11px;padding:5px 11px;border-radius:var(--radius);border:none;background:transparent;color:#777;cursor:pointer;font-family:var(--font);transition:all 0.15s;white-space:nowrap;}
+.ntab:hover{background:#1f1f1f;color:white;}
+.ntab.active{background:#2a2a2a;color:white;font-weight:500;}
+.ntab.active.tab-prod{border-bottom:2px solid var(--purple);}
+.ntab.active.tab-qa{border-bottom:2px solid #d97706;}
+.ntab.active.tab-ship{border-bottom:2px solid var(--success);}
+.ntab.active.tab-install{border-bottom:2px solid #db2777;}
+.ntab.active.tab-vinyl{border-bottom:2px solid var(--blue);}
+.ntab.active.tab-plan{border-bottom:2px solid #0891b2;}
+.hdate{font-family:var(--mono);font-size:11px;color:#555;flex-shrink:0;}
+/* PAGE */
+.page-body{max-width:1300px;margin:0 auto;padding:1.5rem 1.5rem 4rem;}
+/* METRICS */
+.metrics-row{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:1.25rem;}
+.metric{background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);padding:12px 14px;}
+.metric-label{font-size:10px;color:var(--gray-500);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.04em;}
+.metric-val{font-size:22px;font-weight:600;color:var(--black);}
+.metric-sub{font-size:10px;color:var(--gray-500);margin-top:2px;}
 .metric-val.red{color:var(--red);}
+.metric-val.green{color:var(--success);}
+.metric-val.amber{color:var(--warning);}
+/* AT A GLANCE */
+.glance-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:1rem;}
+.glance-card{background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);overflow:hidden;}
+.glance-card-head{padding:12px 14px 10px;border-bottom:1px solid var(--gray-100);}
+.glance-proj-name{font-size:13px;font-weight:600;color:var(--black);}
+.glance-proj-meta{display:flex;align-items:center;gap:8px;margin-top:3px;}
+.glance-so{font-family:var(--mono);font-size:10px;color:var(--red);}
+.glance-client{font-size:11px;color:var(--gray-500);}
+.cycle-track{padding:12px 14px;}
+.cycle-stages{display:flex;flex-direction:column;gap:4px;}
+.cycle-stage{display:grid;grid-template-columns:100px 1fr 70px;align-items:center;gap:8px;}
+.cycle-stage-name{font-size:11px;color:var(--gray-700);font-weight:500;}
+.cycle-bar-wrap{background:var(--gray-100);border-radius:2px;height:6px;overflow:hidden;}
+.cycle-bar{height:6px;border-radius:2px;transition:width 0.3s;}
+.bar-done{background:var(--success);}
+.bar-active{background:var(--blue);}
+.bar-future{background:var(--gray-200);}
+.bar-overdue{background:var(--red);}
+.cycle-dates{font-size:10px;color:var(--gray-500);text-align:right;font-family:var(--mono);white-space:nowrap;}
+.stage-chip{font-size:10px;padding:1px 7px;border-radius:10px;font-weight:600;display:inline-block;margin-top:6px;}
+.chip-done{background:var(--success-bg);color:var(--success);}
+.chip-active{background:var(--blue-bg);color:var(--blue);}
+.chip-future{background:var(--gray-100);color:var(--gray-500);}
+.chip-overdue{background:var(--red-light);color:var(--red);}
+.chip-atrisk{background:var(--warning-bg);color:var(--warning);}
+/* SECTION */
 .section{background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);margin-bottom:12px;overflow:hidden;}
-.section-head{display:flex;align-items:center;justify-content:space-between;padding:13px 18px;border-bottom:1px solid var(--gray-100);background:var(--gray-50);}
-.section-title{font-size:14px;font-weight:600;color:var(--black);display:flex;align-items:center;gap:8px;}
-.section-meta{font-size:12px;color:var(--gray-500);}
-.proj-pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1rem;}
-.ppill{font-size:12px;padding:5px 14px;border-radius:20px;border:1px solid var(--gray-300);cursor:pointer;color:var(--gray-700);background:var(--white);font-family:var(--font);transition:all 0.15s;}
+.section-head{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;border-bottom:1px solid var(--gray-100);background:var(--gray-50);}
+.section-title{font-size:13px;font-weight:600;color:var(--black);}
+.section-meta{font-size:11px;color:var(--gray-500);}
+.proj-pills{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:1rem;}
+.ppill{font-size:11px;padding:4px 12px;border-radius:20px;border:1px solid var(--gray-300);cursor:pointer;color:var(--gray-700);background:var(--white);font-family:var(--font);transition:all 0.15s;}
 .ppill:hover{border-color:var(--black);}
 .ppill.active{background:var(--black);color:white;border-color:var(--black);}
-.milestone-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;padding:14px 18px;}
-.ms-item{border-radius:var(--radius);padding:11px 13px;border-left:3px solid var(--gray-300);background:var(--gray-50);cursor:pointer;transition:box-shadow 0.15s;}
+/* MILESTONE GRID */
+.milestone-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:7px;padding:12px 16px;}
+.ms-item{border-radius:var(--radius);padding:10px 12px;border-left:3px solid var(--gray-300);background:var(--gray-50);cursor:pointer;transition:box-shadow 0.15s;}
 .ms-item:hover{box-shadow:0 0 0 2px var(--gray-300);}
 .ms-item.done{border-left-color:var(--success);background:#f0faf5;}
 .ms-item.today{border-left-color:#059669;background:#ecfdf5;}
-.ms-item.upcoming{border-left-color:#2563eb;background:#eff6ff;}
+.ms-item.upcoming{border-left-color:var(--blue);background:var(--blue-bg);}
 .ms-item.overdue{border-left-color:var(--red);background:var(--red-light);}
 .ms-item.future{border-left-color:var(--gray-300);}
-.ms-type{font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px;}
-.ms-label{font-size:12px;font-weight:600;color:var(--black);line-height:1.3;}
-.ms-date{font-size:12px;color:var(--gray-700);margin-top:2px;}
-.ms-days{font-size:11px;margin-top:4px;font-weight:500;}
+.ms-type{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;}
+.ms-label{font-size:11px;font-weight:600;color:var(--black);line-height:1.3;}
+.ms-date{font-size:11px;color:var(--gray-700);margin-top:2px;}
+.ms-days{font-size:10px;margin-top:3px;font-weight:500;}
 .ms-days.done{color:var(--success);}
 .ms-days.today{color:#059669;}
-.ms-days.upcoming{color:#2563eb;}
+.ms-days.upcoming{color:var(--blue);}
 .ms-days.overdue{color:var(--red);}
 .ms-days.future{color:var(--gray-500);}
-.ms-edit-hint{font-size:10px;color:var(--gray-300);margin-top:3px;}
-.week-nav-row{display:flex;align-items:center;gap:8px;margin-bottom:1rem;}
-.wnav{background:var(--white);border:1px solid var(--gray-300);border-radius:var(--radius);padding:6px 11px;cursor:pointer;color:var(--gray-700);font-size:12px;font-family:var(--font);}
+.ms-edit-hint{font-size:9px;color:var(--gray-300);margin-top:2px;}
+/* WEEK */
+.week-nav-row{display:flex;align-items:center;gap:7px;margin-bottom:1rem;flex-wrap:wrap;}
+.wnav{background:var(--white);border:1px solid var(--gray-300);border-radius:var(--radius);padding:5px 10px;cursor:pointer;color:var(--gray-700);font-size:12px;font-family:var(--font);}
 .wnav:hover{background:var(--gray-100);}
-.wlabel{font-size:13px;color:var(--gray-700);min-width:160px;text-align:center;font-weight:500;}
-.btn-add{font-size:12px;padding:6px 14px;border-radius:var(--radius);border:1px solid var(--red);background:var(--red);color:white;cursor:pointer;font-family:var(--font);font-weight:500;}
-.btn-add:hover{background:#a80e26;}
-.btn-export{font-size:12px;padding:6px 14px;border-radius:var(--radius);border:1px solid var(--success);background:var(--success-bg);color:var(--success);cursor:pointer;font-family:var(--font);font-weight:500;}
-.btn-export:hover{background:#d4edda;}
-.week-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:1rem;}
-.day-col{background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);min-height:160px;overflow:hidden;}
+.wlabel{font-size:12px;color:var(--gray-700);min-width:150px;text-align:center;font-weight:500;}
+.week-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-bottom:1rem;}
+.day-col{background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);min-height:140px;overflow:hidden;}
 .day-col.today-col{border:2px solid var(--black);}
-.day-hdr{padding:9px 12px 7px;border-bottom:1px solid var(--gray-100);}
-.day-name{font-size:11px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;}
-.day-num{font-size:18px;font-weight:600;color:var(--black);line-height:1.2;}
+.day-hdr{padding:8px 10px 6px;border-bottom:1px solid var(--gray-100);}
+.day-name{font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;}
+.day-num{font-size:17px;font-weight:600;color:var(--black);line-height:1.2;}
 .today-pip{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--red);margin-left:3px;vertical-align:middle;}
-.day-events{padding:7px;}
-.ev{border-radius:var(--radius);padding:5px 8px;margin-bottom:4px;}
+.day-events{padding:6px;}
+.ev{border-radius:var(--radius);padding:4px 7px;margin-bottom:3px;}
 .ev-ship{background:#d1fae5;border-left:3px solid #059669;}
 .ev-arr{background:#dbeafe;border-left:3px solid #2563eb;}
 .ev-prod{background:#ede9fe;border-left:3px solid #7c3aed;}
@@ -82,109 +115,118 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .ev-inst{background:#fce7f3;border-left:3px solid #db2777;}
 .ev-other{background:var(--gray-50);border-left:3px solid var(--gray-300);}
 .ev-type{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--gray-500);}
-.ev-name{font-size:11px;font-weight:600;color:var(--black);line-height:1.3;}
-.ev-proj{font-size:10px;color:var(--gray-500);}
-.empty-day{font-size:11px;color:var(--gray-300);text-align:center;padding:1.5rem 0;}
-.overdue-bar{background:var(--red-light);border:1px solid var(--red-mid);border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;display:flex;gap:8px;}
-.overdue-title{font-size:12px;font-weight:600;color:var(--red);margin-bottom:3px;}
-.overdue-item{font-size:11px;color:var(--red);}
-.legend-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:1rem;}
-.leg{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--gray-500);}
-.leg-dot{width:8px;height:8px;border-radius:2px;}
-.pulse-form-wrap{padding:18px;}
-.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
-.field{display:flex;flex-direction:column;gap:4px;}
+.ev-name{font-size:10px;font-weight:600;color:var(--black);line-height:1.3;}
+.ev-proj{font-size:9px;color:var(--gray-500);}
+.empty-day{font-size:10px;color:var(--gray-300);text-align:center;padding:1.2rem 0;}
+.overdue-bar{background:var(--red-light);border:1px solid var(--red-mid);border-radius:var(--radius);padding:9px 13px;margin-bottom:1rem;display:flex;gap:8px;}
+.overdue-title{font-size:11px;font-weight:600;color:var(--red);margin-bottom:2px;}
+.overdue-item{font-size:10px;color:var(--red);}
+.legend-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem;}
+.leg{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--gray-500);}
+.leg-dot{width:7px;height:7px;border-radius:2px;}
+/* DEPT VIEW */
+.dept-table-wrap{overflow-x:auto;}
+.dept-table{width:100%;border-collapse:collapse;min-width:600px;}
+.dept-table th{font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:8px 14px;text-align:left;border-bottom:1px solid var(--gray-100);font-weight:600;background:var(--gray-50);white-space:nowrap;}
+.dept-table td{font-size:12px;padding:10px 14px;border-bottom:1px solid var(--gray-50);color:var(--black);vertical-align:middle;}
+.dept-table tr:hover td{background:var(--gray-50);}
+.dept-table tr:last-child td{border-bottom:none;}
+.date-cell{font-family:var(--mono);font-size:11px;}
+.status-chip{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;display:inline-block;white-space:nowrap;}
+.chip-done{background:var(--success-bg);color:var(--success);}
+.chip-active{background:var(--blue-bg);color:var(--blue);}
+.chip-future{background:var(--gray-100);color:var(--gray-500);}
+.chip-overdue{background:var(--red-light);color:var(--red);}
+.chip-atrisk{background:var(--warning-bg);color:var(--warning);}
+/* GANTT */
+.prod-gantt{overflow-x:auto;padding:0 16px 16px;}
+.gantt-table{border-collapse:collapse;width:100%;min-width:700px;}
+.gantt-table th{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 4px;text-align:center;border-bottom:1px solid var(--gray-100);font-weight:600;white-space:nowrap;min-width:32px;}
+.gantt-table th.proj-col{text-align:left;min-width:160px;padding:5px 8px;}
+.gantt-table td{padding:4px 3px;border-bottom:1px solid var(--gray-50);vertical-align:middle;}
+.gantt-table td.proj-name{font-size:12px;font-weight:500;color:var(--black);padding:4px 8px;white-space:nowrap;}
+.gantt-cell{position:relative;text-align:center;}
+.gantt-fill{height:20px;border-radius:3px;}
+.gantt-today-col{background:#fff8f8;}
+/* SCHEDULE TABLE */
+.sched-table{width:100%;border-collapse:collapse;}
+.sched-table th{font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:9px 12px;text-align:left;border-bottom:1px solid var(--gray-100);font-weight:600;background:var(--gray-50);white-space:nowrap;}
+.sched-table td{font-size:12px;padding:9px 12px;border-bottom:1px solid var(--gray-50);color:var(--black);vertical-align:middle;}
+.sched-table tr:hover td{background:var(--gray-50);}
+.sched-table tr.dragging{opacity:0.4;}
+.sched-table tr.drag-over td{border-top:2px solid var(--red);}
+.drag-handle{cursor:grab;color:var(--gray-300);font-size:15px;padding:0 4px;user-select:none;}
+.drag-handle:active{cursor:grabbing;}
+.priority-num{font-family:var(--mono);font-size:11px;color:var(--gray-500);}
+.sched-input{font-family:var(--font);font-size:12px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);color:var(--black);width:100%;}
+.sched-input:focus{outline:none;border-color:var(--black);}
+.sched-select{font-family:var(--font);font-size:11px;padding:3px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);color:var(--black);cursor:pointer;}
+/* FORMS */
+.pulse-form-wrap{padding:16px;}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.field{display:flex;flex-direction:column;gap:3px;}
 .field.full{grid-column:1/-1;}
-.field label{font-size:11px;font-weight:600;color:var(--gray-700);text-transform:uppercase;letter-spacing:0.04em;}
-.field input,.field select,.field textarea{font-family:var(--font);font-size:13px;padding:8px 11px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);width:100%;}
-.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--black);box-shadow:0 0 0 3px rgba(15,15,15,0.06);}
-.field textarea{resize:vertical;min-height:70px;}
-.rag-row{display:flex;gap:6px;}
-.rag-opt{flex:1;padding:8px;border:1px solid var(--gray-300);border-radius:var(--radius);text-align:center;cursor:pointer;background:var(--white);font-family:var(--font);transition:all 0.15s;}
-.rag-opt:hover{border-color:var(--gray-700);}
+.field label{font-size:10px;font-weight:600;color:var(--gray-700);text-transform:uppercase;letter-spacing:0.04em;}
+.field input,.field select,.field textarea{font-family:var(--font);font-size:12px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);width:100%;}
+.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--black);box-shadow:0 0 0 3px rgba(15,15,15,0.05);}
+.field textarea{resize:vertical;min-height:65px;}
+.rag-row{display:flex;gap:5px;}
+.rag-opt{flex:1;padding:7px;border:1px solid var(--gray-300);border-radius:var(--radius);text-align:center;cursor:pointer;background:var(--white);font-family:var(--font);transition:all 0.15s;}
 .rag-opt.sel-g{background:var(--success-bg);border-color:var(--success);}
 .rag-opt.sel-a{background:var(--warning-bg);border-color:#c97d00;}
 .rag-opt.sel-r{background:var(--red-light);border-color:var(--red);}
-.rag-label{font-size:12px;font-weight:600;margin-top:2px;}
+.rag-label{font-size:11px;font-weight:600;margin-top:2px;}
 .rag-opt.sel-g .rag-label{color:var(--success);}
 .rag-opt.sel-a .rag-label{color:var(--warning);}
 .rag-opt.sel-r .rag-label{color:var(--red);}
-.form-actions{display:flex;justify-content:flex-end;gap:8px;padding:0 18px 18px;}
-.btn{font-family:var(--font);font-size:13px;font-weight:500;padding:8px 18px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--gray-700);cursor:pointer;}
+.form-actions{display:flex;justify-content:flex-end;gap:7px;padding:0 16px 16px;}
+.btn{font-family:var(--font);font-size:12px;font-weight:500;padding:7px 16px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--gray-700);cursor:pointer;}
 .btn:hover{background:var(--gray-100);}
 .btn-primary{background:var(--black);color:white;border-color:var(--black);}
 .btn-primary:hover{background:var(--gray-900);}
 .btn-red{background:var(--red);color:white;border-color:var(--red);}
 .btn-red:hover{background:#a80e26;}
+.btn-add{font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--red);background:var(--red);color:white;cursor:pointer;font-family:var(--font);font-weight:500;}
+.btn-add:hover{background:#a80e26;}
+.btn-export{font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--success);background:var(--success-bg);color:var(--success);cursor:pointer;font-family:var(--font);font-weight:500;}
+.btn-export:hover{background:#d4edda;}
+/* PULSE */
 .pulse-results-table{width:100%;border-collapse:collapse;}
-.pulse-results-table th{font-size:11px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:8px 18px;text-align:left;border-bottom:1px solid var(--gray-100);font-weight:600;}
-.pulse-results-table td{font-size:13px;padding:10px 18px;border-bottom:1px solid var(--gray-50);color:var(--black);}
+.pulse-results-table th{font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:7px 16px;text-align:left;border-bottom:1px solid var(--gray-100);font-weight:600;}
+.pulse-results-table td{font-size:12px;padding:9px 16px;border-bottom:1px solid var(--gray-50);color:var(--black);}
 .pulse-results-table tr:last-child td{border-bottom:none;}
-.pulse-results-table tr:hover td{background:var(--gray-50);}
-.rag-pill{font-size:11px;padding:3px 10px;border-radius:20px;font-weight:600;}
+.rag-pill{font-size:10px;padding:2px 9px;border-radius:20px;font-weight:600;}
 .rag-pill-g{background:var(--success-bg);color:var(--success);}
 .rag-pill-a{background:var(--warning-bg);color:var(--warning);}
 .rag-pill-r{background:var(--red-light);color:var(--red);}
-.blocker-txt{font-size:11px;color:var(--red);margin-top:2px;}
-.intake-body{padding:18px;}
-.intake-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
-.intake-section-lbl{font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;grid-column:1/-1;margin-top:8px;padding-top:10px;border-top:1px solid var(--gray-100);}
+.blocker-txt{font-size:10px;color:var(--red);margin-top:2px;}
+/* INTAKE */
+.intake-body{padding:16px;}
+.intake-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.intake-section-lbl{font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;grid-column:1/-1;margin-top:6px;padding-top:8px;border-top:1px solid var(--gray-100);}
 .intake-section-lbl:first-child{border-top:none;margin-top:0;padding-top:0;}
-.ms-intake-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;grid-column:1/-1;}
-.ms-block{background:var(--gray-50);border:1px solid var(--gray-100);border-radius:var(--radius);padding:12px;}
-.ms-block-title{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--gray-500);margin-bottom:8px;display:flex;align-items:center;gap:6px;}
-.ms-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
-.ms-block .field{margin-bottom:6px;}
+.ms-intake-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;grid-column:1/-1;}
+.ms-block{background:var(--gray-50);border:1px solid var(--gray-100);border-radius:var(--radius);padding:10px;}
+.ms-block-title{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--gray-500);margin-bottom:7px;display:flex;align-items:center;gap:5px;}
+.ms-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+.ms-block .field{margin-bottom:5px;}
 .ms-block .field:last-child{margin-bottom:0;}
-.toast{position:fixed;bottom:24px;right:24px;background:var(--black);color:white;padding:12px 20px;border-radius:var(--radius-lg);font-size:13px;font-weight:500;z-index:999;display:none;animation:slideUp 0.2s ease;}
-@keyframes slideUp{from{transform:translateY(10px);opacity:0;}to{transform:translateY(0);opacity:1;}}
+/* MODAL */
+.toast{position:fixed;bottom:22px;right:22px;background:var(--black);color:white;padding:10px 18px;border-radius:var(--radius-lg);font-size:12px;font-weight:500;z-index:999;display:none;animation:slideUp 0.2s ease;}
+@keyframes slideUp{from{transform:translateY(8px);opacity:0;}to{transform:translateY(0);opacity:1;}}
 .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem;}
-.modal{background:var(--white);border-radius:var(--radius-lg);width:440px;max-width:100%;max-height:90vh;overflow-y:auto;}
-.modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--gray-100);}
-.modal-title{font-size:15px;font-weight:600;color:var(--black);}
+.modal{background:var(--white);border-radius:var(--radius-lg);width:480px;max-width:100%;max-height:90vh;overflow-y:auto;}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--gray-100);}
+.modal-title{font-size:14px;font-weight:600;color:var(--black);}
 .modal-close{background:none;border:none;font-size:18px;cursor:pointer;color:var(--gray-500);line-height:1;}
-.modal-body{padding:18px;}
-.modal-actions{display:flex;gap:8px;justify-content:flex-end;padding:14px 18px;border-top:1px solid var(--gray-100);}
-.conf-row{display:flex;align-items:center;gap:10px;}
+.modal-body{padding:16px;}
+.modal-actions{display:flex;gap:7px;justify-content:flex-end;padding:12px 16px;border-top:1px solid var(--gray-100);}
+.conf-row{display:flex;align-items:center;gap:8px;}
 .conf-row input[type=range]{flex:1;}
-.conf-val{font-size:13px;font-weight:600;min-width:36px;color:var(--black);font-family:var(--mono);}
-.empty-state{text-align:center;padding:3rem;color:var(--gray-500);font-size:13px;}
-/* PRODUCTION VIEW */
-.prod-gantt{overflow-x:auto;padding:0 18px 18px;}
-.gantt-table{border-collapse:collapse;width:100%;min-width:700px;}
-.gantt-table th{font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:6px 8px;text-align:center;border-bottom:1px solid var(--gray-100);font-weight:600;white-space:nowrap;min-width:36px;}
-.gantt-table th.proj-col{text-align:left;min-width:180px;}
-.gantt-table td{padding:5px 4px;border-bottom:1px solid var(--gray-50);vertical-align:middle;}
-.gantt-table td.proj-name{font-size:13px;font-weight:500;color:var(--black);padding:5px 8px;white-space:nowrap;}
-.gantt-table td.proj-so{font-size:11px;color:var(--gray-500);font-family:var(--mono);padding:0 8px 5px;white-space:nowrap;}
-.gantt-bar{height:22px;border-radius:3px;position:relative;}
-.gantt-cell{position:relative;text-align:center;}
-.gantt-fill{height:22px;border-radius:3px;background:var(--purple);opacity:0.85;}
-.gantt-fill.qa{background:#d97706;}
-.gantt-fill.ship{background:#059669;}
-.gantt-fill.install{background:#db2777;}
-.gantt-fill.today-line{background:var(--red);width:2px;height:100%;position:absolute;top:0;}
-.gantt-label{font-size:10px;color:var(--gray-500);text-align:center;padding:2px 4px;}
-.gantt-today-col{background:#fff5f5;}
-.status-chip{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;display:inline-block;}
-.chip-active{background:var(--success-bg);color:var(--success);}
-.chip-pending{background:var(--gray-100);color:var(--gray-700);}
-.chip-done{background:#dcfce7;color:#166534;}
-.chip-atrisk{background:var(--warning-bg);color:var(--warning);}
-/* SCHEDULE TABLE */
-.sched-table{width:100%;border-collapse:collapse;}
-.sched-table th{font-size:11px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:10px 14px;text-align:left;border-bottom:1px solid var(--gray-100);font-weight:600;background:var(--gray-50);}
-.sched-table td{font-size:13px;padding:10px 14px;border-bottom:1px solid var(--gray-50);color:var(--black);vertical-align:middle;}
-.sched-table tr:hover td{background:var(--gray-50);}
-.sched-table tr.dragging{opacity:0.4;}
-.sched-table tr.drag-over td{border-top:2px solid var(--red);}
-.drag-handle{cursor:grab;color:var(--gray-300);font-size:16px;padding:0 6px;user-select:none;}
-.drag-handle:active{cursor:grabbing;}
-.priority-num{font-family:var(--mono);font-size:12px;color:var(--gray-500);min-width:24px;display:inline-block;text-align:center;}
-.sched-status{display:inline-flex;align-items:center;gap:6px;}
-.status-select{font-family:var(--font);font-size:12px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);color:var(--black);cursor:pointer;}
-.actions-row{display:flex;align-items:center;gap:8px;padding:14px 18px;border-top:1px solid var(--gray-100);}
-@media(max-width:700px){.metrics-row{grid-template-columns:1fr 1fr;}.week-grid{grid-template-columns:1fr;}.intake-grid,.form-grid,.ms-intake-grid{grid-template-columns:1fr;}.header-inner{padding:0 1rem;}.page-body{padding:1rem 1rem 3rem;}.nav-tabs{display:none;}}
+.conf-val{font-size:12px;font-weight:600;min-width:34px;color:var(--black);font-family:var(--mono);}
+.empty-state{text-align:center;padding:2.5rem;color:var(--gray-500);font-size:12px;}
+.actions-row{display:flex;align-items:center;gap:7px;padding:12px 16px;border-top:1px solid var(--gray-100);}
+@media(max-width:800px){.metrics-row{grid-template-columns:repeat(2,1fr);}.week-grid{grid-template-columns:1fr;}.intake-grid,.form-grid,.ms-intake-grid{grid-template-columns:1fr;}.glance-grid{grid-template-columns:1fr;}.header-inner{padding:0 1rem;}.page-body{padding:1rem 1rem 3rem;}.nav-tabs{display:none;}}
 </style>
 </head>
 <body>
@@ -195,23 +237,29 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
       <span class="logo-text">Signifi Ops Hub</span>
     </div>
     <div class="nav-tabs">
-      <button class="ntab active" onclick="setTab('overview',this)">Overview</button>
+      <button class="ntab active" onclick="setTab('glance',this)">At a glance</button>
+      <button class="ntab" onclick="setTab('overview',this)">Overview</button>
       <button class="ntab" onclick="setTab('week',this)">This week</button>
-      <button class="ntab" onclick="setTab('production',this)">Production</button>
-      <button class="ntab" onclick="setTab('vinyl',this)">Vinyl schedule</button>
-      <button class="ntab" onclick="setTab('planogram',this)">Planogram</button>
+      <button class="ntab tab-prod" onclick="setTab('production',this)">Production</button>
+      <button class="ntab tab-qa" onclick="setTab('quality',this)">Quality</button>
+      <button class="ntab tab-ship" onclick="setTab('shipping',this)">Shipping</button>
+      <button class="ntab tab-install" onclick="setTab('installation',this)">Installation</button>
+      <button class="ntab tab-vinyl" onclick="setTab('vinyl',this)">Vinyl</button>
+      <button class="ntab tab-plan" onclick="setTab('planogram',this)">Planogram</button>
       <button class="ntab" onclick="setTab('pulse',this)">Daily pulse</button>
       <button class="ntab" onclick="setTab('intake',this)">New project</button>
     </div>
-    <div class="header-right">
-      <span class="hdate" id="hdate"></span>
-    </div>
+    <span class="hdate" id="hdate"></span>
   </div>
 </header>
 <div class="page-body">
-  <div id="tab-overview"></div>
+  <div id="tab-glance"></div>
+  <div id="tab-overview" style="display:none"></div>
   <div id="tab-week" style="display:none"></div>
   <div id="tab-production" style="display:none"></div>
+  <div id="tab-quality" style="display:none"></div>
+  <div id="tab-shipping" style="display:none"></div>
+  <div id="tab-installation" style="display:none"></div>
   <div id="tab-vinyl" style="display:none"></div>
   <div id="tab-planogram" style="display:none"></div>
   <div id="tab-pulse" style="display:none"></div>
@@ -223,13 +271,15 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 const SUPABASE_URL='https://oykgpkolliqjeznblayv.supabase.co';
 const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95a2dwa29sbGlxamV6bmJsYXl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNTI3ODgsImV4cCI6MjA5NTYyODc4OH0.kkOBhxyaqLG7PLPNI0SwPNwQSWmbpFjDoP2VQp33_X4';
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
-const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa',uat:'ev-uat',installation:'ev-inst',delivery:'ev-inst',vinyl:'ev-qa',training:'ev-other','po-release':'ev-other',other:'ev-other'};
-const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Production start','production-end':'Production end','quality-start':'Quality start','quality-end':'Quality end',uat:'UAT',installation:'Installation',delivery:'Delivery',vinyl:'Vinyl / branding',training:'Training','po-release':'PO / MO release',other:'Other'};
+const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa',uat:'ev-uat',installation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','po-release':'ev-other',other:'ev-other'};
+const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end',uat:'UAT',installation:'Installation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','po-release':'PO/MO release',other:'Other'};
 const DEPTS=['Production','Quality / QA','Development / UI','Logistics','Purchasing / Supply Chain'];
+const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
+const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date'];
 let projects=[],milestones=[],pulses=[],vinylSchedule=[],planogramSchedule=[];
-let selectedProjId=null,weekStart=monday(new Date()),selRag='',currentTab='overview';
-let dragSrc=null,dragType='';
+let selectedProjId=null,weekStart=monday(new Date()),selRag='',currentTab='glance',dragSrc=null,dragType='';
 
+// ── UTILS ─────────────────────────────────────────────────
 function today(){let t=new Date();t.setHours(0,0,0,0);return t;}
 function monday(dt){let r=new Date(dt);let day=r.getDay();let diff=day===0?-6:1-day;r.setDate(r.getDate()+diff);r.setHours(0,0,0,0);return r;}
 function addD(dt,n){let r=new Date(dt);r.setDate(r.getDate()+n);return r;}
@@ -237,11 +287,24 @@ function sameDay(a,b){return a.toDateString()===b.toDateString();}
 function isoD(dt){return dt.toISOString().split('T')[0];}
 function fmt(s){if(!s)return'—';return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});}
 function fmtFull(s){if(!s)return'—';return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}
-function daysDiff(s){if(!s)return 999;let dt=new Date(s+'T00:00:00');return Math.round((dt-today())/86400000);}
+function daysDiff(s){if(!s)return 9999;return Math.round((new Date(s+'T00:00:00')-today())/86400000);}
 function msStatus(s){let d=daysDiff(s);if(d<0)return{cls:'done',dcls:'done',txt:Math.abs(d)+'d ago'};if(d===0)return{cls:'today',dcls:'today',txt:'Today'};if(d<=7)return{cls:'upcoming',dcls:'upcoming',txt:'In '+d+'d'};return{cls:'future',dcls:'future',txt:fmtFull(s)};}
+function stageStatus(start,end){
+  const t=today();
+  if(!start)return{label:'Not set',chip:'chip-future'};
+  const s=new Date(start+'T00:00:00');
+  const e=end?new Date(end+'T00:00:00'):s;
+  if(t>e)return{label:'Done',chip:'chip-done'};
+  if(t>=s)return{label:'In progress',chip:'chip-active'};
+  const d=daysDiff(start);
+  if(d<=7)return{label:'In '+d+'d',chip:'chip-atrisk'};
+  return{label:fmt(start),chip:'chip-future'};
+}
 function ragPill(r){if(r==='G')return'<span class="rag-pill rag-pill-g">Green</span>';if(r==='A')return'<span class="rag-pill rag-pill-a">Amber</span>';return'<span class="rag-pill rag-pill-r">Red</span>';}
 function showToast(msg,dur=2500){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>{t.style.display='none';},dur);}
 function closeModal(){document.getElementById('modal-root').innerHTML='';}
+function getMsDate(projectId,key){return milestones.find(m=>m.project_id===projectId&&m.key===key)?.date||null;}
+function getMsDateByLabel(projectId,lbl){return milestones.find(m=>m.project_id===projectId&&(m.label||'').toLowerCase().includes(lbl.toLowerCase()))?.date||null;}
 
 // ── DATA ──────────────────────────────────────────────────
 async function loadAll(){
@@ -252,14 +315,24 @@ async function loadAll(){
   ]);
   projects=pr.data||[];milestones=ms.data||[];pulses=pu.data||[];
   if(projects.length&&!selectedProjId)selectedProjId=projects[0].id;
-  // Build vinyl + planogram schedules from milestones
+  // rebuild schedules preserving any in-session edits
   vinylSchedule=projects.map((p,i)=>{
+    const ex=vinylSchedule.find(v=>v.id===p.id);
     const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl');
-    return{id:p.id,name:p.name,so:p.so_number,client:p.client,date:vm?vm.date:null,status:'Scheduled',priority:i+1};
+    const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping');
+    return ex?{...ex,date:vm?.date||ex.date,shipDate:sh?.date||ex.shipDate}:{
+      id:p.id,name:p.name,so:p.so_number,client:p.client,
+      vinylType:'',date:vm?.date||'',shipDate:sh?.date||'',
+      pm:'',formFactor:'',status:'Scheduled',priority:i+1
+    };
   }).sort((a,b)=>a.priority-b.priority);
   planogramSchedule=projects.map((p,i)=>{
-    const pm=milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram'));
-    return{id:p.id,name:p.name,so:p.so_number,client:p.client,date:pm?pm.date:null,status:'Pending',priority:i+1};
+    const ex=planogramSchedule.find(v=>v.id===p.id);
+    const pm2=milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram'));
+    return ex?{...ex,date:pm2?.date||ex.date}:{
+      id:p.id,name:p.name,so:p.so_number,client:p.client,
+      machineType:'',date:pm2?.date||'',status:'Pending',priority:i+1
+    };
   }).sort((a,b)=>a.priority-b.priority);
   document.getElementById('hdate').textContent=new Date().toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
   renderTab();
@@ -269,17 +342,81 @@ function setTab(tab,el){
   currentTab=tab;
   document.querySelectorAll('.ntab').forEach(b=>b.classList.remove('active'));
   if(el)el.classList.add('active');
-  ['overview','week','production','vinyl','planogram','pulse','intake'].forEach(t=>{document.getElementById('tab-'+t).style.display=t===tab?'block':'none';});
+  ['glance','overview','week','production','quality','shipping','installation','vinyl','planogram','pulse','intake'].forEach(t=>{
+    document.getElementById('tab-'+t).style.display=t===tab?'block':'none';
+  });
   renderTab();
 }
 function renderTab(){
-  if(currentTab==='overview')renderOverview();
-  else if(currentTab==='week')renderWeek();
-  else if(currentTab==='production')renderProduction();
-  else if(currentTab==='vinyl')renderSchedule('vinyl');
-  else if(currentTab==='planogram')renderSchedule('planogram');
-  else if(currentTab==='pulse')renderPulse();
-  else if(currentTab==='intake')renderIntake();
+  const m={'glance':renderGlance,'overview':renderOverview,'week':renderWeek,'production':()=>renderDeptView('production'),'quality':()=>renderDeptView('quality'),'shipping':()=>renderDeptView('shipping'),'installation':()=>renderDeptView('installation'),'vinyl':renderVinyl,'planogram':renderPlanogram,'pulse':renderPulse,'intake':renderIntake};
+  if(m[currentTab])m[currentTab]();
+}
+
+// ── AT A GLANCE ───────────────────────────────────────────
+function renderGlance(){
+  const el=document.getElementById('tab-glance');
+  if(!projects.length){el.innerHTML='<div class="empty-state">No projects yet. Add one via New Project.</div>';return;}
+  const allMs=milestones;
+  const overdue=allMs.filter(m=>m.date&&daysDiff(m.date)<0).length;
+  const thisWeek=allMs.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
+  const active=projects.filter(p=>p.status==='active').length;
+  const inProd=projects.filter(p=>{const s=getMsDate(p.id,'production-start');const e=getMsDate(p.id,'production-end');if(!s||!e)return false;const t=today();return t>=new Date(s+'T00:00:00')&&t<=new Date(e+'T00:00:00');}).length;
+  const inQa=projects.filter(p=>{const s=getMsDate(p.id,'quality-start');const e=getMsDate(p.id,'quality-end');if(!s||!e)return false;const t=today();return t>=new Date(s+'T00:00:00')&&t<=new Date(e+'T00:00:00');}).length;
+
+  const STAGES=[
+    {key:'readiness',label:'Readiness',start:'po-release',end:'arrival',color:'#6b6b6b'},
+    {key:'production',label:'Production',start:'production-start',end:'production-end',color:'#7c3aed'},
+    {key:'quality',label:'Quality / QA',start:'quality-start',end:'quality-end',color:'#d97706'},
+    {key:'uat',label:'UAT',start:'uat',end:'uat',color:'#16a34a'},
+    {key:'shipping',label:'Shipping',start:'shipping',end:'shipping',color:'#059669'},
+    {key:'installation',label:'Installation',start:'installation',end:'installation',color:'#db2777'},
+  ];
+
+  const cards=projects.map(p=>{
+    const stagesHtml=STAGES.map(stage=>{
+      const sd=getMsDate(p.id,stage.start);
+      const ed=getMsDate(p.id,stage.end);
+      const st=stageStatus(sd,ed);
+      let pct=0;
+      if(sd&&ed){
+        const start=new Date(sd+'T00:00:00');const end=new Date(ed+'T00:00:00');const t=today();
+        if(t>=end)pct=100;
+        else if(t>=start){const total=end-start||1;pct=Math.min(100,Math.round((t-start)/total*100));}
+      }
+      const barCls=st.label==='Done'?'bar-done':st.chip==='chip-active'?'bar-active':st.chip==='chip-overdue'?'bar-overdue':'bar-future';
+      return `<div class="cycle-stage">
+        <div class="cycle-stage-name">${stage.label}</div>
+        <div class="cycle-bar-wrap"><div class="cycle-bar ${barCls}" style="width:${pct}%;background:${pct>0?stage.color:'var(--gray-200)'}"></div></div>
+        <div class="cycle-dates"><span class="stage-chip ${st.chip}">${st.label}</span></div>
+      </div>`;
+    }).join('');
+    return `<div class="glance-card">
+      <div class="glance-card-head">
+        <div class="glance-proj-name">${p.name}</div>
+        <div class="glance-proj-meta">
+          <span class="glance-so">${p.so_number||'No SO'}</span>
+          <span class="glance-client">${p.client||''}</span>
+        </div>
+      </div>
+      <div class="cycle-track">
+        <div class="cycle-stages">${stagesHtml}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML=`
+    <div class="metrics-row">
+      <div class="metric"><div class="metric-label">Active projects</div><div class="metric-val">${active}</div><div class="metric-sub">in the hub</div></div>
+      <div class="metric"><div class="metric-label">In production</div><div class="metric-val ${inProd>0?'green':''}">${inProd}</div><div class="metric-sub">being built now</div></div>
+      <div class="metric"><div class="metric-label">In QA</div><div class="metric-val ${inQa>0?'amber':''}">${inQa}</div><div class="metric-sub">being tested now</div></div>
+      <div class="metric"><div class="metric-label">This week</div><div class="metric-val">${thisWeek}</div><div class="metric-sub">milestones due</div></div>
+      <div class="metric"><div class="metric-label">Needs attention</div><div class="metric-val ${overdue>0?'red':''}">${overdue}</div><div class="metric-sub">overdue items</div></div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:600;color:var(--black)">All projects — cycle view</div>
+      <button class="btn-export" onclick="exportToExcel()">⬇ Export Excel</button>
+    </div>
+    <div class="glance-grid">${cards}</div>`;
 }
 
 // ── OVERVIEW ──────────────────────────────────────────────
@@ -302,24 +439,24 @@ function renderOverview(){
   }).join('');
   const pillsHtml=projects.map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('');
   el.innerHTML=`
-    <div class="metrics-row">
-      <div class="metric"><div class="metric-label">Active projects</div><div class="metric-val">${projects.length}</div><div class="metric-sub">in the hub</div></div>
+    <div class="metrics-row" style="grid-template-columns:repeat(4,1fr)">
+      <div class="metric"><div class="metric-label">Total projects</div><div class="metric-val">${projects.length}</div><div class="metric-sub">in hub</div></div>
       <div class="metric"><div class="metric-label">This week</div><div class="metric-val">${thisWeek}</div><div class="metric-sub">milestones due</div></div>
       <div class="metric"><div class="metric-label">Next 14 days</div><div class="metric-val">${upcoming}</div><div class="metric-sub">coming up</div></div>
-      <div class="metric"><div class="metric-label">Past due</div><div class="metric-val ${overdue>0?'red':''}">${overdue}</div><div class="metric-sub">need confirmation</div></div>
+      <div class="metric"><div class="metric-label">Overdue</div><div class="metric-val ${overdue>0?'red':''}">${overdue}</div><div class="metric-sub">need attention</div></div>
     </div>
     <div class="proj-pills">${pillsHtml}</div>
     ${proj?`<div class="section">
       <div class="section-head">
-        <div class="section-title">${proj.name} <span style="font-size:12px;font-weight:400;color:var(--gray-500)">— ${proj.client}</span></div>
+        <div class="section-title">${proj.name} <span style="font-size:11px;font-weight:400;color:var(--gray-500)">— ${proj.client}</span></div>
         <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-family:var(--mono);color:var(--red);font-size:12px">${proj.so_number||'No SO'}</span>
-          <button class="btn btn-primary" style="font-size:11px;padding:5px 12px" onclick="openEditProj('${proj.id}')">✏ Edit project</button>
-          <button class="btn-export" onclick="exportToExcel()">⬇ Export Excel</button>
+          <span style="font-family:var(--mono);color:var(--red);font-size:11px">${proj.so_number||'No SO'}</span>
+          <button class="btn btn-primary" style="font-size:10px;padding:4px 10px" onclick="openEditProj('${proj.id}')">✏ Edit</button>
+          <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
         </div>
       </div>
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
-    </div>`:'<div class="empty-state">No projects yet. Add one via New Project.</div>'}`;
+    </div>`:'<div class="empty-state">No projects yet.</div>'}`;
 }
 function selProj(id){selectedProjId=id;renderOverview();}
 
@@ -329,15 +466,15 @@ function renderWeek(){
   const we=addD(weekStart,6);
   const allMs=milestones.map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
   const overdueMs=allMs.filter(m=>m.date&&daysDiff(m.date)<0&&daysDiff(m.date)>=-14);
-  const overdueHtml=overdueMs.length?`<div class="overdue-bar"><div><div class="overdue-title">⚠ Overdue / needs confirmation</div>${overdueMs.map(m=>`<div class="overdue-item">${m.label} — ${m.projectName} (was ${fmt(m.date)})</div>`).join('')}</div></div>`:'';
-  const DAY_NAMES=['Monday','Tuesday','Wednesday','Thursday','Friday'];
+  const overdueHtml=overdueMs.length?`<div class="overdue-bar"><div><div class="overdue-title">⚠ Overdue</div>${overdueMs.map(m=>`<div class="overdue-item">${m.label} — ${m.projectName} (was ${fmt(m.date)})</div>`).join('')}</div></div>`:'';
+  const DAY=['Monday','Tuesday','Wednesday','Thursday','Friday'];
   const t=today();
   const daysHtml=[0,1,2,3,4].map(i=>{
-    const dayDt=addD(weekStart,i);const isToday=sameDay(dayDt,t);
-    const dayEvs=allMs.filter(m=>m.date&&sameDay(new Date(m.date+'T00:00:00'),dayDt));
-    return `<div class="day-col${isToday?' today-col':''}">
-      <div class="day-hdr"><div class="day-name">${DAY_NAMES[i]}${isToday?'<span class="today-pip"></span>':''}</div><div class="day-num">${dayDt.getDate()}</div></div>
-      <div class="day-events">${dayEvs.length?dayEvs.map(e=>`<div class="ev ${TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${e.projectName}</div></div>`).join(''):'<div class="empty-day">—</div>'}</div>
+    const d=addD(weekStart,i);const isT=sameDay(d,t);
+    const evs=allMs.filter(m=>m.date&&sameDay(new Date(m.date+'T00:00:00'),d));
+    return `<div class="day-col${isT?' today-col':''}">
+      <div class="day-hdr"><div class="day-name">${DAY[i]}${isT?'<span class="today-pip"></span>':''}</div><div class="day-num">${d.getDate()}</div></div>
+      <div class="day-events">${evs.length?evs.map(e=>`<div class="ev ${TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${e.projectName}</div></div>`).join(''):'<div class="empty-day">—</div>'}</div>
     </div>`;
   }).join('');
   el.innerHTML=`
@@ -346,15 +483,15 @@ function renderWeek(){
       <span class="wlabel">${fmt(isoD(weekStart))} – ${fmt(isoD(we))}</span>
       <button class="wnav" onclick="shiftW(1)">&#8250;</button>
       <button class="wnav" onclick="goToday()">Today</button>
-      <button class="btn-add" onclick="openAddEvModal()">+ Add event</button>
-      <button class="btn-export" style="margin-left:0" onclick="exportToExcel()">⬇ Excel</button>
+      <button class="btn-add" onclick="openAddEvModal()">+ Add</button>
+      <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
     </div>
     ${overdueHtml}
     <div class="legend-row">
       <div class="leg"><div class="leg-dot" style="background:#059669"></div>Shipping</div>
       <div class="leg"><div class="leg-dot" style="background:#2563eb"></div>Arrival</div>
       <div class="leg"><div class="leg-dot" style="background:#7c3aed"></div>Production</div>
-      <div class="leg"><div class="leg-dot" style="background:#d97706"></div>Quality / QA</div>
+      <div class="leg"><div class="leg-dot" style="background:#d97706"></div>QA</div>
       <div class="leg"><div class="leg-dot" style="background:#16a34a"></div>UAT</div>
       <div class="leg"><div class="leg-dot" style="background:#db2777"></div>Installation</div>
     </div>
@@ -363,194 +500,217 @@ function renderWeek(){
 function shiftW(n){weekStart=addD(weekStart,n*7);renderWeek();}
 function goToday(){weekStart=monday(today());renderWeek();}
 
-// ── PRODUCTION VIEW ───────────────────────────────────────
-function renderProduction(){
-  const el=document.getElementById('tab-production');
-  if(!projects.length){el.innerHTML='<div class="empty-state">No projects yet.</div>';return;}
+// ── DEPT VIEWS ────────────────────────────────────────────
+function renderDeptView(dept){
+  const el=document.getElementById('tab-'+dept);
+  const cfg={
+    production:{title:'Production schedule',startKey:'production-start',endKey:'production-end',color:'#7c3aed',cols:['Project','SO Number','Client','Prod start','Prod end','Duration','Status']},
+    quality:{title:'Quality / QA schedule',startKey:'quality-start',endKey:'quality-end',color:'#d97706',cols:['Project','SO Number','Client','QA start','QA end','Vinyl date','UAT date','Status']},
+    shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO Number','Client','Pack & ship','Delivery','Status']},
+    installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO Number','Client','Training date','Installation date','Status']},
+  };
+  const c=cfg[dept];
 
-  // Build date range: earliest prod-start to latest prod-end across all projects
-  const prodStarts=milestones.filter(m=>m.key==='production-start'&&m.date).map(m=>new Date(m.date+'T00:00:00'));
-  const prodEnds=milestones.filter(m=>m.key==='production-end'&&m.date).map(m=>new Date(m.date+'T00:00:00'));
-  const qaEnds=milestones.filter(m=>m.key==='quality-end'&&m.date).map(m=>new Date(m.date+'T00:00:00'));
-  const shipDates=milestones.filter(m=>m.key==='shipping'&&m.date).map(m=>new Date(m.date+'T00:00:00'));
-  const allDates=[...prodStarts,...prodEnds,...qaEnds,...shipDates];
-  if(!allDates.length){el.innerHTML='<div class="section"><div class="section-head"><div class="section-title">Production schedule</div></div><div class="empty-state">No production dates set. Add milestone dates via the Overview tab.</div></div>';return;}
-
-  let rangeStart=new Date(Math.min(...allDates));
-  let rangeEnd=new Date(Math.max(...allDates));
-  // round to mondays
-  rangeStart=monday(rangeStart);
-  rangeEnd=addD(rangeEnd,7);
-  // build array of weekdays between rangeStart and rangeEnd
-  const days=[];let cur=new Date(rangeStart);
-  while(cur<=rangeEnd){const dow=cur.getDay();if(dow!==0&&dow!==6)days.push(new Date(cur));cur=addD(cur,1);}
-
-  const todayD=today();
-  const headerCells=days.map(d=>{
-    const isT=sameDay(d,todayD);
-    const label=d.getDate()===1||days.indexOf(d)===0?`<span style="font-size:9px;display:block;color:var(--gray-400)">${d.toLocaleDateString('en-US',{month:'short'})}</span>${d.getDate()}`:d.getDate();
-    return `<th class="${isT?'gantt-today-col':''}">${label}</th>`;
-  }).join('');
+  // Gantt (production only)
+  let ganttHtml='';
+  if(dept==='production'){
+    const prodStarts=milestones.filter(m=>m.key==='production-start'&&m.date).map(m=>new Date(m.date+'T00:00:00'));
+    const prodEnds=milestones.filter(m=>(m.key==='production-end'||m.key==='quality-end')&&m.date).map(m=>new Date(m.date+'T00:00:00'));
+    if(prodStarts.length&&prodEnds.length){
+      let rS=monday(new Date(Math.min(...prodStarts)));
+      let rE=addD(new Date(Math.max(...prodEnds)),5);
+      const days=[];let cur=new Date(rS);
+      while(cur<=rE){const dow=cur.getDay();if(dow!==0&&dow!==6)days.push(new Date(cur));cur=addD(cur,1);}
+      const t=today();
+      const hdr=days.map(d=>`<th class="${sameDay(d,t)?'gantt-today-col':''}" style="min-width:28px">${d.getDate()===1||days.indexOf(d)===0?'<span style="font-size:8px;display:block">'+d.toLocaleDateString('en-US',{month:'short'})+'</span>'+d.getDate():d.getDate()}</th>`).join('');
+      const gRows=projects.map(p=>{
+        const pMs=milestones.filter(m=>m.project_id===p.id);
+        const getD=k=>pMs.find(m=>m.key===k)?.date;
+        const segs=[
+          {s:getD('production-start'),e:getD('production-end'),bg:'#7c3aed',lbl:'Build'},
+          {s:getD('quality-start'),e:getD('quality-end'),bg:'#d97706',lbl:'QA'},
+          {s:getD('shipping'),e:getD('shipping'),bg:'#059669',lbl:'Ship'},
+          {s:getD('installation'),e:getD('installation'),bg:'#db2777',lbl:'Install'},
+        ].filter(x=>x.s);
+        const cells=days.map(d=>{
+          const isT=sameDay(d,t);
+          let fill='';
+          segs.forEach(sg=>{
+            const sd=new Date(sg.s+'T00:00:00');const ed=sg.e?new Date(sg.e+'T00:00:00'):sd;
+            if(d>=sd&&d<=ed)fill=`<div class="gantt-fill" style="background:${sg.bg};opacity:0.85" title="${sg.lbl}"></div>`;
+          });
+          const tl=isT?'<div style="position:absolute;left:50%;top:0;width:2px;height:100%;background:rgba(200,16,46,0.4)"></div>':'';
+          return `<td class="gantt-cell ${isT?'gantt-today-col':''}" style="position:relative">${tl}${fill}</td>`;
+        }).join('');
+        return `<tr><td class="proj-name">${p.name}<br><span style="font-family:var(--mono);font-size:9px;color:var(--gray-500)">${p.so_number||''}</span></td>${cells}</tr>`;
+      }).join('');
+      ganttHtml=`<div class="section" style="margin-bottom:10px">
+        <div class="section-head"><div class="section-title">Gantt view</div><div class="legend-row" style="margin:0;gap:8px">
+          <div class="leg"><div class="leg-dot" style="background:#7c3aed"></div>Build</div>
+          <div class="leg"><div class="leg-dot" style="background:#d97706"></div>QA</div>
+          <div class="leg"><div class="leg-dot" style="background:#059669"></div>Ship</div>
+          <div class="leg"><div class="leg-dot" style="background:#db2777"></div>Install</div>
+        </div></div>
+        <div class="prod-gantt"><table class="gantt-table"><thead><tr><th class="proj-col">Project</th>${hdr}</tr></thead><tbody>${gRows}</tbody></table></div>
+      </div>`;
+    }
+  }
 
   const rows=projects.map(p=>{
-    const pMs=milestones.filter(m=>m.project_id===p.id);
-    const getDate=key=>pMs.find(m=>m.key===key)?.date;
-    const ps=getDate('production-start'),pe=getDate('production-end');
-    const qs=getDate('quality-start'),qe=getDate('quality-end');
-    const sh=getDate('shipping'),inst=getDate('installation');
-    const segments=[
-      {start:ps,end:pe,cls:'',label:'Build'},
-      {start:qs,end:qe,cls:'qa',label:'QA'},
-      {start:sh,end:sh,cls:'ship',label:'Ship'},
-      {start:inst,end:inst,cls:'install',label:'Install'},
-    ].filter(s=>s.start);
-
-    const cells=days.map(d=>{
-      const isT=sameDay(d,todayD);
-      let fill='';
-      segments.forEach(s=>{
-        const sd=new Date(s.start+'T00:00:00');
-        const ed=s.end?new Date(s.end+'T00:00:00'):sd;
-        if(d>=sd&&d<=ed){
-          const isFirst=sameDay(d,sd);
-          fill=`<div class="gantt-fill ${s.cls}" title="${s.label}: ${fmt(s.start)}${s.end&&s.end!==s.start?' – '+fmt(s.end):''}" style="${isFirst?'border-radius:3px 0 0 3px':''};${sameDay(d,ed)?'border-radius:0 3px 3px 0':''}"></div>`;
-        }
-      });
-      // today line
-      const todayLine=isT?'<div style="position:absolute;left:50%;top:0;width:2px;height:100%;background:rgba(200,16,46,0.35);z-index:1"></div>':'';
-      return `<td class="gantt-cell ${isT?'gantt-today-col':''}" style="position:relative">${todayLine}${fill}</td>`;
-    }).join('');
-
-    // status chip
-    const now=todayD;
-    let chip='<span class="status-chip chip-pending">Pending</span>';
-    if(ps&&pe){const sd=new Date(ps+'T00:00:00');const ed=new Date(pe+'T00:00:00');if(now>ed)chip='<span class="status-chip chip-done">Done</span>';else if(now>=sd)chip='<span class="status-chip chip-active">In production</span>';}
-    if(qs&&qe){const sd=new Date(qs+'T00:00:00');const ed=new Date(qe+'T00:00:00');if(now>=sd&&now<=ed)chip='<span class="status-chip chip-atrisk">In QA</span>';}
-
+    const sd=getMsDate(p.id,c.startKey);
+    const ed=c.endKey!==c.startKey?getMsDate(p.id,c.endKey):null;
+    const st=stageStatus(sd,ed||sd);
+    let extra='';
+    if(dept==='production'){
+      const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';
+      extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(ed)}</td><td class="date-cell">${dur}</td>`;
+    } else if(dept==='quality'){
+      extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(ed)}</td><td class="date-cell">${fmt(getMsDate(p.id,'vinyl'))}</td><td class="date-cell">${fmt(getMsDate(p.id,'uat'))}</td>`;
+    } else if(dept==='shipping'){
+      extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(getMsDate(p.id,'delivery'))}</td>`;
+    } else if(dept==='installation'){
+      extra=`<td class="date-cell">${fmt(getMsDate(p.id,'training'))}</td><td class="date-cell">${fmt(sd)}</td>`;
+    }
     return `<tr>
-      <td class="proj-name">${p.name}<br><span style="font-family:var(--mono);font-size:10px;color:var(--gray-500)">${p.so_number||''}</span></td>
-      <td style="padding:5px 8px;white-space:nowrap">${chip}</td>
-      <td style="padding:5px 8px;font-size:12px;color:var(--gray-500);white-space:nowrap">${ps?fmt(ps):'—'} → ${pe?fmt(pe):'—'}</td>
-      ${cells}
+      <td style="font-weight:500">${p.name}</td>
+      <td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">${p.so_number||'—'}</td>
+      <td>${p.client||'—'}</td>
+      ${extra}
+      <td><span class="status-chip ${st.chip}">${st.label}</span></td>
     </tr>`;
   }).join('');
 
-  // week separators in header
-  const weekLabels=[];let prevMon=null;
-  days.forEach((d,i)=>{if(d.getDay()===1||i===0){if(prevMon)weekLabels.push({start:prevMon,end:i-1});prevMon=i;}});
-
   el.innerHTML=`
+    ${ganttHtml}
     <div class="section">
       <div class="section-head">
-        <div class="section-title">Production schedule — all projects</div>
-        <div style="display:flex;gap:8px">
-          <button class="btn-export" onclick="exportToExcel()">⬇ Export Excel</button>
-        </div>
+        <div class="section-title" style="border-left:3px solid ${c.color};padding-left:8px">${c.title}</div>
+        <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
       </div>
-      <div class="legend-row" style="padding:10px 18px 0">
-        <div class="leg"><div class="leg-dot" style="background:#7c3aed"></div>Build / production</div>
-        <div class="leg"><div class="leg-dot" style="background:#d97706"></div>QA</div>
-        <div class="leg"><div class="leg-dot" style="background:#059669"></div>Ship</div>
-        <div class="leg"><div class="leg-dot" style="background:#db2777"></div>Installation</div>
-        <div class="leg"><div class="leg-dot" style="background:rgba(200,16,46,0.35)"></div>Today</div>
-      </div>
-      <div class="prod-gantt">
-        <table class="gantt-table">
-          <thead><tr>
-            <th class="proj-col" style="text-align:left">Project</th>
-            <th>Status</th>
-            <th>Dates</th>
-            ${headerCells}
-          </tr></thead>
-          <tbody>${rows}</tbody>
+      <div class="dept-table-wrap">
+        <table class="dept-table">
+          <thead><tr>${c.cols.map(col=>`<th>${col}</th>`).join('')}</tr></thead>
+          <tbody>${rows||'<tr><td colspan="99" style="text-align:center;padding:2rem;color:var(--gray-500)">No projects yet.</td></tr>'}</tbody>
         </table>
       </div>
     </div>`;
 }
 
-// ── SCHEDULE (VINYL / PLANOGRAM) ──────────────────────────
-function renderSchedule(type){
-  const el=document.getElementById('tab-'+type);
-  const data=type==='vinyl'?vinylSchedule:planogramSchedule;
-  const title=type==='vinyl'?'Vinyl schedule':'Planogram schedule';
-  const statusOpts=['Scheduled','In progress','Complete','On hold','Needs date'].map(s=>`<option>${s}</option>`).join('');
-
-  const rows=data.map((item,i)=>`
-    <tr draggable="true" data-idx="${i}" data-type="${type}"
-      ondragstart="dragStart(event,${i},'${type}')"
-      ondragover="dragOver(event)"
-      ondrop="dragDrop(event,${i},'${type}')"
-      ondragleave="dragLeave(event)"
-      id="srow-${type}-${i}">
-      <td><span class="drag-handle" title="Drag to reorder">⠿</span></td>
+// ── VINYL SCHEDULE ─────────────────────────────────────────
+function renderVinyl(){
+  const el=document.getElementById('tab-vinyl');
+  const vtOpts=VINYL_TYPES.map(t=>`<option value="${t}">${t}</option>`).join('');
+  const stOpts=STATUS_OPTS.map(s=>`<option>${s}</option>`).join('');
+  const rows=vinylSchedule.map((item,i)=>`
+    <tr draggable="true" data-idx="${i}" data-type="vinyl"
+      ondragstart="dragStart(event,${i},'vinyl')" ondragover="dragOver(event)"
+      ondrop="dragDrop(event,${i},'vinyl')" ondragleave="dragLeave(event)">
+      <td><span class="drag-handle">⠿</span></td>
       <td><span class="priority-num">${i+1}</span></td>
-      <td style="font-weight:500">${item.name}</td>
-      <td style="font-family:var(--mono);font-size:12px;color:var(--gray-500)">${item.so||'—'}</td>
-      <td>${item.client||'—'}</td>
-      <td>
-        <input type="date" value="${item.date||''}" style="font-family:var(--font);font-size:12px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);color:var(--black)"
-          onchange="updateSchedDate('${type}',${i},this.value)">
-      </td>
-      <td>
-        <select class="status-select" onchange="updateSchedStatus('${type}',${i},this.value)">
-          ${['Scheduled','In progress','Complete','On hold','Needs date'].map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}
-        </select>
-      </td>
+      <td><input class="sched-input" value="${item.so||''}" placeholder="SO-000" style="width:110px" onchange="vs(${i},'so',this.value)"></td>
+      <td><input class="sched-input" value="${item.client||''}" placeholder="Customer" onchange="vs(${i},'client',this.value)"></td>
+      <td><input class="sched-input" value="${item.name||''}" placeholder="Project name" onchange="vs(${i},'name',this.value)"></td>
+      <td><select class="sched-select" onchange="vs(${i},'vinylType',this.value)">${VINYL_TYPES.map(t=>`<option${t===item.vinylType?' selected':''}>${t}</option>`).join('')}<option value="">—</option></select></td>
+      <td><input type="date" class="sched-input" style="width:130px" value="${item.date||''}" onchange="vsDate(${i},'date',this.value,'vinyl')"></td>
+      <td><input type="date" class="sched-input" style="width:130px" value="${item.shipDate||''}" onchange="vs(${i},'shipDate',this.value)"></td>
+      <td><input class="sched-input" value="${item.pm||''}" placeholder="PM name" style="width:100px" onchange="vs(${i},'pm',this.value)"></td>
+      <td><input class="sched-input" value="${item.formFactor||''}" placeholder="Form factor" style="width:110px" onchange="vs(${i},'formFactor',this.value)"></td>
+      <td><select class="sched-select" onchange="vs(${i},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
+      <td><button onclick="removeSchedRow('vinyl',${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">×</button></td>
     </tr>`).join('');
-
   el.innerHTML=`
     <div class="section">
       <div class="section-head">
-        <div class="section-title">${title}</div>
-        <div style="display:flex;gap:8px">
-          <button class="btn-export" onclick="exportToExcel()">⬇ Export Excel</button>
+        <div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div>
+        <div style="display:flex;gap:7px">
+          <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
         </div>
       </div>
-      <div style="padding:10px 18px;font-size:12px;color:var(--gray-500)">Drag rows to reorder priority. Click date to change. Update status inline.</div>
-      <table class="sched-table">
-        <thead><tr>
-          <th style="width:32px"></th>
-          <th style="width:40px">#</th>
-          <th>Project</th>
-          <th>SO number</th>
-          <th>Client</th>
-          <th>${type==='vinyl'?'Vinyl date':'Planogram date'}</th>
-          <th>Status</th>
-        </tr></thead>
-        <tbody id="sched-body-${type}">${rows}</tbody>
-      </table>
+      <div style="padding:8px 16px;font-size:11px;color:var(--gray-500)">Drag ⠿ to reorder priority. All fields editable inline.</div>
+      <div style="overflow-x:auto">
+        <table class="sched-table">
+          <thead><tr>
+            <th style="width:28px"></th><th style="width:32px">#</th>
+            <th>SO Number</th><th>Customer</th><th>Project Name</th>
+            <th>Decal / Partial / Full</th><th>Vinyl Date</th><th>Ship Date</th>
+            <th>Project Manager</th><th>Form Factor</th><th>Status</th><th style="width:28px"></th>
+          </tr></thead>
+          <tbody id="sched-body-vinyl">${rows}</tbody>
+        </table>
+      </div>
       <div class="actions-row">
-        <button class="btn btn-red" onclick="addSchedRow('${type}')">+ Add row</button>
-        <span style="font-size:12px;color:var(--gray-500);margin-left:auto">Drag to reprioritize • Changes save automatically</span>
+        <button class="btn-add" onclick="addSchedRow('vinyl')">+ Add row</button>
+        <span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag to reprioritize</span>
       </div>
     </div>`;
 }
 
-function updateSchedDate(type,idx,val){
-  const data=type==='vinyl'?vinylSchedule:planogramSchedule;
-  data[idx].date=val;
-  // also update the milestone in supabase
-  const proj=projects.find(p=>p.id===data[idx].id);
-  if(proj){
-    const key=type==='vinyl'?'vinyl':'other';
-    const label=type==='vinyl'?'Vinyl / branding':'Planogram sign-off';
-    const existing=milestones.find(m=>m.project_id===proj.id&&m.key===key&&(m.label||'').toLowerCase().includes(type==='vinyl'?'vinyl':'planogram'));
-    if(existing){sb.from('milestones').update({date:val}).eq('id',existing.id).then(()=>showToast('Date saved ✓'));}
-    else{sb.from('milestones').insert({project_id:proj.id,key,label,date:val}).then(()=>{loadAll();showToast('Date saved ✓');});}
-  }
-}
-function updateSchedStatus(type,idx,val){
-  const data=type==='vinyl'?vinylSchedule:planogramSchedule;
-  data[idx].status=val;
-  showToast('Status updated ✓');
-}
-function addSchedRow(type){
-  const data=type==='vinyl'?vinylSchedule:planogramSchedule;
-  data.push({id:'custom-'+Date.now(),name:'New item',so:'',client:'',date:'',status:'Needs date',priority:data.length+1});
-  renderSchedule(type);
+// ── PLANOGRAM SCHEDULE ─────────────────────────────────────
+function renderPlanogram(){
+  const el=document.getElementById('tab-planogram');
+  const rows=planogramSchedule.map((item,i)=>`
+    <tr draggable="true" data-idx="${i}" data-type="planogram"
+      ondragstart="dragStart(event,${i},'planogram')" ondragover="dragOver(event)"
+      ondrop="dragDrop(event,${i},'planogram')" ondragleave="dragLeave(event)">
+      <td><span class="drag-handle">⠿</span></td>
+      <td><span class="priority-num">${i+1}</span></td>
+      <td><input class="sched-input" value="${item.so||''}" placeholder="SO-000" style="width:110px" onchange="ps2(${i},'so',this.value)"></td>
+      <td><input class="sched-input" value="${item.client||''}" placeholder="Customer" onchange="ps2(${i},'client',this.value)"></td>
+      <td><input class="sched-input" value="${item.name||''}" placeholder="Project name" onchange="ps2(${i},'name',this.value)"></td>
+      <td><input class="sched-input" value="${item.machineType||''}" placeholder="Machine type" onchange="ps2(${i},'machineType',this.value)"></td>
+      <td><input type="date" class="sched-input" style="width:130px" value="${item.date||''}" onchange="vsDate(${i},'date',this.value,'planogram')"></td>
+      <td><select class="sched-select" onchange="ps2(${i},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
+      <td><button onclick="removeSchedRow('planogram',${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">×</button></td>
+    </tr>`).join('');
+  el.innerHTML=`
+    <div class="section">
+      <div class="section-head">
+        <div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div>
+        <div style="display:flex;gap:7px"><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div>
+      </div>
+      <div style="padding:8px 16px;font-size:11px;color:var(--gray-500)">Drag ⠿ to reorder priority. All fields editable inline.</div>
+      <div style="overflow-x:auto">
+        <table class="sched-table">
+          <thead><tr>
+            <th style="width:28px"></th><th style="width:32px">#</th>
+            <th>SO Number</th><th>Customer</th><th>Project Name</th>
+            <th>Machine Type</th><th>Planogram Date</th><th>Status</th><th style="width:28px"></th>
+          </tr></thead>
+          <tbody id="sched-body-planogram">${rows}</tbody>
+        </table>
+      </div>
+      <div class="actions-row">
+        <button class="btn-add" onclick="addSchedRow('planogram')">+ Add row</button>
+        <span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag to reprioritize</span>
+      </div>
+    </div>`;
 }
 
-// Drag and drop for schedule
+// Schedule helpers
+function vs(i,k,v){vinylSchedule[i][k]=v;}
+function ps2(i,k,v){planogramSchedule[i][k]=v;}
+function vsDate(i,field,val,type){
+  const data=type==='vinyl'?vinylSchedule:planogramSchedule;
+  data[i][field]=val;
+  const proj=projects.find(p=>p.id===data[i].id);
+  if(proj&&val){
+    const key=type==='vinyl'?'vinyl':'other';
+    const label=type==='vinyl'?'Vinyl / branding':'Planogram sign-off';
+    const existing=milestones.find(m=>m.project_id===proj.id&&m.key===key);
+    if(existing)sb.from('milestones').update({date:val}).eq('id',existing.id).then(()=>showToast('Date saved ✓'));
+    else sb.from('milestones').insert({project_id:proj.id,key,label,date:val}).then(()=>{loadAll();showToast('Date saved ✓');});
+  }
+}
+function addSchedRow(type){
+  const row={id:'custom-'+Date.now(),name:'',so:'',client:'',date:'',status:'Needs date',priority:99};
+  if(type==='vinyl'){row.vinylType='';row.shipDate='';row.pm='';row.formFactor='';vinylSchedule.push(row);}
+  else{row.machineType='';planogramSchedule.push(row);}
+  renderVinyl(); if(type==='planogram')renderPlanogram();
+}
+function removeSchedRow(type,i){
+  if(type==='vinyl')vinylSchedule.splice(i,1);else planogramSchedule.splice(i,1);
+  if(type==='vinyl')renderVinyl();else renderPlanogram();
+}
 function dragStart(e,idx,type){dragSrc=idx;dragType=type;e.currentTarget.classList.add('dragging');}
 function dragOver(e){e.preventDefault();e.currentTarget.classList.add('drag-over');}
 function dragLeave(e){e.currentTarget.classList.remove('drag-over');}
@@ -558,11 +718,9 @@ function dragDrop(e,idx,type){
   e.preventDefault();e.currentTarget.classList.remove('drag-over');
   if(dragSrc===null||dragSrc===idx||dragType!==type)return;
   const data=type==='vinyl'?vinylSchedule:planogramSchedule;
-  const moved=data.splice(dragSrc,1)[0];
-  data.splice(idx,0,moved);
-  data.forEach((item,i)=>item.priority=i+1);
-  dragSrc=null;
-  renderSchedule(type);
+  const moved=data.splice(dragSrc,1)[0];data.splice(idx,0,moved);
+  data.forEach((item,i)=>item.priority=i+1);dragSrc=null;
+  if(type==='vinyl')renderVinyl();else renderPlanogram();
   showToast('Priority updated');
 }
 
@@ -574,14 +732,6 @@ function renderPulse(){
   const deptOpts=DEPTS.map(d=>`<option value="${d}">${d}</option>`).join('');
   const todayPulses=pulses.filter(p=>{const dt=new Date(p.submitted_at);return sameDay(dt,today())&&p.project_id===selectedProjId;});
   const pillsHtml=projects.map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProjPulse('${p.id}')">${p.name}</button>`).join('');
-  const resultsHtml=todayPulses.length?`
-    <div class="section" style="margin-top:12px">
-      <div class="section-head"><div class="section-title">Today's updates — ${proj?proj.name:''}</div><div class="section-meta">${todayPulses.length} submitted</div></div>
-      <table class="pulse-results-table">
-        <thead><tr><th>Department</th><th>Status</th><th>Next milestone</th><th>Confidence</th></tr></thead>
-        <tbody>${todayPulses.map(p=>`<tr><td style="font-weight:500">${p.dept}</td><td>${ragPill(p.rag)}</td><td>${p.milestone||'—'}${p.blocker?`<div class="blocker-txt">⚠ ${p.blocker}</div>`:''}</td><td style="font-family:var(--mono);font-size:12px">${p.confidence}%</td></tr>`).join('')}</tbody>
-      </table>
-    </div>`:'';
   el.innerHTML=`
     <div class="proj-pills">${pillsHtml}</div>
     <div class="section">
@@ -592,36 +742,39 @@ function renderPulse(){
           <div class="field"><label>Project</label><select id="p-proj">${projOpts}</select></div>
           <div class="field full"><label>Status</label>
             <div class="rag-row">
-              <div class="rag-opt" id="rg-G" onclick="setRag('G')"><div>🟢</div><div class="rag-label">Green — on track</div></div>
-              <div class="rag-opt" id="rg-A" onclick="setRag('A')"><div>🟡</div><div class="rag-label">Amber — at risk</div></div>
-              <div class="rag-opt" id="rg-R" onclick="setRag('R')"><div>🔴</div><div class="rag-label">Red — blocked</div></div>
+              <div class="rag-opt" id="rg-G" onclick="setRag('G')"><div>🟢</div><div class="rag-label">Green</div></div>
+              <div class="rag-opt" id="rg-A" onclick="setRag('A')"><div>🟡</div><div class="rag-label">Amber</div></div>
+              <div class="rag-opt" id="rg-R" onclick="setRag('R')"><div>🔴</div><div class="rag-label">Red</div></div>
             </div>
           </div>
-          <div class="field"><label>Next milestone &amp; date</label><input id="p-ms" placeholder="e.g. Production end — Jul 2"></div>
-          <div class="field"><label>Confidence on next date</label>
+          <div class="field"><label>Next milestone</label><input id="p-ms" placeholder="e.g. Production end — Jul 2"></div>
+          <div class="field"><label>Confidence</label>
             <div class="conf-row"><input type="range" min="0" max="100" value="80" id="p-conf" step="1" oninput="document.getElementById('conf-out').textContent=this.value+'%'"><span class="conf-val" id="conf-out">80%</span></div>
           </div>
-          <div class="field full"><label>Blockers / risks</label><textarea id="p-block" placeholder="Leave blank if none..."></textarea></div>
+          <div class="field full"><label>Blockers</label><textarea id="p-block" placeholder="Leave blank if none..."></textarea></div>
         </div>
       </div>
-      <div class="form-actions"><button class="btn" onclick="clearPulse()">Clear</button><button class="btn btn-red" onclick="submitPulse()">Submit pulse</button></div>
+      <div class="form-actions"><button class="btn" onclick="clearPulse()">Clear</button><button class="btn btn-red" onclick="submitPulse()">Submit</button></div>
     </div>
-    ${resultsHtml}`;
+    ${todayPulses.length?`<div class="section" style="margin-top:10px">
+      <div class="section-head"><div class="section-title">Today's updates — ${proj?proj.name:''}</div></div>
+      <table class="pulse-results-table">
+        <thead><tr><th>Dept</th><th>Status</th><th>Next milestone</th><th>Confidence</th></tr></thead>
+        <tbody>${todayPulses.map(p=>`<tr><td style="font-weight:500">${p.dept}</td><td>${ragPill(p.rag)}</td><td>${p.milestone||'—'}${p.blocker?`<div class="blocker-txt">⚠ ${p.blocker}</div>`:''}</td><td style="font-family:var(--mono);font-size:11px">${p.confidence}%</td></tr>`).join('')}</tbody>
+      </table></div>`:''}`;
   selRag='';
 }
 function selProjPulse(id){selectedProjId=id;renderPulse();}
-function setRag(r){selRag=r;['G','A','R'].forEach(x=>{const el=document.getElementById('rg-'+x);if(el)el.className='rag-opt'+(x===r?' sel-'+x.toLowerCase():'');});}
+function setRag(r){selRag=r;['G','A','R'].forEach(x=>{const e=document.getElementById('rg-'+x);if(e)e.className='rag-opt'+(x===r?' sel-'+x.toLowerCase():'');});}
 async function submitPulse(){
-  const dept=document.getElementById('p-dept').value;
-  const proj_id=document.getElementById('p-proj').value;
   if(!selRag){alert('Please select a status.');return;}
-  const{error}=await sb.from('pulses').insert({project_id:proj_id,dept,rag:selRag,milestone:document.getElementById('p-ms').value,blocker:document.getElementById('p-block').value,confidence:parseInt(document.getElementById('p-conf').value)});
+  const{error}=await sb.from('pulses').insert({project_id:document.getElementById('p-proj').value,dept:document.getElementById('p-dept').value,rag:selRag,milestone:document.getElementById('p-ms').value,blocker:document.getElementById('p-block').value,confidence:parseInt(document.getElementById('p-conf').value)});
   if(error){alert('Error: '+error.message);return;}
   showToast('Pulse submitted ✓');clearPulse();await loadAll();
 }
 function clearPulse(){
-  selRag='';['G','A','R'].forEach(x=>{const el=document.getElementById('rg-'+x);if(el)el.className='rag-opt';});
-  ['p-ms','p-block'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  selRag='';['G','A','R'].forEach(x=>{const e=document.getElementById('rg-'+x);if(e)e.className='rag-opt';});
+  ['p-ms','p-block'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
   const pc=document.getElementById('p-conf');if(pc)pc.value=80;
   const co=document.getElementById('conf-out');if(co)co.textContent='80%';
 }
@@ -629,17 +782,16 @@ function clearPulse(){
 // ── INTAKE ────────────────────────────────────────────────
 function renderIntake(){
   const el=document.getElementById('tab-intake');
-  const typeOpts=['Smart Control Drawer','Smart Locker','Smart Shelf','Vending Unit','Custom / Other'].map(t=>`<option>${t}</option>`).join('');
   el.innerHTML=`
     <div class="section">
-      <div class="section-head"><div class="section-title">New project intake</div><div class="section-meta">Populates all tabs automatically on submit</div></div>
+      <div class="section-head"><div class="section-title">New project intake</div><div class="section-meta">Populates all tabs on submit</div></div>
       <div class="intake-body">
         <div class="intake-grid">
           <div class="intake-section-lbl">Project information</div>
           <div class="field"><label>Project name *</label><input id="i-name" placeholder="e.g. Smart Control Drawer — Acme Corp"></div>
           <div class="field"><label>Sales order (SO) number *</label><input id="i-so" placeholder="e.g. SO-2026-0142" style="font-family:var(--mono)"></div>
           <div class="field"><label>Client *</label><input id="i-client" placeholder="Client name"></div>
-          <div class="field"><label>Product type</label><select id="i-type"><option value="">Select...</option>${typeOpts}</select></div>
+          <div class="field"><label>Product type</label><input id="i-type" placeholder="Type freely e.g. Smart Control Drawer, Custom Locker..."></div>
           <div class="field"><label>Quantity</label><input id="i-qty" type="number" min="1" placeholder="e.g. 2"></div>
           <div class="field"><label>Delivery location</label><input id="i-loc" placeholder="City, Province, Country"></div>
           <div class="intake-section-lbl">Key milestone dates</div>
@@ -657,7 +809,7 @@ function renderIntake(){
             <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#d97706"></div>Quality & testing</div>
               <div class="field"><label>Quality start *</label><input id="i-qs" type="date"></div>
               <div class="field"><label>Quality end *</label><input id="i-qe" type="date"></div>
-              <div class="field"><label>Vinyl / branding</label><input id="i-vinyl" type="date"></div>
+              <div class="field"><label>Vinyl / branding date</label><input id="i-vinyl" type="date"></div>
             </div>
             <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#16a34a"></div>UI & UAT</div>
               <div class="field"><label>UI start</label><input id="i-ui-s" type="date"></div>
@@ -676,7 +828,7 @@ function renderIntake(){
             </div>
           </div>
           <div class="intake-section-lbl">Notes</div>
-          <div class="field" style="grid-column:1/-1"><textarea id="i-notes" placeholder="Special requirements, site constraints, IT notes..." style="min-height:90px"></textarea></div>
+          <div class="field" style="grid-column:1/-1"><textarea id="i-notes" placeholder="Special requirements, IT notes, site constraints..." style="min-height:80px"></textarea></div>
         </div>
       </div>
       <div class="form-actions"><button class="btn" onclick="clearIntake()">Clear</button><button class="btn btn-red" onclick="saveIntake()">Add to hub</button></div>
@@ -700,43 +852,42 @@ async function saveIntake(){
     {id:'i-plan',key:'other',label:'Planogram sign-off'},{id:'i-train',key:'training',label:'Training'},
     {id:'i-inst',key:'installation',label:'Installation'},{id:'i-care',key:'other',label:'Customer care start'},
   ];
-  const msToInsert=msFields.map(f=>{const v=document.getElementById(f.id).value;return v?{project_id:proj.id,key:f.key,label:f.label,date:v}:null;}).filter(Boolean);
-  if(msToInsert.length)await sb.from('milestones').insert(msToInsert);
-  selectedProjId=proj.id;showToast('"'+name+'" added ✓');
-  await loadAll();
-  setTab('overview',document.querySelectorAll('.ntab')[0]);
+  const ins=msFields.map(f=>{const v=document.getElementById(f.id).value;return v?{project_id:proj.id,key:f.key,label:f.label,date:v}:null;}).filter(Boolean);
+  if(ins.length)await sb.from('milestones').insert(ins);
+  selectedProjId=proj.id;showToast('"'+name+'" added ✓');await loadAll();
+  setTab('glance',document.querySelectorAll('.ntab')[0]);
 }
-function clearIntake(){document.querySelectorAll('#tab-intake input,#tab-intake select,#tab-intake textarea').forEach(el=>{el.value='';});}
+function clearIntake(){document.querySelectorAll('#tab-intake input,#tab-intake select,#tab-intake textarea').forEach(e=>{e.value='';});}
 
 // ── EDIT ──────────────────────────────────────────────────
 function openEditProj(id){
   const proj=projects.find(p=>p.id===id);if(!proj)return;
   const projMs=milestones.filter(m=>m.project_id===id);
   const msRows=projMs.map(m=>`
-    <div style="display:grid;grid-template-columns:1fr 140px 32px;gap:8px;align-items:center;margin-bottom:8px">
-      <div style="font-size:13px;color:var(--black);font-weight:500">${m.label}</div>
-      <input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%">
-      <button onclick="deleteMs('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:18px;padding:0 4px">×</button>
+    <div style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px">
+      <div style="font-size:12px;font-weight:500">${m.label}</div>
+      <input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%">
+      <button onclick="deleteMs('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">×</button>
     </div>`).join('');
   document.getElementById('modal-root').innerHTML=`
   <div class="modal-backdrop" onclick="closeModal()">
     <div class="modal" style="width:540px" onclick="event.stopPropagation()">
       <div class="modal-head"><span class="modal-title">Edit project</span><button class="modal-close" onclick="closeModal()">×</button></div>
       <div class="modal-body">
-        <div class="form-grid" style="margin-bottom:16px">
+        <div class="form-grid" style="margin-bottom:14px">
           <div class="field"><label>Project name</label><input id="ep-name" value="${proj.name||''}"></div>
           <div class="field"><label>SO number</label><input id="ep-so" value="${proj.so_number||''}" style="font-family:var(--mono)"></div>
           <div class="field"><label>Client</label><input id="ep-client" value="${proj.client||''}"></div>
           <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
-          <div class="field full"><label>Notes</label><textarea id="ep-notes" style="min-height:70px">${proj.notes||''}</textarea></div>
+          <div class="field full"><label>Notes</label><textarea id="ep-notes" style="min-height:60px">${proj.notes||''}</textarea></div>
         </div>
-        <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px;padding-top:10px;border-top:1px solid var(--gray-100)">Milestone dates</div>
-        <div id="ms-edit-rows">${msRows}</div>
+        <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">Milestone dates</div>
+        ${msRows}
       </div>
       <div class="modal-actions">
-        <button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="deleteProj('${id}')">Delete project</button>
+        <button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="deleteProj('${id}')">Delete</button>
         <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveEditProj('${id}')">Save changes</button>
+        <button class="btn btn-primary" onclick="saveEditProj('${id}')">Save</button>
       </div>
     </div>
   </div>`;
@@ -745,17 +896,17 @@ async function saveEditProj(id){
   const{error}=await sb.from('projects').update({name:document.getElementById('ep-name').value.trim(),so_number:document.getElementById('ep-so').value.trim(),client:document.getElementById('ep-client').value.trim(),status:document.getElementById('ep-status').value,notes:document.getElementById('ep-notes').value,updated_at:new Date().toISOString()}).eq('id',id);
   if(error){alert('Error: '+error.message);return;}
   const projMs=milestones.filter(m=>m.project_id===id);
-  await Promise.all(projMs.map(m=>{const el=document.getElementById('ms-'+m.id);return el?sb.from('milestones').update({date:el.value}).eq('id',m.id):null;}).filter(Boolean));
-  closeModal();showToast('Project updated ✓');await loadAll();
+  await Promise.all(projMs.map(m=>{const e=document.getElementById('ms-'+m.id);return e?sb.from('milestones').update({date:e.value}).eq('id',m.id):null;}).filter(Boolean));
+  closeModal();showToast('Saved ✓');await loadAll();
 }
 function openEditMs(id,label,date){
   document.getElementById('modal-root').innerHTML=`
   <div class="modal-backdrop" onclick="closeModal()">
-    <div class="modal" style="width:360px" onclick="event.stopPropagation()">
+    <div class="modal" style="width:340px" onclick="event.stopPropagation()">
       <div class="modal-head"><span class="modal-title">Edit milestone</span><button class="modal-close" onclick="closeModal()">×</button></div>
       <div class="modal-body">
-        <div class="field" style="margin-bottom:12px"><label>Label</label><input value="${label}" id="em-label-edit" style="font-family:var(--font);font-size:13px;padding:8px 11px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>
-        <div class="field"><label>Date</label><input type="date" id="em-date-edit" value="${date||''}" style="font-family:var(--font);font-size:13px;padding:8px 11px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>
+        <div class="field" style="margin-bottom:10px"><label>Label</label><input value="${label}" id="em-lbl" style="font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>
+        <div class="field"><label>Date</label><input type="date" id="em-dt" value="${date||''}" style="font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>
       </div>
       <div class="modal-actions">
         <button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="deleteMs('${id}')">Remove</button>
@@ -766,21 +917,20 @@ function openEditMs(id,label,date){
   </div>`;
 }
 async function saveEditMs(id){
-  const{error}=await sb.from('milestones').update({label:document.getElementById('em-label-edit').value.trim(),date:document.getElementById('em-date-edit').value}).eq('id',id);
+  const{error}=await sb.from('milestones').update({label:document.getElementById('em-lbl').value.trim(),date:document.getElementById('em-dt').value}).eq('id',id);
   if(error){alert('Error: '+error.message);return;}
   closeModal();showToast('Date updated ✓');await loadAll();
 }
 async function deleteMs(id){if(!confirm('Remove this milestone?'))return;await sb.from('milestones').delete().eq('id',id);closeModal();showToast('Removed');await loadAll();}
-async function deleteProj(id){if(!confirm('Delete this entire project? This cannot be undone.'))return;await sb.from('milestones').delete().eq('project_id',id);await sb.from('projects').delete().eq('id',id);selectedProjId=null;closeModal();showToast('Project deleted');await loadAll();}
+async function deleteProj(id){if(!confirm('Delete this project? Cannot be undone.'))return;await sb.from('milestones').delete().eq('project_id',id);await sb.from('projects').delete().eq('id',id);selectedProjId=null;closeModal();showToast('Deleted');await loadAll();}
 
-// ── ADD EVENT MODAL ───────────────────────────────────────
 function openAddEvModal(){
   const projOpts=projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
   const typeOpts=Object.entries(TYPE_LBL).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
   document.getElementById('modal-root').innerHTML=`
   <div class="modal-backdrop" onclick="closeModal()">
     <div class="modal" onclick="event.stopPropagation()">
-      <div class="modal-head"><span class="modal-title">Add milestone / event</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div class="modal-head"><span class="modal-title">Add milestone</span><button class="modal-close" onclick="closeModal()">×</button></div>
       <div class="modal-body">
         <div class="form-grid">
           <div class="field"><label>Project</label><select id="em-proj">${projOpts}</select></div>
@@ -794,61 +944,38 @@ function openAddEvModal(){
   </div>`;
 }
 async function saveEv(){
-  const proj_id=document.getElementById('em-proj').value;
   const label=document.getElementById('em-label').value.trim();
   const date=document.getElementById('em-date').value;
-  if(!label||!date){alert('Please fill in all fields.');return;}
-  const{error}=await sb.from('milestones').insert({project_id:proj_id,key:document.getElementById('em-type').value,label,date});
+  if(!label||!date){alert('Fill in all fields.');return;}
+  const{error}=await sb.from('milestones').insert({project_id:document.getElementById('em-proj').value,key:document.getElementById('em-type').value,label,date});
   if(error){alert('Error: '+error.message);return;}
-  closeModal();showToast('Event added ✓');await loadAll();
+  closeModal();showToast('Added ✓');await loadAll();
 }
 
 // ── EXCEL EXPORT ──────────────────────────────────────────
 function exportToExcel(){
   const wb=XLSX.utils.book_new();
-
-  // Sheet 1: All projects + milestones
-  const projRows=[['Project','SO Number','Client','Status','Milestone','Type','Date','Days from today']];
-  projects.forEach(p=>{
-    const pMs=milestones.filter(m=>m.project_id===p.id);
-    if(!pMs.length){projRows.push([p.name,p.so_number,p.client,p.status,'','','','']);}
-    else{pMs.forEach((m,i)=>{projRows.push([i===0?p.name:'',i===0?p.so_number:'',i===0?p.client:'',i===0?p.status:'',m.label,TYPE_LBL[m.key]||m.key,m.date,m.date?daysDiff(m.date):'']);});}
-  });
-  const ws1=XLSX.utils.aoa_to_sheet(projRows);
-  ws1['!cols']=[{wch:30},{wch:16},{wch:20},{wch:12},{wch:28},{wch:18},{wch:14},{wch:16}];
+  // Projects & Milestones
+  const r1=[['Project','SO Number','Client','Product Type','Status','Milestone','Type','Date','Days from today']];
+  projects.forEach(p=>{const pMs=milestones.filter(m=>m.project_id===p.id);if(!pMs.length){r1.push([p.name,p.so_number,p.client,p.product_type,p.status,'','','','']);}else{pMs.forEach((m,i)=>r1.push([i===0?p.name:'',i===0?p.so_number:'',i===0?p.client:'',i===0?p.product_type:'',i===0?p.status:'',m.label,TYPE_LBL[m.key]||m.key,m.date,m.date?daysDiff(m.date):'']));}}); 
+  const ws1=XLSX.utils.aoa_to_sheet(r1);ws1['!cols']=[{wch:28},{wch:14},{wch:18},{wch:18},{wch:10},{wch:26},{wch:16},{wch:12},{wch:14}];
   XLSX.utils.book_append_sheet(wb,ws1,'Projects & Milestones');
-
-  // Sheet 2: Vinyl schedule
-  const vinylRows=[['Priority','Project','SO Number','Client','Vinyl Date','Status']];
-  vinylSchedule.forEach((item,i)=>vinylRows.push([i+1,item.name,item.so,item.client,item.date||'TBD',item.status]));
-  const ws2=XLSX.utils.aoa_to_sheet(vinylRows);
-  ws2['!cols']=[{wch:8},{wch:30},{wch:16},{wch:20},{wch:14},{wch:14}];
+  // Vinyl
+  const r2=[['Priority','SO Number','Customer','Project Name','Decal/Partial/Full Vinyl','Vinyl Date','Ship Date','Project Manager','Form Factor','Status']];
+  vinylSchedule.forEach((item,i)=>r2.push([i+1,item.so,item.client,item.name,item.vinylType,item.date||'TBD',item.shipDate||'TBD',item.pm,item.formFactor,item.status]));
+  const ws2=XLSX.utils.aoa_to_sheet(r2);ws2['!cols']=[{wch:6},{wch:14},{wch:18},{wch:26},{wch:18},{wch:12},{wch:12},{wch:16},{wch:14},{wch:12}];
   XLSX.utils.book_append_sheet(wb,ws2,'Vinyl Schedule');
-
-  // Sheet 3: Planogram schedule
-  const planRows=[['Priority','Project','SO Number','Client','Planogram Date','Status']];
-  planogramSchedule.forEach((item,i)=>planRows.push([i+1,item.name,item.so,item.client,item.date||'TBD',item.status]));
-  const ws3=XLSX.utils.aoa_to_sheet(planRows);
-  ws3['!cols']=[{wch:8},{wch:30},{wch:16},{wch:20},{wch:14},{wch:14}];
+  // Planogram
+  const r3=[['Priority','SO Number','Customer','Project Name','Machine Type','Planogram Date','Status']];
+  planogramSchedule.forEach((item,i)=>r3.push([i+1,item.so,item.client,item.name,item.machineType,item.date||'TBD',item.status]));
+  const ws3=XLSX.utils.aoa_to_sheet(r3);ws3['!cols']=[{wch:6},{wch:14},{wch:18},{wch:26},{wch:16},{wch:14},{wch:12}];
   XLSX.utils.book_append_sheet(wb,ws3,'Planogram Schedule');
-
-  // Sheet 4: This week
-  const we=addD(weekStart,6);
-  const weekRows=[['Day','Date','Project','Milestone','Type']];
-  const allMs=milestones.map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
-  [0,1,2,3,4].forEach(i=>{
-    const d=addD(weekStart,i);
-    const dayName=['Monday','Tuesday','Wednesday','Thursday','Friday'][i];
-    const evs=allMs.filter(m=>m.date&&sameDay(new Date(m.date+'T00:00:00'),d));
-    if(evs.length)evs.forEach(e=>weekRows.push([dayName,isoD(d),e.projectName,e.label,TYPE_LBL[e.key]||e.key]));
-    else weekRows.push([dayName,isoD(d),'','','']);
-  });
-  const ws4=XLSX.utils.aoa_to_sheet(weekRows);
-  ws4['!cols']=[{wch:12},{wch:12},{wch:28},{wch:28},{wch:18}];
-  XLSX.utils.book_append_sheet(wb,ws4,'This Week');
-
-  const fname='Signifi_Ops_'+new Date().toISOString().split('T')[0]+'.xlsx';
-  XLSX.writeFile(wb,fname);
+  // Production dept
+  const r4=[['Project','SO Number','Client','Prod Start','Prod End','Duration (days)','Status']];
+  projects.forEach(p=>{const sd=getMsDate(p.id,'production-start');const ed=getMsDate(p.id,'production-end');const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000):'';const st=stageStatus(sd,ed);r4.push([p.name,p.so_number,p.client,sd||'',ed||'',dur,st.label]);});
+  const ws4=XLSX.utils.aoa_to_sheet(r4);ws4['!cols']=[{wch:28},{wch:14},{wch:18},{wch:12},{wch:12},{wch:14},{wch:12}];
+  XLSX.utils.book_append_sheet(wb,ws4,'Production');
+  XLSX.writeFile(wb,'Signifi_Ops_'+new Date().toISOString().split('T')[0]+'.xlsx');
   showToast('Excel downloaded ✓');
 }
 
@@ -856,3 +983,4 @@ loadAll();
 </script>
 </body>
 </html>
+
