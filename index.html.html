@@ -501,59 +501,75 @@ function shiftW(n){weekStart=addD(weekStart,n*7);renderWeek();}
 function goToday(){weekStart=monday(today());renderWeek();}
 
 // ── DEPT VIEWS ────────────────────────────────────────────
+function buildGantt(startKeys,endKeys,segments,title,legendItems){
+  // startKeys / endKeys = arrays of milestone keys to find date range from
+  const starts=milestones.filter(m=>startKeys.includes(m.key)&&m.date).map(m=>new Date(m.date+'T00:00:00'));
+  const ends=milestones.filter(m=>endKeys.includes(m.key)&&m.date).map(m=>new Date(m.date+'T00:00:00'));
+  if(!starts.length||!ends.length)return'';
+  let rS=monday(new Date(Math.min(...starts)));
+  let rE=addD(new Date(Math.max(...ends)),5);
+  const days=[];let cur=new Date(rS);
+  while(cur<=rE){const dow=cur.getDay();if(dow!==0&&dow!==6)days.push(new Date(cur));cur=addD(cur,1);}
+  const t=today();
+  const hdr=days.map(d=>`<th class="${sameDay(d,t)?'gantt-today-col':''}" style="min-width:28px">${d.getDate()===1||days.indexOf(d)===0?'<span style="font-size:8px;display:block">'+d.toLocaleDateString('en-US',{month:'short'})+'</span>'+d.getDate():d.getDate()}</th>`).join('');
+  const gRows=projects.map(p=>{
+    const pMs=milestones.filter(m=>m.project_id===p.id);
+    const getD=k=>pMs.find(m=>m.key===k)?.date;
+    const segs=segments(getD).filter(x=>x.s);
+    const cells=days.map(d=>{
+      const isT=sameDay(d,t);
+      let fill='';
+      segs.forEach(sg=>{
+        const sd=new Date(sg.s+'T00:00:00');const ed=sg.e?new Date(sg.e+'T00:00:00'):sd;
+        if(d>=sd&&d<=ed)fill=`<div class="gantt-fill" style="background:${sg.bg};opacity:0.85" title="${sg.lbl}"></div>`;
+      });
+      const tl=isT?'<div style="position:absolute;left:50%;top:0;width:2px;height:100%;background:rgba(200,16,46,0.4)"></div>':'';
+      return `<td class="gantt-cell ${isT?'gantt-today-col':''}" style="position:relative">${tl}${fill}</td>`;
+    }).join('');
+    return `<tr><td class="proj-name">${p.name}<br><span style="font-family:var(--mono);font-size:9px;color:var(--gray-500)">${p.so_number||''}</span></td>${cells}</tr>`;
+  }).join('');
+  const legendHtml=legendItems.map(l=>`<div class="leg"><div class="leg-dot" style="background:${l.color}"></div>${l.label}</div>`).join('');
+  return `<div class="section" style="margin-bottom:10px">
+    <div class="section-head"><div class="section-title">${title} — Gantt</div><div class="legend-row" style="margin:0;gap:8px">${legendHtml}</div></div>
+    <div class="prod-gantt"><table class="gantt-table"><thead><tr><th class="proj-col">Project</th>${hdr}</tr></thead><tbody>${gRows}</tbody></table></div>
+  </div>`;
+}
+
 function renderDeptView(dept){
   const el=document.getElementById('tab-'+dept);
   const cfg={
     production:{title:'Production schedule',startKey:'production-start',endKey:'production-end',color:'#7c3aed',cols:['Project','SO Number','Client','Prod start','Prod end','Duration','Status']},
-    quality:{title:'Quality / QA schedule',startKey:'quality-start',endKey:'quality-end',color:'#d97706',cols:['Project','SO Number','Client','QA start','QA end','Vinyl date','UAT date','Status']},
+    quality:{title:'Quality / QA schedule',startKey:'quality-start',endKey:'quality-end',color:'#d97706',cols:['Project','SO Number','Client','QA start','QA end','Duration','Vinyl date','UAT date','Status']},
     shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO Number','Client','Pack & ship','Delivery','Status']},
     installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO Number','Client','Training date','Installation date','Status']},
   };
   const c=cfg[dept];
 
-  // Gantt (production only)
+  // Gantt for production AND quality
   let ganttHtml='';
   if(dept==='production'){
-    const prodStarts=milestones.filter(m=>m.key==='production-start'&&m.date).map(m=>new Date(m.date+'T00:00:00'));
-    const prodEnds=milestones.filter(m=>(m.key==='production-end'||m.key==='quality-end')&&m.date).map(m=>new Date(m.date+'T00:00:00'));
-    if(prodStarts.length&&prodEnds.length){
-      let rS=monday(new Date(Math.min(...prodStarts)));
-      let rE=addD(new Date(Math.max(...prodEnds)),5);
-      const days=[];let cur=new Date(rS);
-      while(cur<=rE){const dow=cur.getDay();if(dow!==0&&dow!==6)days.push(new Date(cur));cur=addD(cur,1);}
-      const t=today();
-      const hdr=days.map(d=>`<th class="${sameDay(d,t)?'gantt-today-col':''}" style="min-width:28px">${d.getDate()===1||days.indexOf(d)===0?'<span style="font-size:8px;display:block">'+d.toLocaleDateString('en-US',{month:'short'})+'</span>'+d.getDate():d.getDate()}</th>`).join('');
-      const gRows=projects.map(p=>{
-        const pMs=milestones.filter(m=>m.project_id===p.id);
-        const getD=k=>pMs.find(m=>m.key===k)?.date;
-        const segs=[
-          {s:getD('production-start'),e:getD('production-end'),bg:'#7c3aed',lbl:'Build'},
-          {s:getD('quality-start'),e:getD('quality-end'),bg:'#d97706',lbl:'QA'},
-          {s:getD('shipping'),e:getD('shipping'),bg:'#059669',lbl:'Ship'},
-          {s:getD('installation'),e:getD('installation'),bg:'#db2777',lbl:'Install'},
-        ].filter(x=>x.s);
-        const cells=days.map(d=>{
-          const isT=sameDay(d,t);
-          let fill='';
-          segs.forEach(sg=>{
-            const sd=new Date(sg.s+'T00:00:00');const ed=sg.e?new Date(sg.e+'T00:00:00'):sd;
-            if(d>=sd&&d<=ed)fill=`<div class="gantt-fill" style="background:${sg.bg};opacity:0.85" title="${sg.lbl}"></div>`;
-          });
-          const tl=isT?'<div style="position:absolute;left:50%;top:0;width:2px;height:100%;background:rgba(200,16,46,0.4)"></div>':'';
-          return `<td class="gantt-cell ${isT?'gantt-today-col':''}" style="position:relative">${tl}${fill}</td>`;
-        }).join('');
-        return `<tr><td class="proj-name">${p.name}<br><span style="font-family:var(--mono);font-size:9px;color:var(--gray-500)">${p.so_number||''}</span></td>${cells}</tr>`;
-      }).join('');
-      ganttHtml=`<div class="section" style="margin-bottom:10px">
-        <div class="section-head"><div class="section-title">Gantt view</div><div class="legend-row" style="margin:0;gap:8px">
-          <div class="leg"><div class="leg-dot" style="background:#7c3aed"></div>Build</div>
-          <div class="leg"><div class="leg-dot" style="background:#d97706"></div>QA</div>
-          <div class="leg"><div class="leg-dot" style="background:#059669"></div>Ship</div>
-          <div class="leg"><div class="leg-dot" style="background:#db2777"></div>Install</div>
-        </div></div>
-        <div class="prod-gantt"><table class="gantt-table"><thead><tr><th class="proj-col">Project</th>${hdr}</tr></thead><tbody>${gRows}</tbody></table></div>
-      </div>`;
-    }
+    ganttHtml=buildGantt(
+      ['production-start'],['production-end','quality-end'],
+      getD=>[
+        {s:getD('production-start'),e:getD('production-end'),bg:'#7c3aed',lbl:'Build'},
+        {s:getD('quality-start'),e:getD('quality-end'),bg:'#d97706',lbl:'QA'},
+        {s:getD('shipping'),e:getD('shipping'),bg:'#059669',lbl:'Ship'},
+        {s:getD('installation'),e:getD('installation'),bg:'#db2777',lbl:'Install'},
+      ],
+      'Production',
+      [{color:'#7c3aed',label:'Build'},{color:'#d97706',label:'QA'},{color:'#059669',label:'Ship'},{color:'#db2777',label:'Install'}]
+    );
+  } else if(dept==='quality'){
+    ganttHtml=buildGantt(
+      ['quality-start'],['quality-end','uat'],
+      getD=>[
+        {s:getD('quality-start'),e:getD('quality-end'),bg:'#d97706',lbl:'QA'},
+        {s:getD('vinyl'),e:getD('vinyl'),bg:'#2563eb',lbl:'Vinyl'},
+        {s:getD('uat'),e:getD('uat'),bg:'#16a34a',lbl:'UAT'},
+      ],
+      'Quality / QA',
+      [{color:'#d97706',label:'QA'},{color:'#2563eb',label:'Vinyl'},{color:'#16a34a',label:'UAT'}]
+    );
   }
 
   const rows=projects.map(p=>{
@@ -565,7 +581,8 @@ function renderDeptView(dept){
       const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';
       extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(ed)}</td><td class="date-cell">${dur}</td>`;
     } else if(dept==='quality'){
-      extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(ed)}</td><td class="date-cell">${fmt(getMsDate(p.id,'vinyl'))}</td><td class="date-cell">${fmt(getMsDate(p.id,'uat'))}</td>`;
+      const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';
+      extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(ed)}</td><td class="date-cell">${dur}</td><td class="date-cell">${fmt(getMsDate(p.id,'vinyl'))}</td><td class="date-cell">${fmt(getMsDate(p.id,'uat'))}</td>`;
     } else if(dept==='shipping'){
       extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(getMsDate(p.id,'delivery'))}</td>`;
     } else if(dept==='installation'){
