@@ -255,21 +255,19 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
       <div class="login-logo-mark"><div class="inner"></div></div>
       <span style="font-size:14px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase">Signifi Solutions</span>
     </div>
-    <div id="login-form-area">
-      <div class="login-title">Ops Hub</div>
-      <div class="login-sub">Enter your Signifi email to receive a sign-in link.</div>
-      <div class="login-field">
-        <label>Email address</label>
-        <input type="email" id="login-email" placeholder="you@signifi.com" onkeydown="if(event.key==='Enter')sendMagicLink()">
-      </div>
-      <button class="btn-login" onclick="sendMagicLink()" id="login-btn">Send sign-in link</button>
-      <div class="login-note">No password needed — we'll email you a one-click link.</div>
+    <div class="login-title">Ops Hub</div>
+    <div class="login-sub">Enter your name and the team passcode to access.</div>
+    <div class="login-field">
+      <label>Your name</label>
+      <input type="text" id="login-name" placeholder="e.g. Taylor Christie" onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()">
     </div>
-    <div id="login-sent-area" style="display:none" class="login-sent">
-      <div class="login-sent-icon">📬</div>
-      <div class="login-sent-title">Check your email</div>
-      <div class="login-sent-sub">We sent a sign-in link to <strong id="login-sent-email"></strong>. Click the link to access the hub.</div>
+    <div class="login-field">
+      <label>Team passcode</label>
+      <input type="password" id="login-pass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
     </div>
+    <div id="login-error" style="display:none;font-size:12px;color:var(--red);margin-bottom:10px;text-align:center">Incorrect passcode — try again.</div>
+    <button class="btn-login" onclick="doLogin()">Sign in</button>
+    <div class="login-note">Contact your PM for the team passcode.</div>
   </div>
 </div>
 
@@ -401,8 +399,8 @@ function healthRing(pid){
 async function logActivity(action,entityType,entityName,projectId,oldVal,newVal){
   try{
     await sb.from('activity_log').insert({
-      user_email:currentUser?.email||'unknown',
-      user_name:currentUserName||currentUser?.email?.split('@')[0]||'Unknown',
+      user_email:currentUserName||'unknown',
+      user_name:currentUserName||'Unknown',
       action,entity_type:entityType,entity_name:entityName,
       old_value:oldVal||null,new_value:newVal||null,
       project_id:projectId||null
@@ -410,30 +408,31 @@ async function logActivity(action,entityType,entityName,projectId,oldVal,newVal)
   }catch(e){console.warn('Log error',e);}
 }
 
-// ── AUTH ───────────────────────────────────────────────────
-async function sendMagicLink(){
-  const email=document.getElementById('login-email').value.trim();
-  if(!email){alert('Please enter your email.');return;}
-  const btn=document.getElementById('login-btn');
-  btn.textContent='Sending...';btn.disabled=true;
-  const{error}=await sb.auth.signInWithOtp({email,options:{emailRedirectTo:window.location.href}});
-  if(error){btn.textContent='Send sign-in link';btn.disabled=false;alert('Error: '+error.message);return;}
-  document.getElementById('login-sent-email').textContent=email;
-  document.getElementById('login-form-area').style.display='none';
-  document.getElementById('login-sent-area').style.display='block';
+// ── AUTH — PASSCODE ────────────────────────────────────────
+// Change TEAM_PASSCODE to whatever you want your team to use
+const TEAM_PASSCODE='signifi2026';
+
+function doLogin(){
+  const name=document.getElementById('login-name').value.trim();
+  const pass=document.getElementById('login-pass').value;
+  const errEl=document.getElementById('login-error');
+  if(!name){document.getElementById('login-name').focus();return;}
+  if(pass!==TEAM_PASSCODE){errEl.style.display='block';document.getElementById('login-pass').value='';document.getElementById('login-pass').focus();return;}
+  errEl.style.display='none';
+  // Store session in sessionStorage so refresh keeps them logged in
+  sessionStorage.setItem('signifi_user',name);
+  initUser(name);
 }
-async function signOut(){
-  await sb.auth.signOut();
+function signOut(){
+  sessionStorage.removeItem('signifi_user');
   document.getElementById('main-app').style.display='none';
   document.getElementById('login-screen').style.display='flex';
-  document.getElementById('login-form-area').style.display='block';
-  document.getElementById('login-sent-area').style.display='none';
-  document.getElementById('login-email').value='';
+  document.getElementById('login-name').value='';
+  document.getElementById('login-pass').value='';
   currentUser=null;currentUserName='';
 }
-function initUser(user){
-  currentUser=user;
-  const name=user.user_metadata?.full_name||user.email?.split('@')[0]||'User';
+function initUser(name){
+  currentUser={name};
   currentUserName=name;
   document.getElementById('user-avatar').textContent=name.charAt(0).toUpperCase();
   document.getElementById('user-name-display').textContent=name;
@@ -441,17 +440,9 @@ function initUser(user){
   document.getElementById('main-app').style.display='block';
   loadAll();
 }
-
-sb.auth.onAuthStateChange((event,session)=>{
-  if(session?.user){initUser(session.user);}
-  else if(event==='SIGNED_OUT'){
-    document.getElementById('main-app').style.display='none';
-    document.getElementById('login-screen').style.display='flex';
-  }
-});
-sb.auth.getSession().then(({data:{session}})=>{
-  if(session?.user)initUser(session.user);
-});
+// Check if already logged in from this session
+const _savedUser=sessionStorage.getItem('signifi_user');
+if(_savedUser)initUser(_savedUser);
 
 // ── NAV DROPDOWN ───────────────────────────────────────────
 function toggleNav(e){e.stopPropagation();document.getElementById('nav-dropdown').classList.toggle('open');}
