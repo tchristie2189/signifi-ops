@@ -236,6 +236,24 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .empty-state{text-align:center;padding:2.5rem;color:var(--gray-500);font-size:12px;}
 .actions-row{display:flex;align-items:center;gap:7px;padding:12px 16px;border-top:1px solid var(--gray-100);}
 /* ── PRINT ── */
+.glance-notes{padding:8px 14px;border-top:1px solid var(--gray-100);background:var(--gray-50);}
+.glance-notes-preview{font-size:11px;color:var(--gray-500);cursor:pointer;display:flex;align-items:center;gap:5px;user-select:none;}
+.glance-notes-preview:hover{color:var(--gray-700);}
+.glance-notes-body{font-size:11px;color:var(--gray-700);margin-top:6px;white-space:pre-wrap;line-height:1.5;display:none;}
+.glance-notes-body.open{display:block;}
+.archived-banner{background:var(--gray-100);border:1px solid var(--gray-200);border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--gray-500);}
+.filter-toggle{display:flex;gap:4px;margin-bottom:1rem;}
+.ftab{font-size:11px;padding:4px 12px;border-radius:20px;border:1px solid var(--gray-300);cursor:pointer;color:var(--gray-700);background:var(--white);font-family:var(--font);}
+.ftab.active{background:var(--black);color:white;border-color:var(--black);}
+.template-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;padding:14px 16px;}
+.template-card{border:1px solid var(--gray-200);border-radius:var(--radius-lg);padding:14px;cursor:pointer;transition:all 0.15s;background:var(--white);}
+.template-card:hover{border-color:var(--black);box-shadow:0 2px 8px rgba(0,0,0,0.06);}
+.template-card-name{font-size:13px;font-weight:600;color:var(--black);margin-bottom:4px;}
+.template-card-desc{font-size:11px;color:var(--gray-500);line-height:1.4;}
+.template-card-stages{display:flex;gap:4px;margin-top:8px;flex-wrap:wrap;}
+.template-stage-pill{font-size:10px;padding:2px 7px;border-radius:10px;background:var(--gray-100);color:var(--gray-600);}
+.template-active{border-color:var(--blue);background:var(--blue-bg);}
+.template-active .template-card-name{color:var(--blue);}
 @media print{
   .page-header,.btn,.btn-primary,.btn-red,.btn-add,.btn-export,.no-print{display:none!important;}
   body{background:white;}
@@ -300,6 +318,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
           <div class="nav-group-label">Tools</div>
           <button class="nav-item" id="ni-briefing" onclick="setTab('briefing')">📋 Daily briefing</button>
           <button class="nav-item" id="ni-log" onclick="setTab('log')">🕓 Activity log</button>
+          <button class="nav-item" id="ni-templates" onclick="setTab('templates')">📐 Templates</button>
           <button class="nav-item" id="ni-intake" onclick="setTab('intake')">➕ New project</button>
         </div>
       </div>
@@ -326,6 +345,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
     <div id="tab-planogram" style="display:none"></div>
     <div id="tab-briefing" style="display:none"></div>
     <div id="tab-log" style="display:none"></div>
+    <div id="tab-templates" style="display:none"></div>
     <div id="tab-intake" style="display:none"></div>
   </div>
 </div>
@@ -454,12 +474,12 @@ function setTab(tab){
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','overview','week','production','quality','shipping','installation','vinyl','planogram','briefing','log','intake'];
+  const ALL=['glance','overview','week','production','quality','shipping','installation','vinyl','planogram','briefing','log','templates','intake'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
 function renderTab(){
-  const m={glance:renderGlance,overview:renderOverview,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,log:renderLog,intake:renderIntake};
+  const m={glance:renderGlance,overview:renderOverview,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,log:renderLog,templates:renderTemplates,intake:renderIntake};
   if(m[currentTab])m[currentTab]();
 }
 
@@ -488,14 +508,18 @@ async function loadAll(){
 }
 
 // ── AT A GLANCE ────────────────────────────────────────────
+let glanceFilter='active'; // 'active' or 'archived'
+
 function renderGlance(){
   const el=document.getElementById('tab-glance');
-  if(!projects.length){el.innerHTML='<div class="empty-state">No projects yet.</div>';return;}
+  const visibleProjects=projects.filter(p=>glanceFilter==='archived'?p.status==='complete':p.status!=='complete');
+  const allActive=projects.filter(p=>p.status!=='complete');
+  const allArchived=projects.filter(p=>p.status==='complete');
   const overdue=milestones.filter(m=>m.date&&daysDiff(m.date)<0).length;
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
-  const active=projects.filter(p=>p.status==='active').length;
-  const inProd=projects.filter(p=>{const s=getMsDate(p.id,'production-start');const e=getMsDate(p.id,'production-end');if(!s||!e)return false;const t=today();return t>=new Date(s+'T00:00:00')&&t<=new Date(e+'T00:00:00');}).length;
-  const inQa=projects.filter(p=>{const s=getMsDate(p.id,'quality-start');const e=getMsDate(p.id,'quality-end');if(!s||!e)return false;const t=today();return t>=new Date(s+'T00:00:00')&&t<=new Date(e+'T00:00:00');}).length;
+  const active=allActive.length;
+  const inProd=allActive.filter(p=>{const s=getMsDate(p.id,'production-start');const e=getMsDate(p.id,'production-end');if(!s||!e)return false;const t=today();return t>=new Date(s+'T00:00:00')&&t<=new Date(e+'T00:00:00');}).length;
+  const inQa=allActive.filter(p=>{const s=getMsDate(p.id,'quality-start');const e=getMsDate(p.id,'quality-end');if(!s||!e)return false;const t=today();return t>=new Date(s+'T00:00:00')&&t<=new Date(e+'T00:00:00');}).length;
   const STAGES=[
     {label:'Readiness',startKey:'po-release',endKey:'arrival',color:'#6b6b6b'},
     {label:'Production',startKey:'production-start',endKey:'production-end',color:'#7c3aed'},
@@ -505,15 +529,13 @@ function renderGlance(){
     {label:'Delivery',startKey:'delivery',endKey:'delivery',color:'#0891b2'},
     {label:'Installation',startKey:'installation',endKey:'installation',color:'#db2777'},
   ];
-  const cards=projects.map(p=>{
+  const cards=visibleProjects.map(p=>{
     const h=calcHealth(p.id);
-    // Use production-start as the overall project start for progress calculation
     const prodStart=getMsDate(p.id,'production-start');
     const installEnd=getMsDate(p.id,'installation');
     const overallStart=prodStart?new Date(prodStart+'T00:00:00'):null;
     const overallEnd=installEnd?new Date(installEnd+'T00:00:00'):null;
     const t=today();
-    // Overall project progress bar (thin line across top of card)
     let overallPct=0;
     if(overallStart&&overallEnd&&t>=overallStart){
       overallPct=Math.min(100,Math.round((t-overallStart)/(overallEnd-overallStart)*100));
@@ -521,29 +543,42 @@ function renderGlance(){
     const stagesHtml=STAGES.map(stage=>{
       const sd=getMsDate(p.id,stage.startKey);const ed=getMsDate(p.id,stage.endKey);
       const st=stageStatus(sd,ed);
-      // Per-stage bar: fill based on where today sits within this stage
       let pct=0;
-      if(sd){
-        const s=new Date(sd+'T00:00:00');
-        const e=ed?new Date(ed+'T00:00:00'):s;
-        if(t>e)pct=100;
-        else if(t>=s){const total=(e-s)||86400000;pct=Math.min(100,Math.round((t-s)/total*100));}
-      }
+      if(sd){const s=new Date(sd+'T00:00:00');const e=ed?new Date(ed+'T00:00:00'):s;if(t>e)pct=100;else if(t>=s){const total=(e-s)||86400000;pct=Math.min(100,Math.round((t-s)/total*100));}}
       const barCls=st.label==='Done'?'bar-done':st.chip==='chip-active'?'bar-active':'bar-future';
       return `<div class="cycle-stage"><div class="cycle-stage-name">${stage.label}</div><div class="cycle-bar-wrap"><div class="cycle-bar ${barCls}" style="width:${pct}%;background:${pct>0?stage.color:'var(--gray-200)'}"></div></div><div style="text-align:right"><span class="stage-chip ${st.chip}">${st.label}</span></div></div>`;
     }).join('');
-    return `<div class="glance-card">
+    // Notes section
+    const notes=(p.notes||'').trim();
+    const notesHtml=notes?`<div class="glance-notes">
+      <div class="glance-notes-preview" onclick="toggleNotes('notes-${p.id}')">
+        <span>📝</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${notes.split('\n')[0].slice(0,60)}${notes.length>60?'…':''}</span>
+        <span style="font-size:10px;color:var(--gray-300)">▾</span>
+      </div>
+      <div class="glance-notes-body" id="notes-${p.id}">${notes}</div>
+    </div>`:'';
+    // Archive/complete button
+    const isComplete=p.status==='complete';
+    return `<div class="glance-card" style="${isComplete?'opacity:0.75':''}">
       <div class="glance-card-head">
         <div style="flex:1;min-width:0">
-          <div class="glance-proj-name">${p.name}</div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <div class="glance-proj-name">${p.name}</div>
+            ${isComplete?'<span style="font-size:10px;padding:1px 7px;border-radius:10px;background:var(--gray-100);color:var(--gray-500);font-weight:600">Complete</span>':''}
+          </div>
           <div class="glance-proj-meta"><span class="glance-so">${p.so_number||'No SO'}</span><span class="glance-client">${p.client||''}</span></div>
-          ${overallStart&&overallEnd?`<div style="margin-top:7px"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Overall progress (from production)</span><span style="font-size:9px;color:var(--gray-500)">${overallPct}%</span></div><div style="background:var(--gray-100);border-radius:3px;height:4px"><div style="height:4px;border-radius:3px;background:linear-gradient(90deg,#7c3aed,#e22f4a);width:${overallPct}%"></div></div></div>`:''}
+          ${overallStart&&overallEnd?`<div style="margin-top:7px"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Overall progress</span><span style="font-size:9px;color:var(--gray-500)">${overallPct}%</span></div><div style="background:var(--gray-100);border-radius:3px;height:4px"><div style="height:4px;border-radius:3px;background:linear-gradient(90deg,#7c3aed,#e22f4a);width:${overallPct}%"></div></div></div>`:''}
         </div>
-        ${h?healthRing(p.id):''}
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+          ${h?healthRing(p.id):''}
+          <button onclick="toggleArchive('${p.id}','${p.status}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)" title="${isComplete?'Restore to active':'Mark complete'}">${isComplete?'↩ Restore':'✓ Complete'}</button>
+        </div>
       </div>
       <div class="cycle-track"><div class="cycle-stages">${stagesHtml}</div></div>
+      ${notesHtml}
     </div>`;
   }).join('');
+
   el.innerHTML=`
     <div class="metrics-row">
       <div class="metric"><div class="metric-label">Active projects</div><div class="metric-val">${active}</div><div class="metric-sub">in hub</div></div>
@@ -553,10 +588,16 @@ function renderGlance(){
       <div class="metric"><div class="metric-label">Needs attention</div><div class="metric-val ${overdue>0?'red':''}">${overdue}</div><div class="metric-sub">overdue items</div></div>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <div style="font-size:13px;font-weight:600">All projects — cycle view <span style="font-size:11px;font-weight:400;color:var(--gray-500)">Health score shown top-right of each card</span></div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="filter-toggle">
+          <button class="ftab${glanceFilter==='active'?' active':''}" onclick="glanceFilter='active';renderGlance()">Active (${allActive.length})</button>
+          <button class="ftab${glanceFilter==='archived'?' active':''}" onclick="glanceFilter='archived';renderGlance()">Completed (${allArchived.length})</button>
+        </div>
+        <span style="font-size:11px;color:var(--gray-500)">Health score top-right · click ✓ Complete to archive</span>
+      </div>
       <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
     </div>
-    <div class="glance-grid">${cards}</div>`;
+    ${visibleProjects.length?`<div class="glance-grid">${cards}</div>`:'<div class="empty-state" style="margin-top:2rem">'+(glanceFilter==='archived'?'No completed projects yet. Mark a project complete using the ✓ button on its card.':'No active projects. Check the Completed tab or add a new project.')+'</div>'}`;
 }
 
 // ── OVERVIEW ───────────────────────────────────────────────
@@ -947,6 +988,7 @@ function renderIntake(){
       <div class="field"><label>Form factor</label><input id="i-form-factor" placeholder="e.g. Freestanding, Wall mount..."></div>
 
       <div class="intake-section-lbl">Key milestone dates</div>
+      ${selectedTemplate&&selectedTemplate!=='blank'?`<div style="grid-column:1/-1;background:var(--blue-bg);border:1px solid var(--blue);border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;font-size:12px"><span>📐 Template: <strong>${TEMPLATES.find(t=>t.id===selectedTemplate)?.name}</strong> — enter PO release date then click Apply</span><button class="btn btn-primary" style="font-size:11px;padding:4px 12px" onclick="applyTemplateToIntake()">Apply template dates</button></div>`:`<div style="grid-column:1/-1;font-size:11px;color:var(--gray-500)">💡 Tip: pick a template first from the <button onclick="setTab('templates')" style="background:none;border:none;cursor:pointer;color:var(--blue);font-size:11px;text-decoration:underline;font-family:var(--font)">Templates tab</button> to auto-fill dates.</div>`}
       <div class="ms-intake-grid">
 
         <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#0f0f0f"></div>Readiness</div>
@@ -1140,6 +1182,87 @@ function exportToExcel(){
   const ws5=XLSX.utils.aoa_to_sheet(r5);XLSX.utils.book_append_sheet(wb,ws5,'Activity Log');
   XLSX.writeFile(wb,'Signifi_Ops_'+new Date().toISOString().split('T')[0]+'.xlsx');showToast('Excel downloaded ✓');
 }
-</script>
+
+// ── NOTES TOGGLE ───────────────────────────────────────────
+function toggleNotes(id){
+  const el=document.getElementById(id);
+  if(el)el.classList.toggle('open');
+}
+
+// ── ARCHIVE / COMPLETE ─────────────────────────────────────
+async function toggleArchive(id,currentStatus){
+  const newStatus=currentStatus==='complete'?'active':'complete';
+  if(!confirm(`${newStatus==='complete'?'Mark this project complete':'Restore this project to active'}?`))return;
+  const{error}=await sb.from('projects').update({status:newStatus,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',id);
+  if(error){alert('Error: '+error.message);return;}
+  const proj=projects.find(p=>p.id===id);
+  await logActivity(newStatus==='complete'?'marked complete':'restored to active',proj?.name||'',proj?.so_number||'',id,currentStatus,newStatus);
+  showToast(newStatus==='complete'?'Project marked complete ✓':'Project restored ✓');
+  await loadAll();
+}
+
+// ── TEMPLATES ──────────────────────────────────────────────
+const TEMPLATES=[
+  {id:'standard-unit',name:'Standard unit build',desc:'Typical Signifi unit — 10 week cycle from MO release to installation',
+    offsets:{'po-release':0,'arrival':14,'production-start':21,'production-end':42,'quality-start':42,'quality-end':49,'vinyl':50,'uat':51,'shipping':52,'delivery':56,'installation':63},
+    stages:['Readiness','Production','QA','UAT','Ship','Install']},
+  {id:'fast-track',name:'Fast track (6 weeks)',desc:'Compressed timeline for urgent orders — parallel workstreams',
+    offsets:{'po-release':0,'arrival':7,'production-start':10,'production-end':25,'quality-start':25,'quality-end':30,'vinyl':31,'uat':32,'shipping':33,'delivery':36,'installation':42},
+    stages:['Readiness','Production','QA','Ship','Install']},
+  {id:'software-only',name:'Software / UI only',desc:'No hardware build — UI development, UAT and deployment',
+    offsets:{'po-release':0,'ui-start':3,'ui-end':21,'quality-start':21,'quality-end':28,'uat':29,'delivery':35,'installation':35},
+    stages:['UI dev','QA','UAT','Deploy']},
+  {id:'blank',name:'Blank — set all dates manually',desc:'Start from scratch with no pre-filled dates',offsets:{},stages:[]},
+];
+let selectedTemplate=null;
+let glanceFilter='active';
+
+function renderTemplates(){
+  const el=document.getElementById('tab-templates');
+  const TYPE_LABEL={'po-release':'MO / PO Release','arrival':'Parts arrival','production-start':'Production start','production-end':'Production end','quality-start':'Quality start','quality-end':'Quality end','vinyl':'Vinyl / branding','uat':'UAT','ui-start':'UI start','ui-end':'UI end','shipping':'Pack & ship','delivery':'Delivery','installation':'Installation'};
+  const cards=TEMPLATES.map(t=>`
+    <div class="template-card${selectedTemplate===t.id?' template-active':''}" onclick="selectTemplate('${t.id}')">
+      <div class="template-card-name">${t.name}</div>
+      <div class="template-card-desc">${t.desc}</div>
+      <div class="template-card-stages">${t.stages.map(s=>`<span class="template-stage-pill">${s}</span>`).join('')}</div>
+    </div>`).join('');
+  const selT=TEMPLATES.find(t=>t.id===selectedTemplate);
+  const offsetTable=selT&&Object.keys(selT.offsets).length?`<table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr><th style="text-align:left;padding:5px 10px;border-bottom:1px solid var(--gray-100);color:var(--gray-500);font-size:10px;text-transform:uppercase">Milestone</th><th style="text-align:left;padding:5px 10px;border-bottom:1px solid var(--gray-100);color:var(--gray-500);font-size:10px;text-transform:uppercase">Days from PO release</th></tr></thead>
+    <tbody>${Object.entries(selT.offsets).map(([k,v])=>`<tr style="border-bottom:1px solid var(--gray-50)"><td style="padding:6px 10px;font-weight:500">${TYPE_LABEL[k]||k}</td><td style="padding:6px 10px;font-family:var(--mono);color:var(--blue)">+${v} days</td></tr>`).join('')}</tbody>
+  </table>`:'<div style="font-size:12px;color:var(--gray-500)">No offsets — all dates set manually.</div>';
+  el.innerHTML=`
+    <div class="section">
+      <div class="section-head"><div class="section-title">📐 Project templates</div><div class="section-meta">Pick a template → go to New Project → enter PO date → dates auto-fill</div></div>
+      <div class="template-grid">${cards}</div>
+      <div style="padding:0 16px 16px">
+        ${selectedTemplate?`<div style="background:var(--success-bg);border:1px solid var(--success);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--success)">✓ <strong>${selT?.name}</strong> selected — go to New Project, enter the PO release date, then click "Apply template".</div>`:''}
+        <button class="btn-add" onclick="setTab('intake')">➕ Go to New Project →</button>
+      </div>
+    </div>
+    <div class="section" style="margin-top:10px">
+      <div class="section-head"><div class="section-title">Timeline offsets — ${selT?.name||'select a template above'}</div></div>
+      <div style="padding:14px 16px">${selectedTemplate?offsetTable:'<div style="font-size:12px;color:var(--gray-500)">Select a template above to preview its milestone offsets.</div>'}</div>
+    </div>`;
+}
+
+function selectTemplate(id){selectedTemplate=id;renderTemplates();showToast('Template selected — go to New Project to use it');}
+
+function applyTemplateToIntake(){
+  if(!selectedTemplate||selectedTemplate==='blank')return;
+  const t=TEMPLATES.find(x=>x.id===selectedTemplate);if(!t)return;
+  const poEl=document.getElementById('i-po');if(!poEl||!poEl.value){alert('Please enter the MO/PO release date first.');return;}
+  const base=new Date(poEl.value+'T00:00:00');
+  const KEY_MAP={'po-release':'i-po','arrival':'i-parts-end','production-start':'i-ps','production-end':'i-pe','quality-start':'i-qs','quality-end':'i-qe','vinyl':'i-vinyl','uat':'i-uat','ui-start':'i-ui-s','ui-end':'i-ui-e','shipping':'i-ship','delivery':'i-del','installation':'i-inst'};
+  Object.entries(t.offsets).forEach(([key,days])=>{
+    const inputId=KEY_MAP[key];if(!inputId)return;
+    const el=document.getElementById(inputId);if(!el||el.id==='i-po')return;
+    const d=new Date(base);d.setDate(d.getDate()+days);
+    el.value=isoD(d);
+  });
+  showToast('Dates filled from template — adjust as needed ✓');
+}
+
+loadAll();
 </body>
 </html>
