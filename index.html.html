@@ -1342,16 +1342,21 @@ function renderProjPageBody(){
   const goLive=pMs.find(m=>m.key==='installation')?.date||'';
   const phase=getSection('phase')||'Execution';
 
-  // Quick links — merge saved + project links
+  // Quick links — merge saved project_links table + project record fields (source of truth)
   const LINK_CATS=[
     {cat:'Meetings',items:[{label:'Kickoff recording',key:'kickoff_rec'},{label:'Meeting minutes',key:'meeting_min'},{label:'Project calendar',key:'proj_cal'}]},
     {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Project Charter',key:'charter'},{label:'Requirements',key:'requirements'},{label:'Site Survey',key:'site_survey'},{label:'Deployment Plan',key:'deploy_plan'}]},
-    {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira Board',key:'jira'},{label:'Odoo Task',key:'odoo'},{label:'Client Portal',key:'client_portal'}]},
+    {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira / UI Task',key:'jira'},{label:'QA Task',key:'qa_task'},{label:'Product Template',key:'product_template'},{label:'Badge Reader',key:'badge_reader'},{label:'Employee List',key:'employee_list'},{label:'Odoo Task',key:'odoo'},{label:'Client Portal',key:'client_portal'}]},
   ];
+  // Start with anything saved in project_links table
   const linkVals=Object.fromEntries(ppData.links.map(l=>[l.label,l.url]));
-  // Pre-fill from project record
+  // Always override with the authoritative fields from the project record
   if(proj.odoo_url)linkVals['Odoo Task']=proj.odoo_url;
-  if(proj.ui_task_url)linkVals['Jira Board']=proj.ui_task_url;
+  if(proj.ui_task_url)linkVals['Jira / UI Task']=proj.ui_task_url;
+  if(proj.qa_task_url)linkVals['QA Task']=proj.qa_task_url;
+  if(proj.product_template_url)linkVals['Product Template']=proj.product_template_url;
+  if(proj.badge_reader_url)linkVals['Badge Reader']=proj.badge_reader_url;
+  if(proj.employee_list_url)linkVals['Employee List']=proj.employee_list_url;
 
   const linksHtml=LINK_CATS.map(cat=>`
     <div style="margin-bottom:10px">
@@ -1443,7 +1448,7 @@ function renderProjPageBody(){
           <span>🏢 ${proj.client||'—'}</span>
           ${goLive?`<span>🎯 Go-live: <strong>${fmt(goLive)}</strong></span>`:''}
         </div>
-        <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <select class="pp-status ${statusCls}" style="border:none;cursor:pointer;font-family:var(--font);font-size:12px;font-weight:600;padding:4px 12px;border-radius:20px" onchange="savePPSection('status',this.value);this.className='pp-status '+(this.value==='on-track'?'pp-status-green':this.value==='at-risk'?'pp-status-amber':'pp-status-red')">
             <option value="on-track"${statusVal==='on-track'?' selected':''}>🟢 On Track</option>
             <option value="at-risk"${statusVal==='at-risk'?' selected':''}>🟡 At Risk</option>
@@ -1453,6 +1458,10 @@ function renderProjPageBody(){
           <input value="${phase}" style="font-size:12px;background:rgba(255,255,255,0.1);border:none;border-bottom:1px solid #444;color:white;padding:2px 6px;font-family:var(--font);width:120px" onchange="savePPSection('phase',this.value)" placeholder="Current phase">
           <span style="font-size:11px;color:#555">Last updated: ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>
         </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:7px;align-items:flex-end;flex-shrink:0" class="no-print">
+        <button onclick="exportProjPageExcel()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #2d6a4f;background:#1a4a35;color:#4ade80;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">⬇ Excel</button>
+        <button onclick="window.print()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #555;background:#1a1a1a;color:#aaa;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🖨 Print / PDF</button>
       </div>
     </div>
 
@@ -1584,6 +1593,25 @@ async function savePPSection(key,value){
 }
 
 async function savePPLink(label,url){
+  // Map from quick link labels to project record columns
+  const HUB_FIELD_MAP={
+    'Odoo Task':'odoo_url',
+    'Jira / UI Task':'ui_task_url',
+    'QA Task':'qa_task_url',
+    'Product Template':'product_template_url',
+    'Badge Reader':'badge_reader_url',
+    'Employee List':'employee_list_url',
+  };
+  // If this label maps to a hub field, write back to the projects table too
+  const hubField=HUB_FIELD_MAP[label];
+  if(hubField){
+    await sb.from('projects').update({[hubField]:url,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',ppProjId);
+    // Update local projects array so Generate Docs picks it up immediately
+    const proj=projects.find(p=>p.id===ppProjId);
+    if(proj)proj[hubField]=url;
+    await logActivity('updated link',label,label,ppProjId,null,url);
+  }
+  // Also save to project_links for the quick links display
   const existing=ppData.links.find(l=>l.label===label);
   if(existing){
     await sb.from('project_links').update({url}).eq('id',existing.id);
@@ -1592,7 +1620,6 @@ async function savePPLink(label,url){
     const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:'',sort_order:ppData.links.length}).select().single();
     if(data)ppData.links.push(data);
   }
-  // Update the open link button
   showPPSaved();
 }
 
@@ -1678,8 +1705,21 @@ function renderGenDocs(){
 
 function getDocProj(){return projects.find(p=>p.id===selectedDocProjId)||{};}
 function getDocDate(key){if(!selectedDocProjId)return'';const m=milestones.find(m=>m.project_id===selectedDocProjId&&m.key===key);return m?fmtFull(m.date):'';}
+// Gets a link for Generate Docs — checks project record first, then project_links table
+function getDocLink(label){
+  const p=getDocProj();
+  // Check direct project record fields first
+  const DIRECT={'Odoo Task':p.odoo_url,'Jira / UI Task':p.ui_task_url,'QA Task':p.qa_task_url,'Product Template':p.product_template_url,'Badge Reader':p.badge_reader_url,'Employee List':p.employee_list_url};
+  if(DIRECT[label])return DIRECT[label]||'';
+  // Fall back to project_links table (set via project page)
+  // ppData may have the right project loaded — check if it matches
+  if(ppProjId===selectedDocProjId&&ppData.links.length){
+    const found=ppData.links.find(l=>l.label===label);
+    if(found?.url)return found.url;
+  }
+  return'';
+}
 function fld(id,label,placeholder,fullWidth,type='text',val=''){
-  return`<div class="field${fullWidth?' full':''}"><label>${label}</label><input id="${id}" type="${type}" placeholder="${placeholder}" value="${val}" style="font-size:12px"></div>`;
 }
 function fldSelect(id,label,opts,val=''){
   return`<div class="field"><label>${label}</label><select id="${id}" style="font-size:12px">${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
@@ -1724,13 +1764,13 @@ function renderInstallForm(){
     ${fld('if-poc-name','POC name & title','e.g. Joshua Emperador, Inside Sales Lead','full')}
     ${fld('if-poc-email','POC email','e.g. j@google.com','')}
     ${fld('if-poc-phone','POC phone','','')}
-    <div class="doc-section-lbl">Links (auto-filled from project edit — update via Project Overview → Edit)</div>
-    ${fld('if-odoo','Odoo task link','https://signifisolutions.odoo.com/...','full','text',p.odoo_url||'')}
-    ${fld('if-ui-task','UI task link (Jira)','https://signifisolutions.atlassian.net/...','full','text',p.ui_task_url||'')}
-    ${fld('if-qa-task','QA task link (Jira)','https://signifisolutions.atlassian.net/...','full','text',p.qa_task_url||'')}
-    ${fld('if-template','Product template link','https://signifisolutions.atlassian.net/...','full','text',p.product_template_url||'')}
-    ${fld('if-badge','Badge reader link','https://signifisolutions.atlassian.net/...','full','text',p.badge_reader_url||'')}
-    ${fld('if-employee','Employee list link','https://...','full','text',p.employee_list_url||'')}
+    <div class="doc-section-lbl">Links (auto-filled from project edit — update via Project Overview → Edit or Project Page)</div>
+    ${fld('if-odoo','Odoo task link','https://signifisolutions.odoo.com/...','full','text',getDocLink('Odoo Task'))}
+    ${fld('if-ui-task','UI task link (Jira)','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Jira / UI Task'))}
+    ${fld('if-qa-task','QA task link (Jira)','https://signifisolutions.atlassian.net/...','full','text',getDocLink('QA Task'))}
+    ${fld('if-template','Product template link','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Product Template'))}
+    ${fld('if-badge','Badge reader link','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Badge Reader'))}
+    ${fld('if-employee','Employee list link','https://...','full','text',getDocLink('Employee List'))}
     ${fldTA('if-scope','Scope of work (leave blank for standard)','1. Deliver and install...\n2. Position unit...')}
     ${fldTA('if-special','Special requirements','Any special notes...')}
   </div>
@@ -1793,11 +1833,11 @@ function renderQAForm(){
     <div class="doc-section-lbl">Workflows</div>
     ${fld('qf-workflows','Workflows','e.g. Vending, Pick-up, Drop-off, Pre-approved vending','full')}
     <div class="doc-section-lbl">Links</div>
-    ${fld('qf-jira-task','UI task link (Jira)','https://signifisolutions.atlassian.net/...','full','text',p.ui_task_url||'')}
-    ${fld('qf-jira-product','Product template link (Jira)','https://signifisolutions.atlassian.net/...','full','text',p.product_template_url||'')}
-    ${fld('qf-jira-badge','Badge reader Jira link','https://signifisolutions.atlassian.net/...','full','text',p.badge_reader_url||'')}
+    ${fld('qf-jira-task','UI task link (Jira)','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Jira / UI Task'))}
+    ${fld('qf-jira-product','Product template link (Jira)','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Product Template'))}
+    ${fld('qf-jira-badge','Badge reader Jira link','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Badge Reader'))}
     ${fld('qf-taxes','Applicable taxes','e.g. N/A','')}
-    ${fld('qf-employee','Employee list template','e.g. N/A - extracted from ServiceNow','full','text',p.employee_list_url||'')}
+    ${fld('qf-employee','Employee list template','e.g. N/A - extracted from ServiceNow','full','text',getDocLink('Employee List'))}
     ${fldTA('qf-special','Special requirements','e.g. iPhones in two lanes on shelf 2 are pre-authorized vending...')}
   </div>
   <button class="btn-red" style="font-size:12px;padding:8px 20px;margin-top:4px" onclick="generateDoc('qa')">Generate QA task →</button>
@@ -2001,6 +2041,65 @@ function applyTemplateToIntake(){
   });
   showToast('Dates filled from template — adjust as needed ✓');
 }
+
+// ── EXPORT PROJECT PAGE ────────────────────────────────────
+function exportProjPageExcel(){
+  const proj=projects.find(p=>p.id===ppProjId);
+  if(!proj){showToast('No project selected');return;}
+  const pMs=milestones.filter(m=>m.project_id===ppProjId);
+  const wb=XLSX.utils.book_new();
+  const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const statusVal=getSection('status')||'on-track';
+  const statusLbl=statusVal==='on-track'?'On Track':statusVal==='at-risk'?'At Risk':'Off Track';
+  // Sheet 1: Overview
+  const r1=[
+    ['PROJECT PAGE EXPORT',''],['Generated',dateStr],['',''],
+    ['PROJECT INFORMATION',''],['Project Name',proj.name||''],['Sales Order (SO)',proj.so_number||''],
+    ['Client',proj.client||''],['Project Manager',proj.pm||''],['Status',statusLbl],
+    ['Current Phase',getSection('phase')||''],['Product Type',proj.product_type||''],['Location',proj.location||''],
+    ['',''],['PROJECT SUMMARY',''],[(getSection('summary')||''),''],
+    ['',''],['KEY LINKS',''],
+    ['Odoo Task',proj.odoo_url||''],['Jira / UI Task',proj.ui_task_url||''],
+    ['QA Task',proj.qa_task_url||''],['Product Template',proj.product_template_url||''],
+    ['Badge Reader',proj.badge_reader_url||''],['Employee List',proj.employee_list_url||''],
+    ...ppData.links.filter(l=>!['Odoo Task','Jira / UI Task','QA Task','Product Template','Badge Reader','Employee List'].includes(l.label)).map(l=>[l.label,l.url||'']),
+    ['',''],['INTERNAL NOTES',''],[(getSection('notes')||''),''],
+  ];
+  const ws1=XLSX.utils.aoa_to_sheet(r1);ws1['!cols']=[{wch:22},{wch:55}];
+  XLSX.utils.book_append_sheet(wb,ws1,'Overview');
+  // Sheet 2: Milestones
+  const r2=[['MILESTONE TRACKER','','',''],['Milestone','Date','Days from today','Status']];
+  [...pMs].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(m=>{
+    const d=daysDiff(m.date);
+    r2.push([m.label,m.date||'',m.date?d:'',d<0?'Done':d===0?'Today':d<=7?'In '+d+'d':'In '+d+'d']);
+  });
+  const ws2=XLSX.utils.aoa_to_sheet(r2);ws2['!cols']=[{wch:28},{wch:14},{wch:14},{wch:12}];
+  XLSX.utils.book_append_sheet(wb,ws2,'Milestones');
+  // Sheet 3: Team
+  const r3=[['PROJECT TEAM','','',''],['Role','Name','Organization','Email']];
+  ppData.team.forEach(m=>r3.push([m.role||'',m.name||'',m.organization||'',m.email||'']));
+  const ws3=XLSX.utils.aoa_to_sheet(r3);ws3['!cols']=[{wch:22},{wch:22},{wch:22},{wch:30}];
+  XLSX.utils.book_append_sheet(wb,ws3,'Project Team');
+  // Sheet 4: Action items
+  const r4=[['ACTION ITEMS','','',''],['Owner','Action Item','Due Date','Status']];
+  ppData.actions.forEach(a=>r4.push([a.owner||'',a.description||'',a.due_date||'',a.status||'']));
+  const ws4=XLSX.utils.aoa_to_sheet(r4);ws4['!cols']=[{wch:16},{wch:45},{wch:14},{wch:12}];
+  XLSX.utils.book_append_sheet(wb,ws4,'Action Items');
+  // Sheet 5: Risks & Issues
+  const r5=[['RISKS & ISSUES','','','',''],['Type','Description','Impact / Resolution','Owner','Status']];
+  ppData.risks.forEach(r=>r5.push([r.type||'Risk',r.description||'',r.type==='Risk'?r.impact||'':r.mitigation||'',r.owner||'',r.status||'']));
+  const ws5=XLSX.utils.aoa_to_sheet(r5);ws5['!cols']=[{wch:8},{wch:40},{wch:30},{wch:16},{wch:10}];
+  XLSX.utils.book_append_sheet(wb,ws5,'Risks & Issues');
+  // Sheet 6: Decisions
+  const r6=[['DECISION LOG','',''],['Date','Decision','Approved By']];
+  ppData.decisions.forEach(d=>r6.push([d.decision_date||'',d.description||'',d.approved_by||'']));
+  const ws6=XLSX.utils.aoa_to_sheet(r6);ws6['!cols']=[{wch:14},{wch:50},{wch:20}];
+  XLSX.utils.book_append_sheet(wb,ws6,'Decision Log');
+  const fname=(proj.so_number||proj.name).replace(/[^a-zA-Z0-9]/g,'_')+'_ProjectPage_'+new Date().toISOString().split('T')[0]+'.xlsx';
+  XLSX.writeFile(wb,fname);
+  showToast('Project page exported ✓');
+}
+
 
 loadAll();
 </script>
