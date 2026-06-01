@@ -236,7 +236,19 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .empty-state{text-align:center;padding:2.5rem;color:var(--gray-500);font-size:12px;}
 .actions-row{display:flex;align-items:center;gap:7px;padding:12px 16px;border-top:1px solid var(--gray-100);}
 /* ── PRINT ── */
-.glance-notes{padding:8px 14px;border-top:1px solid var(--gray-100);background:var(--gray-50);}
+.doc-tabs{display:flex;gap:4px;margin-bottom:1rem;}
+.doc-tab{font-size:12px;padding:6px 16px;border-radius:var(--radius);border:1px solid var(--gray-300);cursor:pointer;color:var(--gray-700);background:var(--white);font-family:var(--font);font-weight:500;}
+.doc-tab:hover{background:var(--gray-100);}
+.doc-tab.active{background:var(--black);color:white;border-color:var(--black);}
+.doc-output{background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius);padding:16px;font-family:var(--mono);font-size:12px;line-height:1.7;white-space:pre-wrap;min-height:300px;position:relative;}
+.copy-btn{position:absolute;top:10px;right:10px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);cursor:pointer;font-family:var(--font);}
+.copy-btn:hover{background:var(--gray-100);}
+.doc-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1rem;}
+.doc-section-lbl{font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;grid-column:1/-1;padding-top:8px;margin-top:4px;border-top:1px solid var(--gray-100);}
+.doc-section-lbl:first-child{border-top:none;padding-top:0;margin-top:0;}
+.proj-select-row{display:flex;align-items:center;gap:10px;margin-bottom:1rem;padding:12px 16px;background:var(--gray-50);border-radius:var(--radius);border:1px solid var(--gray-100);}
+.proj-select-row label{font-size:12px;font-weight:600;color:var(--gray-700);white-space:nowrap;}
+.proj-select-row select{font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);flex:1;}
 .glance-notes-preview{font-size:11px;color:var(--gray-500);cursor:pointer;display:flex;align-items:center;gap:5px;user-select:none;}
 .glance-notes-preview:hover{color:var(--gray-700);}
 .glance-notes-body{font-size:11px;color:var(--gray-700);margin-top:6px;white-space:pre-wrap;line-height:1.5;display:none;}
@@ -318,6 +330,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
           <div class="nav-group-label">Tools</div>
           <button class="nav-item" id="ni-briefing" onclick="setTab('briefing')">📋 Daily briefing</button>
           <button class="nav-item" id="ni-log" onclick="setTab('log')">🕓 Activity log</button>
+          <button class="nav-item" id="ni-gendocs" onclick="setTab('gendocs')">📄 Generate docs</button>
           <button class="nav-item" id="ni-templates" onclick="setTab('templates')">📐 Templates</button>
           <button class="nav-item" id="ni-intake" onclick="setTab('intake')">➕ New project</button>
         </div>
@@ -345,6 +358,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
     <div id="tab-planogram" style="display:none"></div>
     <div id="tab-briefing" style="display:none"></div>
     <div id="tab-log" style="display:none"></div>
+    <div id="tab-gendocs" style="display:none"></div>
     <div id="tab-templates" style="display:none"></div>
     <div id="tab-intake" style="display:none"></div>
   </div>
@@ -474,12 +488,12 @@ function setTab(tab){
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','overview','week','production','quality','shipping','installation','vinyl','planogram','briefing','log','templates','intake'];
+  const ALL=['glance','overview','week','production','quality','shipping','installation','vinyl','planogram','briefing','log','gendocs','templates','intake'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
 function renderTab(){
-  const m={glance:renderGlance,overview:renderOverview,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,log:renderLog,templates:renderTemplates,intake:renderIntake};
+  const m={glance:renderGlance,overview:renderOverview,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake};
   if(m[currentTab])m[currentTab]();
 }
 
@@ -1183,7 +1197,272 @@ function exportToExcel(){
   XLSX.writeFile(wb,'Signifi_Ops_'+new Date().toISOString().split('T')[0]+'.xlsx');showToast('Excel downloaded ✓');
 }
 
-// ── NOTES TOGGLE ───────────────────────────────────────────
+// ── GENERATE DOCS ─────────────────────────────────────────
+let activeDocTab='install';
+let selectedDocProjId=null;
+
+function renderGenDocs(){
+  const el=document.getElementById('tab-gendocs');
+  const projOpts=projects.map(p=>`<option value="${p.id}"${p.id===selectedDocProjId?' selected':''}>${p.name} — ${p.so_number||'No SO'}</option>`).join('');
+  el.innerHTML=`
+    <div class="section">
+      <div class="section-head"><div class="section-title">📄 Generate documents</div><div class="section-meta">Fill in once → get all three docs instantly</div></div>
+      <div style="padding:16px">
+        <div class="proj-select-row">
+          <label>Project</label>
+          <select onchange="selectedDocProjId=this.value;renderGenDocs()"><option value="">Select project...</option>${projOpts}</select>
+          ${selectedDocProjId?`<span style="font-size:11px;color:var(--gray-500)">Dates and client info auto-pulled ✓</span>`:''}
+        </div>
+        <div class="doc-tabs">
+          <button class="doc-tab${activeDocTab==='install'?' active':''}" onclick="activeDocTab='install';renderGenDocs()">🔧 Installation ticket</button>
+          <button class="doc-tab${activeDocTab==='ui'?' active':''}" onclick="activeDocTab='ui';renderGenDocs()">🖥 UI request</button>
+          <button class="doc-tab${activeDocTab==='qa'?' active':''}" onclick="activeDocTab='qa';renderGenDocs()">✅ QA task</button>
+        </div>
+        ${activeDocTab==='install'?renderInstallForm():activeDocTab==='ui'?renderUIForm():renderQAForm()}
+      </div>
+    </div>`;
+}
+
+function getDocProj(){return projects.find(p=>p.id===selectedDocProjId)||{};}
+function getDocDate(key){if(!selectedDocProjId)return'';const m=milestones.find(m=>m.project_id===selectedDocProjId&&m.key===key);return m?fmtFull(m.date):'';}
+function fld(id,label,placeholder,fullWidth,type='text',val=''){
+  return`<div class="field${fullWidth?' full':''}"><label>${label}</label><input id="${id}" type="${type}" placeholder="${placeholder}" value="${val}" style="font-size:12px"></div>`;
+}
+function fldSelect(id,label,opts,val=''){
+  return`<div class="field"><label>${label}</label><select id="${id}" style="font-size:12px">${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
+}
+function fldTA(id,label,placeholder,val=''){
+  return`<div class="field full"><label>${label}</label><textarea id="${id}" placeholder="${placeholder}" style="min-height:70px;font-size:12px">${val}</textarea></div>`;
+}
+
+function renderInstallForm(){
+  const p=getDocProj();
+  const delivDate=getDocDate('delivery');
+  const instDate=getDocDate('installation');
+  const vinylDate=getDocDate('vinyl');
+  const shipDate=getDocDate('shipping');
+  return`<div class="doc-form-grid">
+    <div class="doc-section-lbl">Project identifiers (auto-filled from hub)</div>
+    ${fld('if-so','Sales Order (SO)','SO-XXXXX','','text',p.so_number||'')}
+    ${fld('if-client','End Client (CX)','e.g. Google','','text',p.client||'')}
+    ${fld('if-naming','Naming convention & address','e.g. GPIX-B2B-SUN-CA-ENC 440 N Wolfe Rd...','full')}
+    <div class="doc-section-lbl">Dates (auto-filled)</div>
+    ${fld('if-ship','Shipping date','','','text',shipDate)}
+    ${fld('if-del','Delivery date','','','text',delivDate)}
+    ${fld('if-inst','Requested installation date','','','text',instDate)}
+    ${fld('if-vinyl','Vinyl date','','','text',vinylDate)}
+    <div class="doc-section-lbl">Unit configuration</div>
+    ${fld('if-cp','Channel Partner (CP)','e.g. Direct, TD Synnex...','')}
+    ${fld('if-kiosk','Kiosk type','e.g. Retail Enclosure, V8 SparkXL...','')}
+    ${fld('if-elevator','Vending unit elevator','e.g. Enhanced, Standard','')}
+    ${fld('if-screen','Screen size','e.g. 42" (1080x1920)','')}
+    ${fld('if-workflow','Workflow','e.g. Retail Vending, Pick-up, Drop-off','full')}
+    ${fld('if-auth','Authentication / payment device','e.g. Badge reader, Barcode scanner','full')}
+    ${fld('if-payconfig','Payment device configuration','','')}
+    ${fld('if-lang','Language','e.g. English','')}
+    ${fldSelect('if-ada','ADA keypad',['No','Yes'])}
+    ${fld('if-hosting','Hosting','e.g. Default Multi-Tenant','')}
+    ${fld('if-connectivity','Internet connectivity','e.g. LAN (Primary)','')}
+    ${fld('if-survey','IT site survey','e.g. Optconnect','')}
+    ${fld('if-voltage','Voltage','e.g. 110V','')}
+    ${fld('if-plug','Plug type','e.g. Type B','')}
+    ${fld('if-orientation','Orientation','e.g. Per approved retail layout','full')}
+    <div class="doc-section-lbl">Point of contact</div>
+    ${fld('if-poc-name','POC name & title','e.g. Joshua Emperador, Inside Sales Lead','full')}
+    ${fld('if-poc-email','POC email','e.g. j@google.com','')}
+    ${fld('if-poc-phone','POC phone','','')}
+    <div class="doc-section-lbl">Links & references</div>
+    ${fld('if-odoo','Odoo task link','https://signifisolutions.odoo.com/...','full')}
+    ${fld('if-ui-task','UI task link','https://signifisolutions.atlassian.net/...','')}
+    ${fld('if-qa-task','QA task link','https://signifisolutions.atlassian.net/...','')}
+    ${fld('if-template','Product template link','','')}
+    ${fldTA('if-scope','Scope of work (leave blank for standard)','1. Deliver and install...\n2. Position unit...')}
+    ${fldTA('if-special','Special requirements','Any special notes...')}
+  </div>
+  <button class="btn-red" style="font-size:12px;padding:8px 20px;margin-top:4px" onclick="generateDoc('install')">Generate installation ticket →</button>
+  <div id="doc-output-install" style="display:none;margin-top:1rem">
+    <div class="doc-output" id="doc-text-install">
+      <button class="copy-btn" onclick="copyDoc('install')">📋 Copy</button>
+      <span id="doc-content-install"></span>
+    </div>
+  </div>`;
+}
+
+function renderUIForm(){
+  const p=getDocProj();
+  return`<div class="doc-form-grid">
+    <div class="doc-section-lbl">Project identifiers</div>
+    ${fld('uf-cp','Channel Partner (CP)','e.g. TD Synnex, Direct','')}
+    ${fld('uf-client','End Client (CX)','e.g. LinkedIn','','text',p.client||'')}
+    ${fld('uf-kiosk','Kiosk type','e.g. V8 SparkXL & 18in Locker','full')}
+    ${fld('uf-elevator','Vending unit elevator','e.g. Enhanced Quendra','')}
+    ${fld('uf-screen','Screen size','e.g. 43"','')}
+    <div class="doc-section-lbl">Configuration</div>
+    ${fld('uf-workflows','Smart workflows','e.g. Pick-up, Drop-off, Catalogue loan, Swap, Vending','full')}
+    ${fld('uf-auth','Authentication','e.g. Badge, Barcode scanner','')}
+    ${fld('uf-payment','Payment device','e.g. N/A','')}
+    ${fld('uf-lang','Language','e.g. English (Default)','')}
+    ${fldSelect('uf-ada','ADA keypad',['No','Yes'])}
+    ${fldSelect('uf-api','API integration',['No','Yes'])}
+    ${fld('uf-hosting','Hosting','e.g. Multi-Tenant Cloud environment in Canada','')}
+    ${fld('uf-vision','Vision URL','e.g. linkedinITAM.signifivision.com','')}
+    <div class="doc-section-lbl">Attachments & links</div>
+    ${fld('uf-branding','Branding documents link','SharePoint URL','full')}
+    ${fldTA('uf-attachments','Attachments description','e.g. Branding Guidelines, SOW, Logo, font, colour...')}
+    ${fldTA('uf-special','Special requirements / notes','Any additional context for the scrum master...')}
+  </div>
+  <button class="btn-red" style="font-size:12px;padding:8px 20px;margin-top:4px" onclick="generateDoc('ui')">Generate UI request →</button>
+  <div id="doc-output-ui" style="display:none;margin-top:1rem">
+    <div class="doc-output" id="doc-text-ui">
+      <button class="copy-btn" onclick="copyDoc('ui')">📋 Copy</button>
+      <span id="doc-content-ui"></span>
+    </div>
+  </div>`;
+}
+
+function renderQAForm(){
+  const p=getDocProj();
+  const shipDate=getDocDate('shipping');
+  const vinylDate=getDocDate('vinyl');
+  return`<div class="doc-form-grid">
+    <div class="doc-section-lbl">Dates (auto-filled)</div>
+    ${fld('qf-ship','Shipping date','','','text',shipDate)}
+    ${fld('qf-vinyl','Vinyl date','','','text',vinylDate)}
+    <div class="doc-section-lbl">Project details</div>
+    ${fld('qf-naming','Naming convention & locations','e.g. ALLIZ-BOURN-LON-SPXL','full')}
+    ${fld('qf-kiosk','Kiosk type / product','e.g. SparkXL','')}
+    ${fld('qf-lang','Language','e.g. English and German','')}
+    ${fld('qf-hosting','Hosting','e.g. Default European Server','')}
+    ${fld('qf-connectivity','Internet connectivity','e.g. LAN (primary), Wifi (backup)','full')}
+    ${fld('qf-auth','Authentication / payment device','e.g. Barcode Scanner, Badge Reader - MiFare','full')}
+    <div class="doc-section-lbl">Workflows</div>
+    ${fld('qf-workflows','Workflows','e.g. Vending, Pick-up, Drop-off, Pre-approved vending','full')}
+    <div class="doc-section-lbl">Links</div>
+    ${fld('qf-jira-task','UI task link (Jira)','https://signifisolutions.atlassian.net/...','')}
+    ${fld('qf-jira-product','Product template link (Jira)','https://signifisolutions.atlassian.net/...','')}
+    ${fld('qf-jira-badge','Badge reader Jira link','https://signifisolutions.atlassian.net/...','')}
+    ${fld('qf-taxes','Applicable taxes','e.g. N/A','')}
+    ${fld('qf-employee','Employee list template','e.g. N/A - extracted from ServiceNow','')}
+    ${fldTA('qf-special','Special requirements','e.g. iPhones in two lanes on shelf 2 are pre-authorized vending...')}
+  </div>
+  <button class="btn-red" style="font-size:12px;padding:8px 20px;margin-top:4px" onclick="generateDoc('qa')">Generate QA task →</button>
+  <div id="doc-output-qa" style="display:none;margin-top:1rem">
+    <div class="doc-output" id="doc-text-qa">
+      <button class="copy-btn" onclick="copyDoc('qa')">📋 Copy</button>
+      <span id="doc-content-qa"></span>
+    </div>
+  </div>`;
+}
+
+function g(id){const el=document.getElementById(id);return el?el.value.trim():'';}
+
+function generateDoc(type){
+  let text='';
+  if(type==='install'){
+    const scope=g('if-scope')||`1. Deliver and install ${g('if-kiosk')} at ${g('if-client')} location.
+2. Position unit per approved layout.
+3. Connect unit to power and network.
+4. Validate UI load and product display.
+5. Configure and validate payment workflow (if credentials available).
+6. Perform end-to-end hardware and software testing.
+7. Capture installation photos and system validation evidence.
+8. Complete User Acceptance Checklist and obtain sign-off.
+9. Submit installation completion documentation to PM.`;
+    text=`INSTALLATION TICKET
+${'─'.repeat(50)}
+Sales Order (SO): ${g('if-so')}
+
+1. Naming Convention and Address: ${g('if-naming')}
+2. Channel Partner (CP): ${g('if-cp')}
+3. End Client (CX): ${g('if-client')}
+4. Shipping Date: ${g('if-ship')}
+5. Delivery Date: ${g('if-del')}
+6. Requested Installation Date: ${g('if-inst')}
+7. Vinyl Date: ${g('if-vinyl')}
+8. Kiosk Type: ${g('if-kiosk')}
+9. Vending Unit Elevator: ${g('if-elevator')}
+10. Screen Size: ${g('if-screen')}
+11. Workflow: ${g('if-workflow')}
+12. Authentication/Payment Device: ${g('if-auth')}
+13. Payment Device Configuration: ${g('if-payconfig')}
+14. Language: ${g('if-lang')}
+15. ADA Keypad: ${g('if-ada')}
+16. Hosting: ${g('if-hosting')}
+17. Internet Connectivity: ${g('if-connectivity')}
+18. IT Site Survey: ${g('if-survey')}
+19. Product Template: ${g('if-template')}
+20. UI Task Link: ${g('if-ui-task')}
+21. Orientation: ${g('if-orientation')}
+22. Voltage: ${g('if-voltage')}
+23. Plug Type: ${g('if-plug')}
+24. Point of Contact (POC): ${g('if-poc-name')} ${g('if-poc-email')} ${g('if-poc-phone')}
+25. QA Task: ${g('if-qa-task')}
+${g('if-odoo')?`\nOdoo Task: ${g('if-odoo')}`:''}
+
+Scope of Work:
+${scope}
+${g('if-special')?`\nSpecial Requirements:\n${g('if-special')}`:''}`;
+  } else if(type==='ui'){
+    text=`UI REQUEST
+${'─'.repeat(50)}
+CP: ${g('uf-cp')}
+CX: ${g('uf-client')}
+Kiosk Type: ${g('uf-kiosk')}
+Vending Unit Elevator: ${g('uf-elevator')}
+Screen Size: ${g('uf-screen')}
+
+Smart Workflows: ${g('uf-workflows')}
+Authentication: ${g('uf-auth')}
+Payment Device: ${g('uf-payment')}
+Language: ${g('uf-lang')}
+ADA Keypad: ${g('uf-ada')}
+API Integration: ${g('uf-api')}
+Hosting: ${g('uf-hosting')}
+Vision URL: ${g('uf-vision')}
+
+Attachments: ${g('uf-attachments')}
+${g('uf-branding')?`Branding Documents: ${g('uf-branding')}`:''}
+${g('uf-special')?`\nNotes:\n${g('uf-special')}`:''}`;
+  } else {
+    text=`QA TASK
+${'─'.repeat(50)}
+Shipping Date: ${g('qf-ship')}
+Vinyl Date: ${g('qf-vinyl')}
+
+Naming Convention and Locations:
+${g('qf-naming')}
+
+Workflow:
+${g('qf-workflows')}
+
+Language: ${g('qf-lang')}
+Hosting: ${g('qf-hosting')}
+
+Internet Connectivity:
+${g('qf-connectivity')}
+
+Authentication/Payment Device:
+${g('qf-auth')}
+
+Applicable Taxes: ${g('qf-taxes')}
+Employee List Template: ${g('qf-employee')}
+
+Product Template: ${g('qf-jira-product')}
+UI Task Link: ${g('qf-jira-task')}
+${g('qf-jira-badge')?`Badge Reader: ${g('qf-jira-badge')}`:''}
+${g('qf-special')?`\nSpecial Requirements:\n${g('qf-special')}`:''}`;
+  }
+  document.getElementById(`doc-content-${type}`).textContent=text;
+  document.getElementById(`doc-output-${type}`).style.display='block';
+  document.getElementById(`doc-output-${type}`).scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+function copyDoc(type){
+  const text=document.getElementById(`doc-content-${type}`).textContent;
+  navigator.clipboard.writeText(text).then(()=>showToast('Copied to clipboard ✓')).catch(()=>{
+    const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast('Copied ✓');
+  });
+}
 function toggleNotes(id){
   const el=document.getElementById(id);
   if(el)el.classList.toggle('open');
