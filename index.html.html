@@ -382,6 +382,7 @@ let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc
 let currentUser=null,currentUserName='';
 let vinylFilter={status:'',search:'',dateFrom:'',dateTo:''};
 let planFilter={status:'',search:'',dateFrom:'',dateTo:''};
+let pmFilter='';
 
 // ── UTILS ──────────────────────────────────────────────────
 function today(){let t=new Date();t.setHours(0,0,0,0);return t;}
@@ -526,7 +527,11 @@ let glanceFilter='active'; // 'active' or 'archived'
 
 function renderGlance(){
   const el=document.getElementById('tab-glance');
-  const visibleProjects=projects.filter(p=>glanceFilter==='archived'?p.status==='complete':p.status!=='complete');
+  const visibleProjects=projects.filter(p=>{
+    if(glanceFilter==='archived'?p.status!=='complete':p.status==='complete')return false;
+    if(pmFilter&&p.pm!==pmFilter)return false;
+    return true;
+  });
   const allActive=projects.filter(p=>p.status!=='complete');
   const allArchived=projects.filter(p=>p.status==='complete');
   const overdue=milestones.filter(m=>m.date&&daysDiff(m.date)<0).length;
@@ -601,13 +606,20 @@ function renderGlance(){
       <div class="metric"><div class="metric-label">This week</div><div class="metric-val">${thisWeek}</div><div class="metric-sub">milestones due</div></div>
       <div class="metric"><div class="metric-label">Needs attention</div><div class="metric-val ${overdue>0?'red':''}">${overdue}</div><div class="metric-sub">overdue items</div></div>
     </div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <div style="display:flex;align-items:center;gap:10px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <div class="filter-toggle">
           <button class="ftab${glanceFilter==='active'?' active':''}" onclick="glanceFilter='active';renderGlance()">Active (${allActive.length})</button>
           <button class="ftab${glanceFilter==='archived'?' active':''}" onclick="glanceFilter='archived';renderGlance()">Completed (${allArchived.length})</button>
         </div>
-        <span style="font-size:11px;color:var(--gray-500)">Health score top-right · click ✓ Complete to archive</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <label style="font-size:11px;color:var(--gray-500);white-space:nowrap">Filter by PM:</label>
+          <select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pmFilter=this.value;renderGlance()">
+            <option value="">All PMs</option>
+            ${[...new Set(projects.map(p=>p.pm).filter(Boolean))].map(pm=>`<option value="${pm}"${pmFilter===pm?' selected':''}>${pm}</option>`).join('')}
+          </select>
+        </div>
+        <span style="font-size:11px;color:var(--gray-500)">Health score top-right · ✓ Complete to archive</span>
       </div>
       <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
     </div>
@@ -623,7 +635,16 @@ function renderOverview(){
   const proj=projects.find(p=>p.id===selectedProjId);
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
   const msHtml=projMs.map(m=>{const st=msStatus(m.date);return`<div class="ms-item ${st.cls}" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')" title="Click to edit"><div class="ms-type">${TYPE_LBL[m.key]||m.key}</div><div class="ms-label">${m.label}</div><div class="ms-date">${fmtFull(m.date)}</div><div class="ms-days ${st.dcls}">${st.txt}</div><div class="ms-edit-hint">click to edit</div></div>`;}).join('');
-  const pillsHtml=projects.map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('');
+  const pillsHtml=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
+    <div class="proj-pills" style="margin-bottom:0;flex:1">${projects.filter(p=>!pmFilter||(p.pm===pmFilter)).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
+    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+      <label style="font-size:11px;color:var(--gray-500);white-space:nowrap">PM:</label>
+      <select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pmFilter=this.value;renderOverview()">
+        <option value="">All</option>
+        ${[...new Set(projects.map(p=>p.pm).filter(Boolean))].map(pm=>`<option value="${pm}"${pmFilter===pm?' selected':''}>${pm}</option>`).join('')}
+      </select>
+    </div>
+  </div>`;
   el.innerHTML=`
     <div class="metrics-row" style="grid-template-columns:repeat(4,1fr)">
       <div class="metric"><div class="metric-label">Total projects</div><div class="metric-val">${projects.length}</div></div>
@@ -631,7 +652,7 @@ function renderOverview(){
       <div class="metric"><div class="metric-label">Next 14 days</div><div class="metric-val">${upcoming}</div></div>
       <div class="metric"><div class="metric-label">Overdue</div><div class="metric-val ${overdue>0?'red':''}">${overdue}</div></div>
     </div>
-    <div class="proj-pills">${pillsHtml}</div>
+    ${pillsHtml}
     ${proj?`<div class="section">
       <div class="section-head">
         <div class="section-title">${proj.name} <span style="font-size:11px;font-weight:400;color:var(--gray-500)">— ${proj.client}</span></div>
@@ -1104,15 +1125,25 @@ function openEditProj(id){
   const proj=projects.find(p=>p.id===id);if(!proj)return;
   const projMs=milestones.filter(m=>m.project_id===id);
   const msRows=projMs.map(m=>`<div style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${m.label}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="deleteMs('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">×</button></div>`).join('');
-  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:540px" onclick="event.stopPropagation()">
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:560px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
     <div class="modal-head"><span class="modal-title">Edit project</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <div class="form-grid" style="margin-bottom:14px">
-        <div class="field"><label>Project name</label><input id="ep-name" value="${proj.name||''}"></div>
+      <div class="form-grid" style="margin-bottom:12px">
+        <div class="field"><label>Project name</label><input id="ep-name" value="${proj.name||''}""></div>
         <div class="field"><label>SO number</label><input id="ep-so" value="${proj.so_number||''}" style="font-family:var(--mono)"></div>
-        <div class="field"><label>Client</label><input id="ep-client" value="${proj.client||''}"></div>
+        <div class="field"><label>Client</label><input id="ep-client" value="${proj.client||''}""></div>
+        <div class="field"><label>Project Manager</label><input id="ep-pm" value="${proj.pm||''}" placeholder="PM name"></div>
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
-        <div class="field full"><label>Notes</label><textarea id="ep-notes" style="min-height:60px">${proj.notes||''}</textarea></div>
+        <div class="field full"><label>Notes</label><textarea id="ep-notes" style="min-height:55px">${proj.notes||''}</textarea></div>
+      </div>
+      <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">🔗 Links — auto-populate into Generate Docs</div>
+      <div class="form-grid" style="margin-bottom:12px">
+        <div class="field full"><label>Odoo task URL</label><input id="ep-odoo" value="${proj.odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..."></div>
+        <div class="field full"><label>Jira / UI task URL</label><input id="ep-jira" value="${proj.ui_task_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..."></div>
+        <div class="field full"><label>QA task URL</label><input id="ep-qa" value="${proj.qa_task_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..."></div>
+        <div class="field full"><label>Product template URL</label><input id="ep-product" value="${proj.product_template_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..."></div>
+        <div class="field full"><label>Badge reader URL</label><input id="ep-badge" value="${proj.badge_reader_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..."></div>
+        <div class="field full"><label>Employee list URL</label><input id="ep-employee" value="${proj.employee_list_url||''}" placeholder="SharePoint or Jira link..."></div>
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">Milestone dates</div>
       ${msRows}
@@ -1122,7 +1153,21 @@ function openEditProj(id){
 }
 async function saveEditProj(id){
   const proj=projects.find(p=>p.id===id);
-  const{error}=await sb.from('projects').update({name:document.getElementById('ep-name').value.trim(),so_number:document.getElementById('ep-so').value.trim(),client:document.getElementById('ep-client').value.trim(),status:document.getElementById('ep-status').value,notes:document.getElementById('ep-notes').value,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',id);
+  const{error}=await sb.from('projects').update({
+    name:document.getElementById('ep-name').value.trim(),
+    so_number:document.getElementById('ep-so').value.trim(),
+    client:document.getElementById('ep-client').value.trim(),
+    pm:document.getElementById('ep-pm').value.trim(),
+    status:document.getElementById('ep-status').value,
+    notes:document.getElementById('ep-notes').value,
+    odoo_url:document.getElementById('ep-odoo').value.trim(),
+    ui_task_url:document.getElementById('ep-jira').value.trim(),
+    qa_task_url:document.getElementById('ep-qa').value.trim(),
+    product_template_url:document.getElementById('ep-product').value.trim(),
+    badge_reader_url:document.getElementById('ep-badge').value.trim(),
+    employee_list_url:document.getElementById('ep-employee').value.trim(),
+    changed_by:currentUserName,changed_at:new Date().toISOString()
+  }).eq('id',id);
   if(error){alert('Error: '+error.message);return;}
   const projMs=milestones.filter(m=>m.project_id===id);
   for(const m of projMs){
@@ -1271,11 +1316,13 @@ function renderInstallForm(){
     ${fld('if-poc-name','POC name & title','e.g. Joshua Emperador, Inside Sales Lead','full')}
     ${fld('if-poc-email','POC email','e.g. j@google.com','')}
     ${fld('if-poc-phone','POC phone','','')}
-    <div class="doc-section-lbl">Links & references</div>
-    ${fld('if-odoo','Odoo task link','https://signifisolutions.odoo.com/...','full')}
-    ${fld('if-ui-task','UI task link','https://signifisolutions.atlassian.net/...','')}
-    ${fld('if-qa-task','QA task link','https://signifisolutions.atlassian.net/...','')}
-    ${fld('if-template','Product template link','','')}
+    <div class="doc-section-lbl">Links (auto-filled from project edit — update via Project Overview → Edit)</div>
+    ${fld('if-odoo','Odoo task link','https://signifisolutions.odoo.com/...','full','text',p.odoo_url||'')}
+    ${fld('if-ui-task','UI task link (Jira)','https://signifisolutions.atlassian.net/...','full','text',p.ui_task_url||'')}
+    ${fld('if-qa-task','QA task link (Jira)','https://signifisolutions.atlassian.net/...','full','text',p.qa_task_url||'')}
+    ${fld('if-template','Product template link','https://signifisolutions.atlassian.net/...','full','text',p.product_template_url||'')}
+    ${fld('if-badge','Badge reader link','https://signifisolutions.atlassian.net/...','full','text',p.badge_reader_url||'')}
+    ${fld('if-employee','Employee list link','https://...','full','text',p.employee_list_url||'')}
     ${fldTA('if-scope','Scope of work (leave blank for standard)','1. Deliver and install...\n2. Position unit...')}
     ${fldTA('if-special','Special requirements','Any special notes...')}
   </div>
@@ -1338,11 +1385,11 @@ function renderQAForm(){
     <div class="doc-section-lbl">Workflows</div>
     ${fld('qf-workflows','Workflows','e.g. Vending, Pick-up, Drop-off, Pre-approved vending','full')}
     <div class="doc-section-lbl">Links</div>
-    ${fld('qf-jira-task','UI task link (Jira)','https://signifisolutions.atlassian.net/...','')}
-    ${fld('qf-jira-product','Product template link (Jira)','https://signifisolutions.atlassian.net/...','')}
-    ${fld('qf-jira-badge','Badge reader Jira link','https://signifisolutions.atlassian.net/...','')}
+    ${fld('qf-jira-task','UI task link (Jira)','https://signifisolutions.atlassian.net/...','full','text',p.ui_task_url||'')}
+    ${fld('qf-jira-product','Product template link (Jira)','https://signifisolutions.atlassian.net/...','full','text',p.product_template_url||'')}
+    ${fld('qf-jira-badge','Badge reader Jira link','https://signifisolutions.atlassian.net/...','full','text',p.badge_reader_url||'')}
     ${fld('qf-taxes','Applicable taxes','e.g. N/A','')}
-    ${fld('qf-employee','Employee list template','e.g. N/A - extracted from ServiceNow','')}
+    ${fld('qf-employee','Employee list template','e.g. N/A - extracted from ServiceNow','full','text',p.employee_list_url||'')}
     ${fldTA('qf-special','Special requirements','e.g. iPhones in two lanes on shelf 2 are pre-authorized vending...')}
   </div>
   <button class="btn-red" style="font-size:12px;padding:8px 20px;margin-top:4px" onclick="generateDoc('qa')">Generate QA task →</button>
@@ -1397,11 +1444,16 @@ Sales Order (SO): ${g('if-so')}
 23. Plug Type: ${g('if-plug')}
 24. Point of Contact (POC): ${g('if-poc-name')} ${g('if-poc-email')} ${g('if-poc-phone')}
 25. QA Task: ${g('if-qa-task')}
-${g('if-odoo')?`\nOdoo Task: ${g('if-odoo')}`:''}
+${g('if-badge')?`26. Badge Reader Link: ${g('if-badge')}`:''}
+${g('if-employee')?`27. Employee List: ${g('if-employee')}`:''}
+${g('if-odoo')?`
+Odoo Task: ${g('if-odoo')}`:''}
 
 Scope of Work:
 ${scope}
-${g('if-special')?`\nSpecial Requirements:\n${g('if-special')}`:''}`;
+${g('if-special')?`
+Special Requirements:
+${g('if-special')}`:''}`;
   } else if(type==='ui'){
     text=`UI REQUEST
 ${'─'.repeat(50)}
@@ -1545,4 +1597,3 @@ function applyTemplateToIntake(){
 loadAll();
 </script>
 </body>
-</html>
