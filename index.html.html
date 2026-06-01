@@ -236,6 +236,44 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .empty-state{text-align:center;padding:2.5rem;color:var(--gray-500);font-size:12px;}
 .actions-row{display:flex;align-items:center;gap:7px;padding:12px 16px;border-top:1px solid var(--gray-100);}
 /* ── PRINT ── */
+/* ── PROJECT PAGE ── */
+.pp-header{background:var(--black);color:white;border-radius:var(--radius-lg);padding:20px 24px;margin-bottom:14px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;}
+.pp-title{font-size:20px;font-weight:600;letter-spacing:-0.01em;margin-bottom:4px;}
+.pp-meta{font-size:12px;color:#888;display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;}
+.pp-status{font-size:12px;padding:4px 12px;border-radius:20px;font-weight:600;}
+.pp-status-green{background:#1a7a4a;color:white;}.pp-status-amber{background:#8a5a00;color:white;}.pp-status-red{background:var(--red);color:white;}
+.pp-grid{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:12px;}
+.pp-card{background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);overflow:hidden;}
+.pp-card-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--gray-100);background:var(--gray-50);}
+.pp-card-title{font-size:11px;font-weight:600;color:var(--black);text-transform:uppercase;letter-spacing:0.05em;}
+.pp-card-body{padding:12px 14px;}
+.pp-textarea{width:100%;font-family:var(--font);font-size:13px;border:none;resize:vertical;min-height:80px;background:transparent;outline:none;line-height:1.6;color:var(--gray-700);}
+.pp-textarea:focus{background:var(--gray-50);border-radius:var(--radius);padding:6px;}
+.pp-table{width:100%;border-collapse:collapse;font-size:12px;}
+.pp-table th{font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 8px;text-align:left;border-bottom:1px solid var(--gray-100);white-space:nowrap;background:var(--gray-50);}
+.pp-table td{padding:6px 8px;border-bottom:1px solid var(--gray-50);vertical-align:middle;color:var(--black);}
+.pp-table tr:last-child td{border-bottom:none;}
+.pp-table tr:hover td{background:var(--gray-50);}
+.pp-table input,.pp-table select{font-family:var(--font);font-size:12px;padding:3px 6px;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--black);width:100%;min-width:0;}
+.pp-table input:focus,.pp-table select:focus{border-color:var(--gray-300);background:var(--white);outline:none;}
+.pp-del{background:none;border:none;cursor:pointer;color:var(--gray-200);font-size:14px;padding:2px 4px;}
+.pp-del:hover{color:var(--red);}
+.pp-add-btn{font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:7px 14px;font-family:var(--font);border-top:1px solid var(--gray-100);width:100%;text-align:left;}
+.pp-add-btn:hover{background:var(--gray-50);}
+.pp-link-item{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--gray-50);}
+.pp-link-item:last-child{border-bottom:none;}
+.pp-link-label{font-size:11px;color:var(--gray-500);min-width:110px;flex-shrink:0;}
+.pp-link-input{font-size:12px;flex:1;padding:3px 7px;border:1px solid var(--gray-200);border-radius:4px;font-family:var(--font);color:var(--blue);min-width:0;}
+.pp-link-input:focus{outline:none;border-color:var(--blue);}
+.pp-link-go{font-size:13px;flex-shrink:0;opacity:0.5;}
+.pp-link-go:hover{opacity:1;}
+.pp-notes-ta{width:100%;font-family:var(--font);font-size:12px;padding:8px;border:1px solid var(--gray-200);border-radius:var(--radius);resize:vertical;min-height:90px;color:var(--black);line-height:1.6;}
+.pp-notes-ta:focus{outline:none;border-color:var(--black);}
+.proj-sel-bar{display:flex;align-items:center;gap:10px;margin-bottom:1rem;padding:10px 14px;background:var(--gray-50);border:1px solid var(--gray-100);border-radius:var(--radius-lg);}
+.proj-sel-bar label{font-size:12px;font-weight:600;color:var(--gray-700);white-space:nowrap;}
+.proj-sel-bar select{font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);flex:1;}
+.pp-saved{font-size:11px;color:var(--success);margin-left:8px;display:none;}
+/* ── DOC TABS ── */
 .doc-tabs{display:flex;gap:4px;margin-bottom:1rem;}
 .doc-tab{font-size:12px;padding:6px 16px;border-radius:var(--radius);border:1px solid var(--gray-300);cursor:pointer;color:var(--gray-700);background:var(--white);font-family:var(--font);font-weight:500;}
 .doc-tab:hover{background:var(--gray-100);}
@@ -315,6 +353,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
           <div class="nav-group-label">Overview</div>
           <button class="nav-item active" id="ni-glance" onclick="setTab('glance')"><span class="nav-item-dot" style="background:#6b6b6b"></span>At a glance</button>
           <button class="nav-item" id="ni-overview" onclick="setTab('overview')"><span class="nav-item-dot" style="background:#6b6b6b"></span>Project overview</button>
+          <button class="nav-item" id="ni-projpage" onclick="setTab('projpage')"><span class="nav-item-dot" style="background:#6b6b6b"></span>Project page</button>
           <button class="nav-item" id="ni-week" onclick="setTab('week')"><span class="nav-item-dot" style="background:#6b6b6b"></span>This week</button>
           <div class="nav-sep"></div>
           <div class="nav-group-label">Departments</div>
@@ -349,6 +388,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
   <div class="page-body">
     <div id="tab-glance"></div>
     <div id="tab-overview" style="display:none"></div>
+    <div id="tab-projpage" style="display:none"></div>
     <div id="tab-week" style="display:none"></div>
     <div id="tab-production" style="display:none"></div>
     <div id="tab-quality" style="display:none"></div>
@@ -489,12 +529,12 @@ function setTab(tab){
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','overview','week','production','quality','shipping','installation','vinyl','planogram','briefing','log','gendocs','templates','intake'];
+  const ALL=['glance','overview','projpage','week','production','quality','shipping','installation','vinyl','planogram','briefing','log','gendocs','templates','intake'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
 function renderTab(){
-  const m={glance:renderGlance,overview:renderOverview,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake};
+  const m={glance:renderGlance,overview:renderOverview,projpage:renderProjPage,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake};
   if(m[currentTab])m[currentTab]();
 }
 
@@ -781,7 +821,7 @@ function renderVinyl(){
       <td style="${readStyle}">${item.pm||'—'}</td>
       <td style="${readStyle}">${item.formFactor||'—'}</td>
       <td><select class="sched-select" onchange="vs(${origIdx},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
-      <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">×</button></td>
+      <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">✕</button></td>
     </tr>`;
   }).join('');
   el.innerHTML=`<div class="section">
@@ -841,7 +881,7 @@ function renderPlanogram(){
       <td><input class="sched-input" value="${item.machineType||''}" style="width:120px" onchange="ps2(${origIdx},'machineType',this.value)"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${origIdx},'date',this.value,'planogram')"></td>
       <td><select class="sched-select" onchange="ps2(${origIdx},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
-      <td><button onclick="removeSchedRow('planogram',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">×</button></td>
+      <td><button onclick="removeSchedRow('planogram',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></td>
     </tr>`;
   }).join('');
   el.innerHTML=`<div class="section">
@@ -1124,9 +1164,9 @@ function clearIntake(){document.querySelectorAll('#tab-intake input,#tab-intake 
 function openEditProj(id){
   const proj=projects.find(p=>p.id===id);if(!proj)return;
   const projMs=milestones.filter(m=>m.project_id===id);
-  const msRows=projMs.map(m=>`<div style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${m.label}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="deleteMs('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">×</button></div>`).join('');
+  const msRows=projMs.map(m=>`<div style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${m.label}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="deleteMs('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></div>`).join('');
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:560px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
-    <div class="modal-head"><span class="modal-title">Edit project</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-head"><span class="modal-title">Edit project</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
       <div class="form-grid" style="margin-bottom:12px">
         <div class="field"><label>Project name</label><input id="ep-name" value="${proj.name||''}""></div>
@@ -1182,7 +1222,7 @@ async function saveEditProj(id){
 }
 function openEditMs(id,label,date){
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:340px" onclick="event.stopPropagation()">
-    <div class="modal-head"><span class="modal-title">Edit milestone</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-head"><span class="modal-title">Edit milestone</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
       <div class="field" style="margin-bottom:10px"><label>Label</label><input value="${label}" id="em-lbl" style="font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>
       <div class="field"><label>Date</label><input type="date" id="em-dt" value="${date||''}" style="font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>
@@ -1206,7 +1246,7 @@ function openAddEvModal(){
   const projOpts=projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
   const typeOpts=Object.entries(TYPE_LBL).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
-    <div class="modal-head"><span class="modal-title">Add milestone</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-head"><span class="modal-title">Add milestone</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body"><div class="form-grid"><div class="field"><label>Project</label><select id="em-proj">${projOpts}</select></div><div class="field"><label>Type</label><select id="em-type">${typeOpts}</select></div><div class="field full"><label>Label</label><input id="em-label" placeholder="e.g. Parts arrive — batch 3"></div><div class="field"><label>Date</label><input id="em-date" type="date" value="${isoD(today())}"></div></div></div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEv()">Add</button></div>
   </div></div>`;
@@ -1242,7 +1282,375 @@ function exportToExcel(){
   XLSX.writeFile(wb,'Signifi_Ops_'+new Date().toISOString().split('T')[0]+'.xlsx');showToast('Excel downloaded ✓');
 }
 
-// ── GENERATE DOCS ─────────────────────────────────────────
+// ── PROJECT PAGE ───────────────────────────────────────────
+let ppProjId=null;
+let ppData={team:[],actions:[],risks:[],decisions:[],sections:{},links:[]};
+let ppSaveTimer=null;
+
+async function loadProjPage(pid){
+  ppProjId=pid;
+  const[team,actions,risks,decisions,sections,links]=await Promise.all([
+    sb.from('project_team').select('*').eq('project_id',pid).order('sort_order'),
+    sb.from('action_items').select('*').eq('project_id',pid).order('created_at'),
+    sb.from('risks').select('*').eq('project_id',pid).order('created_at'),
+    sb.from('decisions').select('*').eq('project_id',pid).order('decision_date',{ascending:false}),
+    sb.from('project_sections').select('*').eq('project_id',pid),
+    sb.from('project_links').select('*').eq('project_id',pid).order('sort_order'),
+  ]);
+  ppData={
+    team:team.data||[],
+    actions:actions.data||[],
+    risks:risks.data||[],
+    decisions:decisions.data||[],
+    sections:Object.fromEntries((sections.data||[]).map(s=>[s.section_key,s])),
+    links:links.data||[],
+  };
+}
+
+function renderProjPage(){
+  const el=document.getElementById('tab-projpage');
+  if(!projects.length){el.innerHTML='<div class="empty-state">No projects yet.</div>';return;}
+  if(!ppProjId)ppProjId=selectedProjId||projects[0].id;
+  const projOpts=projects.map(p=>`<option value="${p.id}"${p.id===ppProjId?' selected':''}>${p.name}</option>`).join('');
+  el.innerHTML=`
+    <div class="proj-sel-bar">
+      <label>Project</label>
+      <select onchange="switchProjPage(this.value)">${projOpts}</select>
+      <span id="pp-saved" class="pp-saved">Saved ✓</span>
+    </div>
+    <div id="pp-body"><div style="text-align:center;padding:3rem;color:var(--gray-500)">Loading...</div></div>`;
+  loadProjPage(ppProjId).then(()=>renderProjPageBody());
+}
+
+async function switchProjPage(id){
+  ppProjId=id;
+  selectedProjId=id;
+  document.getElementById('pp-body').innerHTML='<div style="text-align:center;padding:3rem;color:var(--gray-500)">Loading...</div>';
+  await loadProjPage(id);
+  renderProjPageBody();
+}
+
+function getSection(key){return ppData.sections[key]?.content||'';}
+
+function renderProjPageBody(){
+  const proj=projects.find(p=>p.id===ppProjId);
+  if(!proj){return;}
+  const pMs=milestones.filter(m=>m.project_id===ppProjId);
+  const statusVal=getSection('status')||'on-track';
+  const statusCls=statusVal==='on-track'?'pp-status-green':statusVal==='at-risk'?'pp-status-amber':'pp-status-red';
+  const statusLbl=statusVal==='on-track'?'🟢 On Track':statusVal==='at-risk'?'🟡 At Risk':'🔴 Off Track';
+  const goLive=pMs.find(m=>m.key==='installation')?.date||'';
+  const phase=getSection('phase')||'Execution';
+
+  // Quick links — merge saved + project links
+  const LINK_CATS=[
+    {cat:'Meetings',items:[{label:'Kickoff recording',key:'kickoff_rec'},{label:'Meeting minutes',key:'meeting_min'},{label:'Project calendar',key:'proj_cal'}]},
+    {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Project Charter',key:'charter'},{label:'Requirements',key:'requirements'},{label:'Site Survey',key:'site_survey'},{label:'Deployment Plan',key:'deploy_plan'}]},
+    {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira Board',key:'jira'},{label:'Odoo Task',key:'odoo'},{label:'Client Portal',key:'client_portal'}]},
+  ];
+  const linkVals=Object.fromEntries(ppData.links.map(l=>[l.label,l.url]));
+  // Pre-fill from project record
+  if(proj.odoo_url)linkVals['Odoo Task']=proj.odoo_url;
+  if(proj.ui_task_url)linkVals['Jira Board']=proj.ui_task_url;
+
+  const linksHtml=LINK_CATS.map(cat=>`
+    <div style="margin-bottom:10px">
+      <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">${cat.cat}</div>
+      ${cat.items.map(item=>{
+        const val=linkVals[item.label]||'';
+        return`<div class="pp-link-item">
+          <span class="pp-link-label">${item.label}</span>
+          <input class="pp-link-input" value="${val}" placeholder="https://..." onchange="savePPLink('${item.label}',this.value)" data-link="${item.label}">
+          ${val?`<a href="${val}" target="_blank" class="pp-link-go" title="Open">↗</a>`:'<span class="pp-link-go"> </span>'}
+        </div>`;
+      }).join('')}
+    </div>`).join('');
+
+  // Team table
+  const DEFAULT_ROLES=['Executive Sponsor','Client Lead','Project Manager','Technical Lead','Operations Lead','Logistics Lead','QA Lead'];
+  const teamRows=ppData.team.length?ppData.team:DEFAULT_ROLES.map(r=>({id:'new-'+Math.random(),role:r,name:'',organization:'',email:'',_new:true}));
+  const teamHtml=teamRows.map(m=>`<tr data-id="${m.id}">
+    <td><input value="${m.role||''}" placeholder="Role" onchange="ppTeamChange('${m.id}','role',this.value)"></td>
+    <td><input value="${m.name||''}" placeholder="Name" onchange="ppTeamChange('${m.id}','name',this.value)"></td>
+    <td><input value="${m.organization||''}" placeholder="Org" onchange="ppTeamChange('${m.id}','organization',this.value)"></td>
+    <td><input value="${m.email||''}" placeholder="Email" onchange="ppTeamChange('${m.id}','email',this.value)"></td>
+    <td class="pp-actions"><button class="pp-del" onclick="ppDelTeam('${m.id}')">✕</button></td>
+  </tr>`).join('');
+
+  // Milestones from hub
+  const MILESTONE_LABELS=['po-release','production-start','production-end','quality-start','quality-end','uat','shipping','delivery','installation'];
+  const msHtml=MILESTONE_LABELS.map(key=>{
+    const m=pMs.find(x=>x.key===key);
+    if(!m)return'';
+    const d=daysDiff(m.date);
+    const chip=d<0?'chip-done':d===0?'chip-active':d<=7?'chip-atrisk':'chip-future';
+    const lbl=d<0?'Done':d===0?'Today':'In '+d+'d';
+    return`<tr><td style="font-weight:500">${m.label}</td><td class="date-cell">${fmt(m.date)}</td><td><span class="status-chip ${chip}">${lbl}</span></td><td><button class="pp-del" style="color:var(--blue);font-size:11px" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')">edit</button></td></tr>`;
+  }).join('');
+
+  // Action items
+  const aiHtml=ppData.actions.map(a=>`<tr data-id="${a.id}">
+    <td><input value="${a.owner||''}" placeholder="Owner" style="width:90px" onchange="ppAIChange('${a.id}','owner',this.value)"></td>
+    <td><input value="${a.description||''}" placeholder="Action item" onchange="ppAIChange('${a.id}','description',this.value)"></td>
+    <td><input type="date" value="${a.due_date||''}" onchange="ppAIChange('${a.id}','due_date',this.value)"></td>
+    <td><select class="pp-status-sel ${a.status==='Done'?'status-done':a.status==='At Risk'?'status-risk':a.status==='On Hold'?'status-hold':'status-open'}" onchange="ppAIChange('${a.id}','status',this.value);this.className='pp-status-sel '+(this.value==='Done'?'status-done':this.value==='At Risk'?'status-risk':this.value==='On Hold'?'status-hold':'status-open')">
+      <option${a.status==='Open'?' selected':''}>Open</option>
+      <option${a.status==='Done'?' selected':''}>Done</option>
+      <option${a.status==='At Risk'?' selected':''}>At Risk</option>
+      <option${a.status==='On Hold'?' selected':''}>On Hold</option>
+    </select></td>
+    <td class="pp-actions"><button class="pp-del" onclick="ppDelAI('${a.id}')">✕</button></td>
+  </tr>`).join('');
+
+  // Risks
+  const riskHtml=ppData.risks.filter(r=>r.type==='Risk').map(r=>`<tr data-id="${r.id}">
+    <td><input value="${r.description||''}" placeholder="Risk" onchange="ppRiskChange('${r.id}','description',this.value)"></td>
+    <td><input value="${r.impact||''}" placeholder="Impact" style="width:80px" onchange="ppRiskChange('${r.id}','impact',this.value)"></td>
+    <td><input value="${r.mitigation||''}" placeholder="Mitigation" onchange="ppRiskChange('${r.id}','mitigation',this.value)"></td>
+    <td><input value="${r.owner||''}" placeholder="Owner" style="width:80px" onchange="ppRiskChange('${r.id}','owner',this.value)"></td>
+    <td><select class="pp-status-sel ${r.status==='Closed'?'status-done':r.status==='Active'?'status-risk':'status-open'}" onchange="ppRiskChange('${r.id}','status',this.value)">
+      <option${r.status==='Open'?' selected':''}>Open</option><option${r.status==='Active'?' selected':''}>Active</option><option${r.status==='Closed'?' selected':''}>Closed</option>
+    </select></td>
+    <td class="pp-actions"><button class="pp-del" onclick="ppDelRisk('${r.id}')">✕</button></td>
+  </tr>`).join('');
+
+  const issueHtml=ppData.risks.filter(r=>r.type==='Issue').map(r=>`<tr data-id="${r.id}">
+    <td><input value="${r.description||''}" placeholder="Issue" onchange="ppRiskChange('${r.id}','description',this.value)"></td>
+    <td><input value="${r.owner||''}" placeholder="Owner" style="width:80px" onchange="ppRiskChange('${r.id}','owner',this.value)"></td>
+    <td><input value="${r.mitigation||''}" placeholder="Target resolution" onchange="ppRiskChange('${r.id}','mitigation',this.value)"></td>
+    <td><select class="pp-status-sel ${r.status==='Closed'?'status-done':'status-open'}" onchange="ppRiskChange('${r.id}','status',this.value)">
+      <option${r.status==='Open'?' selected':''}>Open</option><option${r.status==='Closed'?' selected':''}>Closed</option>
+    </select></td>
+    <td class="pp-actions"><button class="pp-del" onclick="ppDelRisk('${r.id}')">✕</button></td>
+  </tr>`).join('');
+
+  // Decisions
+  const decHtml=ppData.decisions.map(d=>`<tr data-id="${d.id}">
+    <td><input type="date" value="${d.decision_date||''}" style="width:120px" onchange="ppDecChange('${d.id}','decision_date',this.value)"></td>
+    <td><input value="${d.description||''}" placeholder="Decision" onchange="ppDecChange('${d.id}','description',this.value)"></td>
+    <td><input value="${d.approved_by||''}" placeholder="Approved by" style="width:110px" onchange="ppDecChange('${d.id}','approved_by',this.value)"></td>
+    <td class="pp-actions"><button class="pp-del" onclick="ppDelDec('${d.id}')">✕</button></td>
+  </tr>`).join('');
+
+  document.getElementById('pp-body').innerHTML=`
+    <!-- HEADER -->
+    <div class="pp-header">
+      <div style="flex:1;min-width:0">
+        <div class="pp-title">${proj.name}</div>
+        <div class="pp-meta">
+          <span>📋 SO: <strong>${proj.so_number||'—'}</strong></span>
+          <span>👤 PM: <strong>${proj.pm||'—'}</strong></span>
+          <span>🏢 ${proj.client||'—'}</span>
+          ${goLive?`<span>🎯 Go-live: <strong>${fmt(goLive)}</strong></span>`:''}
+        </div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
+          <select class="pp-status ${statusCls}" style="border:none;cursor:pointer;font-family:var(--font);font-size:12px;font-weight:600;padding:4px 12px;border-radius:20px" onchange="savePPSection('status',this.value);this.className='pp-status '+(this.value==='on-track'?'pp-status-green':this.value==='at-risk'?'pp-status-amber':'pp-status-red')">
+            <option value="on-track"${statusVal==='on-track'?' selected':''}>🟢 On Track</option>
+            <option value="at-risk"${statusVal==='at-risk'?' selected':''}>🟡 At Risk</option>
+            <option value="off-track"${statusVal==='off-track'?' selected':''}>🔴 Off Track</option>
+          </select>
+          <span style="font-size:12px;color:#888">Phase:</span>
+          <input value="${phase}" style="font-size:12px;background:rgba(255,255,255,0.1);border:none;border-bottom:1px solid #444;color:white;padding:2px 6px;font-family:var(--font);width:120px" onchange="savePPSection('phase',this.value)" placeholder="Current phase">
+          <span style="font-size:11px;color:#555">Last updated: ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROW 1: Summary + Quick Links -->
+    <div class="pp-grid">
+      <div class="pp-card">
+        <div class="pp-card-head"><span class="pp-card-title">Project summary</span><span style="font-size:10px;color:var(--gray-400)">Click to edit</span></div>
+        <div class="pp-card-body">
+          <textarea class="pp-textarea" placeholder="Brief 3-5 sentence summary of current project status, major accomplishments, upcoming milestones, and any concerns requiring attention..." onchange="savePPSection('summary',this.value)" style="min-height:100px">${getSection('summary')}</textarea>
+        </div>
+      </div>
+      <div class="pp-card">
+        <div class="pp-card-head"><span class="pp-card-title">Quick links</span></div>
+        <div class="pp-card-body" style="max-height:280px;overflow-y:auto">${linksHtml}</div>
+      </div>
+    </div>
+
+    <!-- ROW 2: Team + Milestones -->
+    <div class="pp-grid">
+      <div class="pp-card">
+        <div class="pp-card-head"><span class="pp-card-title">Project team</span></div>
+        <div style="overflow-x:auto">
+          <table class="pp-table">
+            <thead><tr><th>Role</th><th>Name</th><th>Organization</th><th>Email</th><th style="width:28px"></th></tr></thead>
+            <tbody id="pp-team">${teamHtml}</tbody>
+          </table>
+        </div>
+        <button class="pp-add-btn" onclick="ppAddTeam()">+ Add team member</button>
+      </div>
+      <div class="pp-card">
+        <div class="pp-card-head"><span class="pp-card-title">Milestone tracker</span><span style="font-size:10px;color:var(--gray-400)">Synced from hub</span></div>
+        <div style="overflow-x:auto">
+          <table class="pp-table">
+            <thead><tr><th>Milestone</th><th>Date</th><th>Status</th><th style="width:32px"></th></tr></thead>
+            <tbody>${msHtml||'<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--gray-300)">No milestones — add them in Project Overview</td></tr>'}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROW 3: Action items full width -->
+    <div class="pp-card" style="margin-bottom:12px">
+      <div class="pp-card-head"><span class="pp-card-title">Open action items</span><span style="font-size:11px;color:var(--gray-500)">${ppData.actions.filter(a=>a.status!=='Done').length} open</span></div>
+      <div style="overflow-x:auto">
+        <table class="pp-table">
+          <thead><tr><th style="width:90px">Owner</th><th>Action item</th><th style="width:110px">Due date</th><th style="width:90px">Status</th><th style="width:28px"></th></tr></thead>
+          <tbody id="pp-actions">${aiHtml}</tbody>
+        </table>
+      </div>
+      <button class="pp-add-btn" onclick="ppAddAI()">+ Add action item</button>
+    </div>
+
+    <!-- ROW 4: Risks + Issues -->
+    <div class="pp-grid">
+      <div class="pp-card">
+        <div class="pp-card-head"><span class="pp-card-title">Risks</span></div>
+        <div style="overflow-x:auto">
+          <table class="pp-table">
+            <thead><tr><th>Risk</th><th style="width:70px">Impact</th><th>Mitigation</th><th style="width:70px">Owner</th><th style="width:70px">Status</th><th style="width:28px"></th></tr></thead>
+            <tbody id="pp-risks">${riskHtml}</tbody>
+          </table>
+        </div>
+        <button class="pp-add-btn" onclick="ppAddRisk('Risk')">+ Add risk</button>
+      </div>
+      <div class="pp-card">
+        <div class="pp-card-head"><span class="pp-card-title">Issues</span></div>
+        <div style="overflow-x:auto">
+          <table class="pp-table">
+            <thead><tr><th>Issue</th><th style="width:70px">Owner</th><th>Resolution</th><th style="width:70px">Status</th><th style="width:28px"></th></tr></thead>
+            <tbody id="pp-issues">${issueHtml}</tbody>
+          </table>
+        </div>
+        <button class="pp-add-btn" onclick="ppAddRisk('Issue')">+ Add issue</button>
+      </div>
+    </div>
+
+    <!-- ROW 5: Decision log -->
+    <div class="pp-card" style="margin-bottom:12px">
+      <div class="pp-card-head"><span class="pp-card-title">Decision log</span></div>
+      <div style="overflow-x:auto">
+        <table class="pp-table">
+          <thead><tr><th style="width:120px">Date</th><th>Decision</th><th style="width:130px">Approved by</th><th style="width:28px"></th></tr></thead>
+          <tbody id="pp-decisions">${decHtml}</tbody>
+        </table>
+      </div>
+      <button class="pp-add-btn" onclick="ppAddDec()">+ Add decision</button>
+    </div>
+
+    <!-- ROW 6: Internal notes -->
+    <div class="pp-card" style="margin-bottom:12px">
+      <div class="pp-card-head"><span class="pp-card-title">Internal notes</span><span style="font-size:10px;color:var(--gray-400)">Key reminders · Escalations · Follow-ups · Lessons learned</span></div>
+      <div class="pp-card-body">
+        <textarea class="pp-notes-ta" placeholder="Key reminders, escalations, follow-ups, lessons learned..." onchange="savePPSection('notes',this.value)">${getSection('notes')}</textarea>
+      </div>
+    </div>
+
+    <!-- ROW 7: Excel plan link -->
+    <div class="pp-card" style="margin-bottom:12px">
+      <div class="pp-card-head"><span class="pp-card-title">📊 Project plan (Excel)</span><span style="font-size:10px;color:var(--gray-400)">Link to the detailed Gantt — keep complex scheduling in Excel</span></div>
+      <div class="pp-card-body">
+        <div class="pp-link-item">
+          <span class="pp-link-label">Excel plan URL</span>
+          <input class="pp-link-input" value="${linkVals['Excel Plan']||''}" placeholder="SharePoint or OneDrive link to your project plan .xlsm..." onchange="savePPLink('Excel Plan',this.value)" style="max-width:500px">
+          ${linkVals['Excel Plan']?`<a href="${linkVals['Excel Plan']}" target="_blank" class="pp-link-go">↗ Open</a>`:''}
+        </div>
+      </div>
+    </div>`;
+}
+
+// ── PP SAVE HELPERS ────────────────────────────────────────
+function showPPSaved(){
+  const el=document.getElementById('pp-saved');
+  if(!el)return;
+  el.style.display='inline';
+  clearTimeout(ppSaveTimer);
+  ppSaveTimer=setTimeout(()=>{el.style.display='none';},2000);
+}
+
+async function savePPSection(key,value){
+  const existing=ppData.sections[key];
+  if(existing){
+    await sb.from('project_sections').update({content:value,updated_by:currentUserName,updated_at:new Date().toISOString()}).eq('id',existing.id);
+    ppData.sections[key]={...existing,content:value};
+  } else {
+    const{data}=await sb.from('project_sections').insert({project_id:ppProjId,section_key:key,content:value,updated_by:currentUserName}).select().single();
+    if(data)ppData.sections[key]=data;
+  }
+  showPPSaved();
+}
+
+async function savePPLink(label,url){
+  const existing=ppData.links.find(l=>l.label===label);
+  if(existing){
+    await sb.from('project_links').update({url}).eq('id',existing.id);
+    existing.url=url;
+  } else {
+    const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:'',sort_order:ppData.links.length}).select().single();
+    if(data)ppData.links.push(data);
+  }
+  // Update the open link button
+  showPPSaved();
+}
+
+// Team CRUD
+async function ppTeamChange(id,field,val){
+  const item=ppData.team.find(t=>t.id===id);
+  if(item&&!item._new){
+    await sb.from('project_team').update({[field]:val}).eq('id',id);
+    item[field]=val;
+  } else if(item&&item._new){
+    // First change on a new row — insert it
+    const{data}=await sb.from('project_team').insert({project_id:ppProjId,role:item.role,name:item.name,organization:item.organization,email:item.email,[field]:val,sort_order:ppData.team.length}).select().single();
+    if(data){item.id=data.id;item._new=false;Object.assign(item,data);}
+    item[field]=val;
+  }
+  showPPSaved();
+}
+async function ppAddTeam(){
+  const{data}=await sb.from('project_team').insert({project_id:ppProjId,role:'',name:'',organization:'',email:'',sort_order:ppData.team.length}).select().single();
+  if(data){ppData.team.push(data);renderProjPageBody();}
+}
+async function ppDelTeam(id){await sb.from('project_team').delete().eq('id',id);ppData.team=ppData.team.filter(t=>t.id!==id);document.querySelector(`#pp-team [data-id="${id}"]`)?.remove();}
+
+// Action items CRUD
+async function ppAIChange(id,field,val){
+  await sb.from('action_items').update({[field]:val,updated_at:new Date().toISOString()}).eq('id',id);
+  const item=ppData.actions.find(a=>a.id===id);if(item)item[field]=val;
+  showPPSaved();
+}
+async function ppAddAI(){
+  const{data}=await sb.from('action_items').insert({project_id:ppProjId,owner:'',description:'',status:'Open',created_by:currentUserName}).select().single();
+  if(data){ppData.actions.push(data);renderProjPageBody();}
+}
+async function ppDelAI(id){await sb.from('action_items').delete().eq('id',id);ppData.actions=ppData.actions.filter(a=>a.id!==id);document.querySelector(`#pp-actions [data-id="${id}"]`)?.remove();}
+
+// Risk/Issue CRUD
+async function ppRiskChange(id,field,val){
+  await sb.from('risks').update({[field]:val}).eq('id',id);
+  const item=ppData.risks.find(r=>r.id===id);if(item)item[field]=val;
+  showPPSaved();
+}
+async function ppAddRisk(type){
+  const{data}=await sb.from('risks').insert({project_id:ppProjId,type,description:'',impact:'',mitigation:'',owner:'',status:'Open'}).select().single();
+  if(data){ppData.risks.push(data);renderProjPageBody();}
+}
+async function ppDelRisk(id){await sb.from('risks').delete().eq('id',id);ppData.risks=ppData.risks.filter(r=>r.id!==id);document.querySelector(`[data-id="${id}"]`)?.remove();}
+
+// Decision CRUD
+async function ppDecChange(id,field,val){
+  await sb.from('decisions').update({[field]:val}).eq('id',id);
+  const item=ppData.decisions.find(d=>d.id===id);if(item)item[field]=val;
+  showPPSaved();
+}
+async function ppAddDec(){
+  const{data}=await sb.from('decisions').insert({project_id:ppProjId,decision_date:isoD(today()),description:'',approved_by:currentUserName}).select().single();
+  if(data){ppData.decisions.unshift(data);renderProjPageBody();}
+}
+async function ppDelDec(id){await sb.from('decisions').delete().eq('id',id);ppData.decisions=ppData.decisions.filter(d=>d.id!==id);document.querySelector(`#pp-decisions [data-id="${id}"]`)?.remove();}
 let activeDocTab='install';
 let selectedDocProjId=null;
 
@@ -1597,3 +2005,4 @@ function applyTemplateToIntake(){
 loadAll();
 </script>
 </body>
+</html>
