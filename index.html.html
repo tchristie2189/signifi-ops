@@ -1720,8 +1720,33 @@ async function ppAddDec(){
 async function ppDelDec(id){await sb.from('decisions').delete().eq('id',id);ppData.decisions=ppData.decisions.filter(d=>d.id!==id);document.querySelector(`#pp-decisions [data-id="${id}"]`)?.remove();}
 let activeDocTab='install';
 let selectedDocProjId=null;
+// docFormState keyed by projectId so switching projects preserves each project's data
+let docFormState={};
+
+function getDocState(){
+  const pid=selectedDocProjId||'__none';
+  if(!docFormState[pid])docFormState[pid]={install:{},ui:{},qa:{}};
+  return docFormState[pid];
+}
+function saveDocFormState(){
+  const state={};
+  document.querySelectorAll('#tab-gendocs input,#tab-gendocs select,#tab-gendocs textarea').forEach(el=>{if(el.id)state[el.id]=el.value;});
+  getDocState()[activeDocTab]=state;
+}
+function restoreDocFormState(){
+  const state=getDocState()[activeDocTab]||{};
+  Object.entries(state).forEach(([id,val])=>{const el=document.getElementById(id);if(el)el.value=val;});
+  // Restore generated output if any
+  const out=getDocState()[activeDocTab]?.__output;
+  if(out){
+    const outEl=document.getElementById('doc-output-'+activeDocTab);
+    const contEl=document.getElementById('doc-content-'+activeDocTab);
+    if(outEl&&contEl){outEl.style.display='block';contEl.textContent=out;}
+  }
+}
 
 function renderGenDocs(){
+  saveDocFormState();
   const el=document.getElementById('tab-gendocs');
   const projOpts=projects.map(p=>`<option value="${p.id}"${p.id===selectedDocProjId?' selected':''}>${p.name} — ${p.so_number||'No SO'}</option>`).join('');
   el.innerHTML=`
@@ -1733,14 +1758,18 @@ function renderGenDocs(){
           <select onchange="selectedDocProjId=this.value;renderGenDocs()"><option value="">Select project...</option>${projOpts}</select>
           ${selectedDocProjId?`<span style="font-size:11px;color:var(--gray-500)">Dates and client info auto-pulled ✓</span>`:''}
         </div>
-        <div class="doc-tabs">
-          <button class="doc-tab${activeDocTab==='install'?' active':''}" onclick="activeDocTab='install';renderGenDocs()">🔧 Installation ticket</button>
-          <button class="doc-tab${activeDocTab==='ui'?' active':''}" onclick="activeDocTab='ui';renderGenDocs()">🖥 UI request</button>
-          <button class="doc-tab${activeDocTab==='qa'?' active':''}" onclick="activeDocTab='qa';renderGenDocs()">✅ QA task</button>
+        <div class="doc-tabs" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <div style="display:flex;gap:4px">
+            <button class="doc-tab${activeDocTab==='install'?' active':''}" onclick="saveDocFormState();activeDocTab='install';renderGenDocs()">🔧 Installation ticket</button>
+            <button class="doc-tab${activeDocTab==='ui'?' active':''}" onclick="saveDocFormState();activeDocTab='ui';renderGenDocs()">🖥 UI request</button>
+            <button class="doc-tab${activeDocTab==='qa'?' active':''}" onclick="saveDocFormState();activeDocTab='qa';renderGenDocs()">✅ QA task</button>
+          </div>
+          <button onclick="saveDocFormState();generateAllDocs()" style="font-size:12px;padding:6px 16px;border-radius:var(--radius);border:none;background:var(--black);color:white;cursor:pointer;font-family:var(--font);font-weight:600">⚡ Generate all three →</button>
         </div>
         ${activeDocTab==='install'?renderInstallForm():activeDocTab==='ui'?renderUIForm():renderQAForm()}
       </div>
     </div>`;
+  restoreDocFormState();
 }
 
 function getDocProj(){return projects.find(p=>p.id===selectedDocProjId)||{};}
@@ -1996,11 +2025,52 @@ ${g('qf-special')?`\nSpecial Requirements:\n${g('qf-special')}`:''}`;
   document.getElementById(`doc-content-${type}`).textContent=text;
   document.getElementById(`doc-output-${type}`).style.display='block';
   document.getElementById(`doc-output-${type}`).scrollIntoView({behavior:'smooth',block:'nearest'});
+  // Persist the generated output so it survives tab switches
+  getDocState()[type].__output=text;
 }
 
+function generateAllDocs(){
+  // Generate all three docs and show them all on screen at once
+  generateDoc('install');
+  generateDoc('ui');
+  generateDoc('qa');
+  // Switch to a combined view showing all three
+  const el=document.getElementById('tab-gendocs');
+  const instText=getDocState()['install']?.__output||'';
+  const uiText=getDocState()['ui']?.__output||'';
+  const qaText=getDocState()['qa']?.__output||'';
+  const allOutput=document.createElement('div');
+  allOutput.style.cssText='margin-top:1rem';
+  allOutput.innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr;gap:12px">
+      ${[['🔧 Installation ticket','install',instText],['🖥 UI request','ui',uiText],['✅ QA task','qa',qaText]].map(([title,type,text])=>`
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--black);margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
+            <span>${title}</span>
+            <button onclick="copyDocText('all-doc-${type}')" style="font-size:11px;padding:4px 10px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);cursor:pointer;font-family:var(--font)">📋 Copy</button>
+          </div>
+          <div class="doc-output" style="min-height:120px;max-height:300px;overflow-y:auto" id="all-doc-${type}"><span>${text||'(fill in the form fields on the '+type+' tab first)'}</span></div>
+        </div>`).join('')}
+    </div>`;
+  // Remove any existing all-output and append
+  const existing=document.getElementById('all-docs-output');
+  if(existing)existing.remove();
+  allOutput.id='all-docs-output';
+  el.querySelector('.section > div').appendChild(allOutput);
+  allOutput.scrollIntoView({behavior:'smooth',block:'start'});
+  showToast('All three docs generated ✓');
+}
+function copyDocText(elId){
+  const el=document.getElementById(elId);
+  if(!el)return;
+  const text=el.textContent;
+  navigator.clipboard.writeText(text).then(()=>showToast('Copied ✓')).catch(()=>{
+    const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast('Copied ✓');
+  });
+}
 function copyDoc(type){
-  const text=document.getElementById(`doc-content-${type}`).textContent;
-  navigator.clipboard.writeText(text).then(()=>showToast('Copied to clipboard ✓')).catch(()=>{
+  const text=getDocState()[type]?.__output||document.getElementById('doc-content-'+type)?.textContent||'';
+  navigator.clipboard.writeText(text).then(()=>showToast('Copied ✓')).catch(()=>{
     const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast('Copied ✓');
   });
 }
