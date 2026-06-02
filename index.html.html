@@ -1373,7 +1373,7 @@ function renderProjPageBody(){
 
   // Team table
   const DEFAULT_ROLES=['Executive Sponsor','Client Lead','Project Manager','Technical Lead','Operations Lead','Logistics Lead','QA Lead'];
-  const teamRows=ppData.team.length?ppData.team:DEFAULT_ROLES.map(r=>({id:'new-'+Math.random(),role:r,name:'',organization:'',email:'',_new:true}));
+  const teamRows=ppData.team.length?ppData.team:DEFAULT_ROLES.map((r,i)=>({id:'new-'+i,role:r,name:'',organization:'',email:'',_new:true}));
   const teamHtml=teamRows.map(m=>`<tr data-id="${m.id}">
     <td><input value="${m.role||''}" placeholder="Role" onchange="ppTeamChange('${m.id}','role',this.value)"></td>
     <td><input value="${m.name||''}" placeholder="Name" onchange="ppTeamChange('${m.id}','name',this.value)"></td>
@@ -1625,15 +1625,34 @@ async function savePPLink(label,url){
 
 // Team CRUD
 async function ppTeamChange(id,field,val){
-  const item=ppData.team.find(t=>t.id===id);
-  if(item&&!item._new){
+  // If id starts with 'new-' this row hasn't been saved yet — insert it first
+  if(id.startsWith('new-')){
+    const item=ppData.team.find(t=>t.id===id);
+    if(!item)return;
+    item[field]=val;
+    const{data}=await sb.from('project_team').insert({
+      project_id:ppProjId,role:item.role||'',name:item.name||'',
+      organization:item.organization||'',email:item.email||'',
+      sort_order:ppData.team.indexOf(item)
+    }).select().single();
+    if(data){
+      // Update all inputs in this row to use the new real ID
+      const row=document.querySelector(`#pp-team [data-id="${id}"]`);
+      if(row){
+        row.dataset.id=data.id;
+        row.querySelectorAll('input').forEach(inp=>{
+          const oc=inp.getAttribute('onchange')||'';
+          inp.setAttribute('onchange',oc.replace(id,data.id));
+        });
+        row.querySelector('.pp-del')?.setAttribute('onclick',`ppDelTeam('${data.id}')`);
+      }
+      item.id=data.id;
+      delete item._new;
+    }
+  } else {
     await sb.from('project_team').update({[field]:val}).eq('id',id);
-    item[field]=val;
-  } else if(item&&item._new){
-    // First change on a new row — insert it
-    const{data}=await sb.from('project_team').insert({project_id:ppProjId,role:item.role,name:item.name,organization:item.organization,email:item.email,[field]:val,sort_order:ppData.team.length}).select().single();
-    if(data){item.id=data.id;item._new=false;Object.assign(item,data);}
-    item[field]=val;
+    const item=ppData.team.find(t=>t.id===id);
+    if(item)item[field]=val;
   }
   showPPSaved();
 }
@@ -1641,7 +1660,11 @@ async function ppAddTeam(){
   const{data}=await sb.from('project_team').insert({project_id:ppProjId,role:'',name:'',organization:'',email:'',sort_order:ppData.team.length}).select().single();
   if(data){ppData.team.push(data);renderProjPageBody();}
 }
-async function ppDelTeam(id){await sb.from('project_team').delete().eq('id',id);ppData.team=ppData.team.filter(t=>t.id!==id);document.querySelector(`#pp-team [data-id="${id}"]`)?.remove();}
+async function ppDelTeam(id){
+  if(!id.startsWith('new-'))await sb.from('project_team').delete().eq('id',id);
+  ppData.team=ppData.team.filter(t=>t.id!==id);
+  document.querySelector(`#pp-team [data-id="${id}"]`)?.remove();
+}
 
 // Action items CRUD
 async function ppAIChange(id,field,val){
