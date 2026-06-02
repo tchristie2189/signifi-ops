@@ -1728,14 +1728,23 @@ function getDocState(){
   if(!docFormState[pid])docFormState[pid]={install:{},ui:{},qa:{}};
   return docFormState[pid];
 }
+// Fields auto-filled from project record — never restore these from state (they should always reflect the selected project)
+const AUTO_FILL_FIELDS=new Set(['if-so','if-client','if-ship','if-del','if-inst','if-vinyl','if-odoo','if-ui-task','if-qa-task','if-template','if-badge','if-employee','qf-ship','qf-vinyl','qf-jira-task','qf-jira-product','qf-jira-badge','qf-employee','uf-client']);
+
 function saveDocFormState(){
   const state={};
-  document.querySelectorAll('#tab-gendocs input,#tab-gendocs select,#tab-gendocs textarea').forEach(el=>{if(el.id)state[el.id]=el.value;});
+  document.querySelectorAll('#tab-gendocs input,#tab-gendocs select,#tab-gendocs textarea').forEach(el=>{
+    if(el.id&&!AUTO_FILL_FIELDS.has(el.id))state[el.id]=el.value;
+  });
   getDocState()[activeDocTab]=state;
 }
 function restoreDocFormState(){
   const state=getDocState()[activeDocTab]||{};
-  Object.entries(state).forEach(([id,val])=>{const el=document.getElementById(id);if(el)el.value=val;});
+  Object.entries(state).forEach(([id,val])=>{
+    if(AUTO_FILL_FIELDS.has(id))return; // never overwrite auto-filled fields
+    const el=document.getElementById(id);
+    if(el)el.value=val;
+  });
   // Restore generated output if any
   const out=getDocState()[activeDocTab]?.__output;
   if(out){
@@ -1919,8 +1928,18 @@ function renderQAForm(){
   </div>`;
 }
 
-function g(id){const el=document.getElementById(id);return el?el.value.trim():'';}
-
+function g(id){
+  const el=document.getElementById(id);
+  if(el)return el.value.trim();
+  // Auto-fill fields must come from the live project, not stale state
+  if(AUTO_FILL_FIELDS.has(id))return'';
+  // Manual fields — check saved state
+  for(const tab of['install','ui','qa']){
+    const state=getDocState()[tab];
+    if(state&&state[id]!==undefined)return(state[id]||'').trim();
+  }
+  return'';
+}
 function generateDoc(type){
   let text='';
   if(type==='install'){
@@ -2215,4 +2234,3 @@ function exportProjPageExcel(){
 loadAll();
 </script>
 </body>
-</html>
