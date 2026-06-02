@@ -1318,7 +1318,8 @@ function renderProjPage(){
       <select onchange="switchProjPage(this.value)">${projOpts}</select>
       <span id="pp-saved" class="pp-saved">Saved ✓</span>
     </div>
-    <div id="pp-body"><div style="text-align:center;padding:3rem;color:var(--gray-500)">Loading...</div></div>`;
+    <div id="pp-body"><div style="text-align:center;padding:3rem;color:var(--gray-500)"><div style="font-size:20px;margin-bottom:8px">⏳</div>Loading project page...</div></div>`;
+  // Always reload from Supabase when visiting this tab
   loadProjPage(ppProjId).then(()=>renderProjPageBody());
 }
 
@@ -1375,10 +1376,10 @@ function renderProjPageBody(){
   const DEFAULT_ROLES=['Executive Sponsor','Client Lead','Project Manager','Technical Lead','Operations Lead','Logistics Lead','QA Lead'];
   const teamRows=ppData.team.length?ppData.team:DEFAULT_ROLES.map((r,i)=>({id:'new-'+i,role:r,name:'',organization:'',email:'',_new:true}));
   const teamHtml=teamRows.map(m=>`<tr data-id="${m.id}">
-    <td><input value="${m.role||''}" placeholder="Role" onchange="ppTeamChange('${m.id}','role',this.value)"></td>
-    <td><input value="${m.name||''}" placeholder="Name" onchange="ppTeamChange('${m.id}','name',this.value)"></td>
-    <td><input value="${m.organization||''}" placeholder="Org" onchange="ppTeamChange('${m.id}','organization',this.value)"></td>
-    <td><input value="${m.email||''}" placeholder="Email" onchange="ppTeamChange('${m.id}','email',this.value)"></td>
+    <td><input value="${m.role||''}" placeholder="Role" oninput="ppTeamChange('${m.id}','role',this.value)"></td>
+    <td><input value="${m.name||''}" placeholder="Name" oninput="ppTeamChange('${m.id}','name',this.value)"></td>
+    <td><input value="${m.organization||''}" placeholder="Org" oninput="ppTeamChange('${m.id}','organization',this.value)"></td>
+    <td><input value="${m.email||''}" placeholder="Email" oninput="ppTeamChange('${m.id}','email',this.value)"></td>
     <td class="pp-actions"><button class="pp-del" onclick="ppDelTeam('${m.id}')">✕</button></td>
   </tr>`).join('');
 
@@ -1395,10 +1396,10 @@ function renderProjPageBody(){
 
   // Action items
   const aiHtml=ppData.actions.map(a=>`<tr data-id="${a.id}">
-    <td><input value="${a.owner||''}" placeholder="Owner" style="width:90px" onchange="ppAIChange('${a.id}','owner',this.value)"></td>
-    <td><input value="${a.description||''}" placeholder="Action item" onchange="ppAIChange('${a.id}','description',this.value)"></td>
-    <td><input type="date" value="${a.due_date||''}" onchange="ppAIChange('${a.id}','due_date',this.value)"></td>
-    <td><select class="pp-status-sel ${a.status==='Done'?'status-done':a.status==='At Risk'?'status-risk':a.status==='On Hold'?'status-hold':'status-open'}" onchange="ppAIChange('${a.id}','status',this.value);this.className='pp-status-sel '+(this.value==='Done'?'status-done':this.value==='At Risk'?'status-risk':this.value==='On Hold'?'status-hold':'status-open')">
+    <td><input value="${a.owner||''}" placeholder="Owner" style="width:90px" oninput="ppAIChange('${a.id}','owner',this.value)"></td>
+    <td><input value="${a.description||''}" placeholder="Action item" oninput="ppAIChange('${a.id}','description',this.value)"></td>
+    <td><input type="date" value="${a.due_date||''}" oninput="ppAIChange('${a.id}','due_date',this.value)"></td>
+    <td><select class="pp-status-sel ${a.status==='Done'?'status-done':a.status==='At Risk'?'status-risk':a.status==='On Hold'?'status-hold':'status-open'}" oninput="ppAIChange('${a.id}','status',this.value);this.className='pp-status-sel '+(this.value==='Done'?'status-done':this.value==='At Risk'?'status-risk':this.value==='On Hold'?'status-hold':'status-open')">
       <option${a.status==='Open'?' selected':''}>Open</option>
       <option${a.status==='Done'?' selected':''}>Done</option>
       <option${a.status==='At Risk'?' selected':''}>At Risk</option>
@@ -1409,21 +1410,21 @@ function renderProjPageBody(){
 
   // Risks
   const riskHtml=ppData.risks.filter(r=>r.type==='Risk').map(r=>`<tr data-id="${r.id}">
-    <td><input value="${r.description||''}" placeholder="Risk" onchange="ppRiskChange('${r.id}','description',this.value)"></td>
-    <td><input value="${r.impact||''}" placeholder="Impact" style="width:80px" onchange="ppRiskChange('${r.id}','impact',this.value)"></td>
-    <td><input value="${r.mitigation||''}" placeholder="Mitigation" onchange="ppRiskChange('${r.id}','mitigation',this.value)"></td>
-    <td><input value="${r.owner||''}" placeholder="Owner" style="width:80px" onchange="ppRiskChange('${r.id}','owner',this.value)"></td>
-    <td><select class="pp-status-sel ${r.status==='Closed'?'status-done':r.status==='Active'?'status-risk':'status-open'}" onchange="ppRiskChange('${r.id}','status',this.value)">
+    <td><input value="${r.description||''}" placeholder="Risk" oninput="ppRiskChange('${r.id}','description',this.value)"></td>
+    <td><input value="${r.impact||''}" placeholder="Impact" style="width:80px" oninput="ppRiskChange('${r.id}','impact',this.value)"></td>
+    <td><input value="${r.mitigation||''}" placeholder="Mitigation" oninput="ppRiskChange('${r.id}','mitigation',this.value)"></td>
+    <td><input value="${r.owner||''}" placeholder="Owner" style="width:80px" oninput="ppRiskChange('${r.id}','owner',this.value)"></td>
+    <td><select class="pp-status-sel ${r.status==='Closed'?'status-done':r.status==='Active'?'status-risk':'status-open'}" oninput="ppRiskChange('${r.id}','status',this.value)">
       <option${r.status==='Open'?' selected':''}>Open</option><option${r.status==='Active'?' selected':''}>Active</option><option${r.status==='Closed'?' selected':''}>Closed</option>
     </select></td>
     <td class="pp-actions"><button class="pp-del" onclick="ppDelRisk('${r.id}')">✕</button></td>
   </tr>`).join('');
 
   const issueHtml=ppData.risks.filter(r=>r.type==='Issue').map(r=>`<tr data-id="${r.id}">
-    <td><input value="${r.description||''}" placeholder="Issue" onchange="ppRiskChange('${r.id}','description',this.value)"></td>
-    <td><input value="${r.owner||''}" placeholder="Owner" style="width:80px" onchange="ppRiskChange('${r.id}','owner',this.value)"></td>
-    <td><input value="${r.mitigation||''}" placeholder="Target resolution" onchange="ppRiskChange('${r.id}','mitigation',this.value)"></td>
-    <td><select class="pp-status-sel ${r.status==='Closed'?'status-done':'status-open'}" onchange="ppRiskChange('${r.id}','status',this.value)">
+    <td><input value="${r.description||''}" placeholder="Issue" oninput="ppRiskChange('${r.id}','description',this.value)"></td>
+    <td><input value="${r.owner||''}" placeholder="Owner" style="width:80px" oninput="ppRiskChange('${r.id}','owner',this.value)"></td>
+    <td><input value="${r.mitigation||''}" placeholder="Target resolution" oninput="ppRiskChange('${r.id}','mitigation',this.value)"></td>
+    <td><select class="pp-status-sel ${r.status==='Closed'?'status-done':'status-open'}" oninput="ppRiskChange('${r.id}','status',this.value)">
       <option${r.status==='Open'?' selected':''}>Open</option><option${r.status==='Closed'?' selected':''}>Closed</option>
     </select></td>
     <td class="pp-actions"><button class="pp-del" onclick="ppDelRisk('${r.id}')">✕</button></td>
@@ -1431,9 +1432,9 @@ function renderProjPageBody(){
 
   // Decisions
   const decHtml=ppData.decisions.map(d=>`<tr data-id="${d.id}">
-    <td><input type="date" value="${d.decision_date||''}" style="width:120px" onchange="ppDecChange('${d.id}','decision_date',this.value)"></td>
-    <td><input value="${d.description||''}" placeholder="Decision" onchange="ppDecChange('${d.id}','description',this.value)"></td>
-    <td><input value="${d.approved_by||''}" placeholder="Approved by" style="width:110px" onchange="ppDecChange('${d.id}','approved_by',this.value)"></td>
+    <td><input type="date" value="${d.decision_date||''}" style="width:120px" oninput="ppDecChange('${d.id}','decision_date',this.value)"></td>
+    <td><input value="${d.description||''}" placeholder="Decision" oninput="ppDecChange('${d.id}','description',this.value)"></td>
+    <td><input value="${d.approved_by||''}" placeholder="Approved by" style="width:110px" oninput="ppDecChange('${d.id}','approved_by',this.value)"></td>
     <td class="pp-actions"><button class="pp-del" onclick="ppDelDec('${d.id}')">✕</button></td>
   </tr>`).join('');
 
@@ -1624,37 +1625,53 @@ async function savePPLink(label,url){
 }
 
 // Team CRUD
+const ppTeamSaveTimer={};
 async function ppTeamChange(id,field,val){
-  // If id starts with 'new-' this row hasn't been saved yet — insert it first
-  if(id.startsWith('new-')){
-    const item=ppData.team.find(t=>t.id===id);
-    if(!item)return;
-    item[field]=val;
-    const{data}=await sb.from('project_team').insert({
-      project_id:ppProjId,role:item.role||'',name:item.name||'',
-      organization:item.organization||'',email:item.email||'',
-      sort_order:ppData.team.indexOf(item)
-    }).select().single();
-    if(data){
-      // Update all inputs in this row to use the new real ID
-      const row=document.querySelector(`#pp-team [data-id="${id}"]`);
-      if(row){
-        row.dataset.id=data.id;
-        row.querySelectorAll('input').forEach(inp=>{
-          const oc=inp.getAttribute('onchange')||'';
-          inp.setAttribute('onchange',oc.replace(id,data.id));
-        });
-        row.querySelector('.pp-del')?.setAttribute('onclick',`ppDelTeam('${data.id}')`);
-      }
-      item.id=data.id;
-      delete item._new;
-    }
-  } else {
-    await sb.from('project_team').update({[field]:val}).eq('id',id);
-    const item=ppData.team.find(t=>t.id===id);
-    if(item)item[field]=val;
+  // Update local data immediately
+  let item=ppData.team.find(t=>t.id===id);
+  if(!item){
+    // Create a new local item if not found
+    item={id,project_id:ppProjId,role:'',name:'',organization:'',email:''};
+    ppData.team.push(item);
   }
-  showPPSaved();
+  item[field]=val;
+
+  // Debounce the Supabase save by 600ms
+  clearTimeout(ppTeamSaveTimer[id]);
+  ppTeamSaveTimer[id]=setTimeout(async()=>{
+    if(id.startsWith('new-')){
+      // New row — insert and swap ID
+      const{data,error}=await sb.from('project_team').insert({
+        project_id:ppProjId,
+        role:item.role||'',name:item.name||'',
+        organization:item.organization||'',email:item.email||'',
+        sort_order:ppData.team.indexOf(item)
+      }).select().single();
+      if(data){
+        // Swap the temp ID for the real one in DOM and data
+        const row=document.querySelector('#pp-team tr[data-id="'+id+'"]');
+        if(row){
+          row.dataset.id=data.id;
+          row.querySelectorAll('[data-rowid]').forEach(el=>el.dataset.rowid=data.id);
+          // Update onchange handlers
+          row.querySelectorAll('input').forEach(inp=>{
+            const oc=inp.getAttribute('onchange');
+            if(oc)inp.setAttribute('onchange',oc.replace(id,data.id));
+          });
+          const delBtn=row.querySelector('.pp-del');
+          if(delBtn)delBtn.setAttribute('onclick',"ppDelTeam('"+data.id+"')");
+        }
+        item.id=data.id;
+      }
+    } else {
+      // Existing row — update
+      await sb.from('project_team').update({
+        role:item.role||'',name:item.name||'',
+        organization:item.organization||'',email:item.email||''
+      }).eq('id',id);
+    }
+    showPPSaved();
+  },600);
 }
 async function ppAddTeam(){
   const{data}=await sb.from('project_team').insert({project_id:ppProjId,role:'',name:'',organization:'',email:'',sort_order:ppData.team.length}).select().single();
@@ -1663,7 +1680,7 @@ async function ppAddTeam(){
 async function ppDelTeam(id){
   if(!id.startsWith('new-'))await sb.from('project_team').delete().eq('id',id);
   ppData.team=ppData.team.filter(t=>t.id!==id);
-  document.querySelector(`#pp-team [data-id="${id}"]`)?.remove();
+  document.querySelector('#pp-team tr[data-id="'+id+'"]')?.remove();
 }
 
 // Action items CRUD
