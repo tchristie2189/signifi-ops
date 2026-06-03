@@ -159,14 +159,14 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .status-chip{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;display:inline-block;white-space:nowrap;}
 /* ── GANTT ── */
 .prod-gantt{overflow-x:auto;padding:0 16px 16px;}
-.gantt-table{border-collapse:collapse;width:100%;min-width:700px;}
-.gantt-table th{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 4px;text-align:center;border-bottom:1px solid var(--gray-100);font-weight:600;white-space:nowrap;min-width:28px;}
-.gantt-table th.proj-col{text-align:left;min-width:160px;padding:5px 8px;}
-.gantt-table td{padding:4px 3px;border-bottom:1px solid var(--gray-50);vertical-align:middle;}
-.gantt-table td.proj-name{font-size:12px;font-weight:500;color:var(--black);padding:4px 8px;white-space:nowrap;}
+.gantt-table{border-collapse:separate;border-spacing:0;width:100%;min-width:700px;}
+.gantt-table th{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 4px;text-align:center;border-bottom:1px solid var(--gray-100);font-weight:600;white-space:nowrap;min-width:28px;background:var(--white);}
+.gantt-table th.proj-col{text-align:left;min-width:180px;padding:5px 8px;position:sticky;left:0;z-index:3;background:var(--white);box-shadow:2px 0 4px rgba(0,0,0,0.06);}
+.gantt-table td{padding:4px 3px;border-bottom:1px solid var(--gray-50);vertical-align:middle;background:var(--white);}
+.gantt-table td.proj-name{font-size:12px;font-weight:500;color:var(--black);padding:4px 8px;white-space:nowrap;position:sticky;left:0;z-index:2;background:var(--white);box-shadow:2px 0 4px rgba(0,0,0,0.06);}
 .gantt-cell{position:relative;text-align:center;}
 .gantt-fill{height:20px;border-radius:3px;}
-.gantt-today-col{background:#fff8f8;}
+.gantt-today-col{background:#fff8f8!important;}
 /* ── SCHEDULE ── */
 .sched-table{width:100%;border-collapse:collapse;}
 .sched-table th{font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:9px 12px;text-align:left;border-bottom:1px solid var(--gray-100);font-weight:600;background:var(--gray-50);white-space:nowrap;}
@@ -368,6 +368,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
           <div class="nav-sep"></div>
           <div class="nav-group-label">Tools</div>
           <button class="nav-item" id="ni-briefing" onclick="setTab('briefing')">📋 Daily briefing</button>
+          <button class="nav-item" id="ni-checkin" onclick="setTab('checkin')">🚦 Dept check-in</button>
           <button class="nav-item" id="ni-log" onclick="setTab('log')">🕓 Activity log</button>
           <button class="nav-item" id="ni-gendocs" onclick="setTab('gendocs')">📄 Generate docs</button>
           <button class="nav-item" id="ni-templates" onclick="setTab('templates')">📐 Templates</button>
@@ -397,6 +398,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
     <div id="tab-vinyl" style="display:none"></div>
     <div id="tab-planogram" style="display:none"></div>
     <div id="tab-briefing" style="display:none"></div>
+    <div id="tab-checkin" style="display:none"></div>
     <div id="tab-log" style="display:none"></div>
     <div id="tab-gendocs" style="display:none"></div>
     <div id="tab-templates" style="display:none"></div>
@@ -417,7 +419,7 @@ const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod'
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
 const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date'];
 
-let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[];
+let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={};
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
 let currentUser=null,currentUserName='';
 let vinylFilter={status:'',search:'',dateFrom:'',dateTo:''};
@@ -529,23 +531,25 @@ function setTab(tab){
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','overview','projpage','week','production','quality','shipping','installation','vinyl','planogram','briefing','log','gendocs','templates','intake'];
+  const ALL=['glance','overview','projpage','week','production','quality','shipping','installation','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
 function renderTab(){
-  const m={glance:renderGlance,overview:renderOverview,projpage:renderProjPage,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake};
+  const m={glance:renderGlance,overview:renderOverview,projpage:renderProjPage,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake};
   if(m[currentTab])m[currentTab]();
 }
 
 // ── DATA ───────────────────────────────────────────────────
 async function loadAll(){
-  const[pr,ms,lg]=await Promise.all([
+  const[pr,ms,lg,ci]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
     sb.from('milestones').select('*').order('date'),
-    sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100)
+    sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
+    sb.from('checkin_status').select('*').order('updated_at',{ascending:false})
   ]);
   projects=pr.data||[];milestones=ms.data||[];activityLog=lg.data||[];
+  checkinStatus={};(ci.data||[]).forEach(c=>{checkinStatus[c.milestone_id]=c;});
   if(projects.length&&!selectedProjId)selectedProjId=projects[0].id;
   vinylSchedule=projects.map((p,i)=>{
     const ex=vinylSchedule.find(v=>v.id===p.id);
@@ -1052,6 +1056,95 @@ function renderLog(){
   el.innerHTML=`<div class="section"><div class="section-head"><div class="section-title">🕓 Activity log</div><div class="section-meta">${activityLog.length} recent changes</div></div><div>${items}</div></div>`;
 }
 function stringToColor(str){let h=0;for(let i=0;i<str.length;i++){h=str.charCodeAt(i)+((h<<5)-h);}const c=Math.abs(h)%360;return`hsl(${c},45%,35%)`;}
+
+
+// ── DEPT CHECK-IN OVERVIEW ────────────────────────────────
+const DEPT_KEYS={'Production':['production-start','production-end'],'Software / UI':['other'],'Inventory':['arrival'],'Procurement':['arrival'],'MO Release':['po-release'],'Quality':['quality-start','quality-end','vinyl'],'Shipping':['shipping','delivery'],'Deployment':['installation']};
+const DEPT_LABEL_MATCH={'Software / UI':['UI start','UI end'],'Inventory':['Inventory pick'],'Procurement':['Parts ordering start','Parts arrival']};
+const DEPT_COLORS={'Production':'#7c3aed','Software / UI':'#2563eb','Inventory':'#0891b2','Procurement':'#d97706','MO Release':'#6b6b6b','Quality':'#d97706','Shipping':'#059669','Deployment':'#db2777'};
+const SL_COLORS={green:'#22c55e',yellow:'#eab308',red:'#ef4444'};
+
+function renderCheckinOverview(){
+  const el=document.getElementById('tab-checkin');
+  const base=monday(today());
+  const weeks=[{label:'This week',start:base},{label:'Next week',start:addD(base,7)}];
+  const depts=Object.keys(DEPT_KEYS);
+
+  function getDeptMs(dept,wStart){
+    const wEnd=addD(wStart,6);
+    const keys=DEPT_KEYS[dept]||[];
+    const lbls=DEPT_LABEL_MATCH[dept]||[];
+    return milestones.filter(m=>{
+      if(!m.date)return false;
+      const d=new Date(m.date+'T00:00:00');
+      if(d<wStart||d>wEnd)return false;
+      if(keys.includes(m.key)){
+        if(!lbls.length)return true;
+        return lbls.some(l=>(m.label||'').toLowerCase().includes(l.toLowerCase()));
+      }
+      return false;
+    });
+  }
+
+  function slDots(mId){
+    const ci=checkinStatus[mId]||{};
+    const sl=ci.stoplight||'';
+    const chk=ci.checked||false;
+    return'<div style="display:flex;align-items:center;gap:5px">'+
+      ['green','yellow','red'].map(c=>'<div style="width:18px;height:18px;border-radius:50%;background:'+SL_COLORS[c]+';opacity:'+(sl===c?1:0.15)+'" title="'+(c==='green'?'On track':c==='yellow'?'In trouble':'Escalation')+'"></div>').join('')+
+      (chk?'<span style="font-size:12px;color:var(--success);font-weight:600;margin-left:2px">✓</span>':'<span style="font-size:11px;color:var(--gray-300);margin-left:2px">○</span>')+
+    '</div>';
+  }
+
+  const thStyle='padding:7px 12px;font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;text-align:left;border-bottom:1px solid var(--gray-100);background:var(--gray-50)';
+
+  const weeksHtml=weeks.map(w=>{
+    const allMs=depts.flatMap(d=>getDeptMs(d,w.start));
+    const greens=allMs.filter(m=>checkinStatus[m.id]?.stoplight==='green').length;
+    const yellows=allMs.filter(m=>checkinStatus[m.id]?.stoplight==='yellow').length;
+    const reds=allMs.filter(m=>checkinStatus[m.id]?.stoplight==='red').length;
+    const unchecked=allMs.filter(m=>!checkinStatus[m.id]?.stoplight).length;
+    const rows=depts.map(dept=>{
+      const dms=getDeptMs(dept,w.start);
+      if(!dms.length)return'<tr><td style="padding:7px 12px;font-size:12px;font-weight:600;color:'+DEPT_COLORS[dept]+';white-space:nowrap">'+dept+'</td><td colspan="5" style="padding:7px 12px;font-size:11px;color:var(--gray-300)">No milestones this week</td></tr>';
+      return dms.map((m,i)=>{
+        const proj=projects.find(p=>p.id===m.project_id);
+        const d=daysDiff(m.date);
+        const dcss=d<0?'color:var(--red)':d===0?'color:var(--success);font-weight:600':d<=3?'color:var(--blue)':'color:var(--gray-500)';
+        const dlbl=d<0?Math.abs(d)+'d overdue':d===0?'Today':fmt(m.date);
+        return'<tr style="border-bottom:1px solid var(--gray-50)">'+
+          (i===0?'<td style="padding:7px 12px;font-size:12px;font-weight:600;color:'+DEPT_COLORS[dept]+';white-space:nowrap;vertical-align:top" rowspan="'+dms.length+'">'+dept+'</td>':'')+
+          '<td style="padding:6px 12px;font-size:12px;font-weight:500">'+(proj?proj.name:'—')+'</td>'+
+          '<td style="padding:6px 12px;font-size:11px;color:var(--gray-500);font-family:var(--mono)">'+(proj?.so_number||'')+'</td>'+
+          '<td style="padding:6px 12px;font-size:11px">'+m.label+'</td>'+
+          '<td style="padding:6px 12px;font-size:11px;'+dcss+'">'+dlbl+'</td>'+
+          '<td style="padding:6px 12px">'+slDots(m.id)+'</td>'+
+        '</tr>';
+      }).join('');
+    }).join('');
+    return'<div class="section" style="margin-bottom:12px">'+
+      '<div class="section-head">'+
+        '<div class="section-title">'+w.label+' — '+fmt(isoD(w.start))+' to '+fmt(isoD(addD(w.start,4)))+'</div>'+
+        '<div style="display:flex;gap:8px;align-items:center">'+
+          (reds>0?'<span style="font-size:11px;font-weight:600;color:#ef4444">🔴 '+reds+' escalation'+(reds>1?'s':'')+'</span>':'')+
+          (yellows>0?'<span style="font-size:11px;font-weight:600;color:#eab308">🟡 '+yellows+' in trouble</span>':'')+
+          '<span style="font-size:11px;color:var(--gray-500)">'+greens+' on track · '+unchecked+' not checked</span>'+
+        '</div>'+
+      '</div>'+
+      (allMs.length?'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse"><thead><tr>'+
+        '<th style="'+thStyle+'">Dept</th><th style="'+thStyle+'">Project</th><th style="'+thStyle+'">SO</th><th style="'+thStyle+'">Milestone</th><th style="'+thStyle+'">Date</th><th style="'+thStyle+'">Status</th>'+
+      '</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="empty-state">No milestones this week.</div>')+
+    '</div>';
+  }).join('');
+
+  el.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">'+
+    '<div><div style="font-size:16px;font-weight:600">🚦 Department check-in</div>'+
+    '<div style="font-size:12px;color:var(--gray-500);margin-top:2px">Dept leads update via <strong>signifi-ops.vercel.app/checkin</strong></div></div>'+
+    '<button class="btn-export" onclick="loadAll()">↻ Refresh</button></div>'+
+    '<div style="background:var(--blue-bg);border:1px solid #bfdbfe;border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;font-size:11px;color:var(--blue)">'+
+    '<strong>Dept passcodes:</strong> Production: <code>prod2026</code> · UI: <code>ui2026</code> · Inventory: <code>inv2026</code> · Procurement: <code>proc2026</code> · MO: <code>mo2026</code> · QA: <code>qa2026</code> · Shipping: <code>ship2026</code> · Deployment: <code>deploy2026</code></div>'+
+    weeksHtml;
+}
 
 // ── BRIEFING ───────────────────────────────────────────────
 function renderBriefing(){
