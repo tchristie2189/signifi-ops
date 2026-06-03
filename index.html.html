@@ -851,7 +851,7 @@ function renderVinyl(){
       <th onclick="sortVinyl('status')" style="cursor:pointer">Status ↕</th>
       <th style="width:28px"></th>
     </tr></thead><tbody>${rows||'<tr><td colspan="12" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
-    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('vinyl')">+ Add row</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
+    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('vinyl')">+ Add vinyl job</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
   </div>`;
 }
 function sortVinyl(key){
@@ -909,7 +909,7 @@ function renderPlanogram(){
       <th onclick="sortPlan('status')" style="cursor:pointer">Status ↕</th>
       <th style="width:28px"></th>
     </tr></thead><tbody>${rows||'<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
-    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('planogram')">+ Add row</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
+    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('planogram')">+ Add planogram</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
   </div>`;
 }
 function sortPlan(key){
@@ -947,10 +947,73 @@ function vsDate(i,field,val,type){
   }
 }
 function addSchedRow(type){
-  const row={id:'custom-'+Date.now(),name:'',so:'',client:'',date:'',status:'Needs date',priority:99};
-  if(type==='vinyl'){row.vinylType='';row.shipDate='';row.pm='';row.formFactor='';vinylSchedule.push(row);}
-  else{row.machineType='';planogramSchedule.push(row);}
-  if(type==='vinyl')renderVinyl();else renderPlanogram();
+  // Open a modal to fill in all fields for a standalone entry
+  const isVinyl=type==='vinyl';
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:520px" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <span class="modal-title">${isVinyl?'Add vinyl job':'Add planogram'}</span>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field"><label>SO Number</label><input id="asr-so" placeholder="e.g. SO-2026-0142" style="font-family:var(--mono)"></div>
+          <div class="field"><label>Customer</label><input id="asr-client" placeholder="Client name"></div>
+          <div class="field full"><label>Project name</label><input id="asr-name" placeholder="e.g. Google Pixel Sunnyvale"></div>
+          ${isVinyl?`
+          <div class="field"><label>Decal / Partial / Full Vinyl</label>
+            <select id="asr-vinyltype"><option value="">Select...</option><option>Decal</option><option>Partial Vinyl</option><option>Full Vinyl</option></select>
+          </div>
+          <div class="field"><label>Form factor</label><input id="asr-formfactor" placeholder="e.g. Freestanding"></div>
+          <div class="field"><label>Vinyl date</label><input type="date" id="asr-date"></div>
+          <div class="field"><label>Ship date</label><input type="date" id="asr-shipdate"></div>
+          <div class="field"><label>Project Manager</label><input id="asr-pm" placeholder="PM name"></div>
+          `:`
+          <div class="field"><label>Machine type</label><input id="asr-machinetype" placeholder="e.g. SparkXL, V8..."></div>
+          <div class="field"><label>Planogram date</label><input type="date" id="asr-date"></div>
+          `}
+          <div class="field"><label>Status</label>
+            <select id="asr-status">
+              ${['Scheduled','In progress','Complete','On hold','Needs date'].map(s=>`<option>${s}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveSchedRow('${type}')">Add to schedule</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function saveSchedRow(type){
+  const isVinyl=type==='vinyl';
+  const name=document.getElementById('asr-name')?.value.trim();
+  if(!name){alert('Please enter a project name.');return;}
+  const row={
+    id:'custom-'+Date.now(),
+    name,
+    so:document.getElementById('asr-so')?.value.trim()||'',
+    client:document.getElementById('asr-client')?.value.trim()||'',
+    date:document.getElementById('asr-date')?.value||'',
+    status:document.getElementById('asr-status')?.value||'Scheduled',
+    priority:isVinyl?vinylSchedule.length+1:planogramSchedule.length+1,
+  };
+  if(isVinyl){
+    row.vinylType=document.getElementById('asr-vinyltype')?.value||'';
+    row.shipDate=document.getElementById('asr-shipdate')?.value||'';
+    row.pm=document.getElementById('asr-pm')?.value.trim()||'';
+    row.formFactor=document.getElementById('asr-formfactor')?.value.trim()||'';
+    vinylSchedule.push(row);
+  } else {
+    row.machineType=document.getElementById('asr-machinetype')?.value.trim()||'';
+    planogramSchedule.push(row);
+  }
+  closeModal();
+  showToast('Added to schedule ✓');
+  if(isVinyl)renderVinyl();else renderPlanogram();
 }
 function removeSchedRow(type,i){if(type==='vinyl')vinylSchedule.splice(i,1);else planogramSchedule.splice(i,1);if(type==='vinyl')renderVinyl();else renderPlanogram();}
 function dragStart(e,idx,type){dragSrc=idx;dragType=type;e.currentTarget.classList.add('dragging');}
@@ -2234,3 +2297,4 @@ function exportProjPageExcel(){
 loadAll();
 </script>
 </body>
+</html>
