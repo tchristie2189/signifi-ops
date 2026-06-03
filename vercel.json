@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/checkin", "destination": "/checkin.html" },
+    { "source": "/client-status", "destination": "/client-status.html" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
