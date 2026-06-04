@@ -419,7 +419,7 @@ const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod'
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
 const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date'];
 
-let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={};
+let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={};
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
 let currentUser=null,currentUserName='';
 let vinylFilter={status:'',search:'',dateFrom:'',dateTo:''};
@@ -450,27 +450,71 @@ function showToast(msg,dur=2500){const t=document.getElementById('toast');t.text
 function closeModal(){document.getElementById('modal-root').innerHTML='';}
 
 // ── HEALTH SCORE ───────────────────────────────────────────
+// ── HEALTH & DONE ──────────────────────────────────────────
+function isMilestoneDone(m){
+  // Manually marked done via the hub
+  if(milestoneDone[m.id])return true;
+  // Dept check-in marked green AND checked by the dept lead
+  const ci=checkinStatus[m.id];
+  if(ci?.checked&&ci?.stoplight==='green')return true;
+  return false;
+}
+function isMilestoneOverdue(m){
+  if(isMilestoneDone(m))return false;
+  return m.date&&daysDiff(m.date)<0;
+}
+function isMilestoneAtRisk(m){
+  if(isMilestoneDone(m))return false;
+  const ci=checkinStatus[m.id];
+  return ci?.stoplight==='yellow';
+}
+function isMilestoneEscalation(m){
+  if(isMilestoneDone(m))return false;
+  const ci=checkinStatus[m.id];
+  return ci?.stoplight==='red';
+}
+
 function calcHealth(pid){
   const pMs=milestones.filter(m=>m.project_id===pid&&m.date);
   if(!pMs.length)return null;
   const total=pMs.length;
-  const onTime=pMs.filter(m=>daysDiff(m.date)>=0).length;
-  const overdue=pMs.filter(m=>daysDiff(m.date)<0).length;
-  const score=Math.round((onTime/total)*100);
-  const color=score>=80?'#1a7a4a':score>=60?'#d97706':'#C8102E';
-  return{score,overdue,color};
+  const done=pMs.filter(m=>isMilestoneDone(m)).length;
+  const overdue=pMs.filter(m=>isMilestoneOverdue(m)).length;
+  const atRisk=pMs.filter(m=>isMilestoneAtRisk(m)).length;
+  const escalation=pMs.filter(m=>isMilestoneEscalation(m)).length;
+  const remaining=total-done;
+  // Score = done / total — simple and honest
+  const score=Math.round((done/total)*100);
+  // Color based on overdue/escalation situation
+  const color=escalation>0?'#C8102E':overdue>0?'#d97706':score>=80?'#1a7a4a':score>=50?'#d97706':'#6b6b6b';
+  return{score,done,total,remaining,overdue,atRisk,escalation,color};
 }
 function healthRing(pid){
   const h=calcHealth(pid);
   if(!h)return'';
   const r=20;const c=2*Math.PI*r;const dash=(h.score/100)*c;
-  return`<div class="health-ring" title="Health score: ${h.score}%">
+  const tooltip=`${h.done} of ${h.total} milestones done · ${h.remaining} remaining${h.overdue?` · ${h.overdue} overdue`:''}${h.escalation?` · ${h.escalation} escalation`:''}`;
+  return`<div class="health-ring" title="${tooltip}">
     <svg width="52" height="52" viewBox="0 0 52 52">
       <circle cx="26" cy="26" r="${r}" fill="none" stroke="#f2f2f2" stroke-width="5"/>
       <circle cx="26" cy="26" r="${r}" fill="none" stroke="${h.color}" stroke-width="5" stroke-dasharray="${dash} ${c}" stroke-linecap="round"/>
     </svg>
     <div class="health-ring-label" style="color:${h.color}">${h.score}</div>
   </div>`;
+}
+
+async function toggleMilestoneDone(mid,pid,e){
+  e.stopPropagation();
+  const isDone=milestoneDone[mid];
+  if(isDone){
+    await sb.from('milestone_done').delete().eq('milestone_id',mid);
+    delete milestoneDone[mid];
+  } else {
+    const{data}=await sb.from('milestone_done').insert({milestone_id:mid,project_id:pid,marked_by:currentUserName}).select().single();
+    if(data)milestoneDone[mid]=data;
+  }
+  showToast(isDone?'Marked as not done':'Marked as done ✓');
+  await loadAll();
 }
 
 // ── ACTIVITY LOG ───────────────────────────────────────────
@@ -542,14 +586,23 @@ function renderTab(){
 
 // ── DATA ───────────────────────────────────────────────────
 async function loadAll(){
-  const[pr,ms,lg,ci]=await Promise.all([
+  const[pr,ms,lg,ci,md,mh]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
-    sb.from('checkin_status').select('*').order('updated_at',{ascending:false})
+    sb.from('checkin_status').select('*').order('updated_at',{ascending:false}),
+    sb.from('milestone_done').select('*'),
+    sb.from('milestone_history').select('*').order('changed_at',{ascending:true}),
   ]);
   projects=pr.data||[];milestones=ms.data||[];activityLog=lg.data||[];
   checkinStatus={};(ci.data||[]).forEach(c=>{checkinStatus[c.milestone_id]=c;});
+  milestoneDone={};(md.data||[]).forEach(d=>{milestoneDone[d.milestone_id]=d;});
+  // Group history by milestone_id
+  milestoneHistory={};
+  (mh.data||[]).forEach(h=>{
+    if(!milestoneHistory[h.milestone_id])milestoneHistory[h.milestone_id]=[];
+    milestoneHistory[h.milestone_id].push(h);
+  });
   if(projects.length&&!selectedProjId)selectedProjId=projects[0].id;
   vinylSchedule=projects.map((p,i)=>{
     const ex=vinylSchedule.find(v=>v.id===p.id);
@@ -606,10 +659,20 @@ function renderGlance(){
     const stagesHtml=STAGES.map(stage=>{
       const sd=getMsDate(p.id,stage.startKey);const ed=getMsDate(p.id,stage.endKey);
       const st=stageStatus(sd,ed);
+      // Find actual milestone records for this stage to check done status
+      const stageMsKeys=[stage.startKey,stage.endKey].filter((v,i,a)=>a.indexOf(v)===i);
+      const stageMs=milestones.filter(m=>m.project_id===p.id&&stageMsKeys.includes(m.key)&&m.date);
+      const allDone=stageMs.length>0&&stageMs.every(m=>isMilestoneDone(m));
+      const hasOverdue=!allDone&&stageMs.some(m=>isMilestoneOverdue(m));
+      const hasEscalation=!allDone&&stageMs.some(m=>isMilestoneEscalation(m));
+      const hasRisk=!allDone&&stageMs.some(m=>isMilestoneAtRisk(m));
+      const chipCls=allDone?'chip-done':hasEscalation?'chip-overdue':hasOverdue?'chip-overdue':hasRisk?'chip-atrisk':st.chip;
+      const chipLbl=allDone?'Done ✓':hasEscalation?'Escalation':hasOverdue?'Overdue':hasRisk?'At risk':st.label;
       let pct=0;
-      if(sd){const s=new Date(sd+'T00:00:00');const e=ed?new Date(ed+'T00:00:00'):s;if(t>e)pct=100;else if(t>=s){const total=(e-s)||86400000;pct=Math.min(100,Math.round((t-s)/total*100));}}
-      const barCls=st.label==='Done'?'bar-done':st.chip==='chip-active'?'bar-active':'bar-future';
-      return `<div class="cycle-stage"><div class="cycle-stage-name">${stage.label}</div><div class="cycle-bar-wrap"><div class="cycle-bar ${barCls}" style="width:${pct}%;background:${pct>0?stage.color:'var(--gray-200)'}"></div></div><div style="text-align:right"><span class="stage-chip ${st.chip}">${st.label}</span></div></div>`;
+      if(allDone){pct=100;}
+      else if(sd){const s=new Date(sd+'T00:00:00');const e=ed?new Date(ed+'T00:00:00'):s;const t=today();if(t>e)pct=100;else if(t>=s){const total=(e-s)||86400000;pct=Math.min(100,Math.round((t-s)/total*100));}}
+      const barColor=allDone?'var(--success)':hasOverdue||hasEscalation?'var(--red)':hasRisk?'var(--warning)':stage.color;
+      return `<div class="cycle-stage"><div class="cycle-stage-name">${stage.label}</div><div class="cycle-bar-wrap"><div class="cycle-bar" style="width:${pct}%;background:${pct>0?barColor:'var(--gray-200)'}"></div></div><div style="text-align:right"><span class="stage-chip ${chipCls}">${chipLbl}</span></div></div>`;
     }).join('');
     // Notes section
     const notes=(p.notes||'').trim();
@@ -678,7 +741,27 @@ function renderOverview(){
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
   const proj=projects.find(p=>p.id===selectedProjId);
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
-  const msHtml=projMs.map(m=>{const st=msStatus(m.date);return`<div class="ms-item ${st.cls}" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')" title="Click to edit"><div class="ms-type">${TYPE_LBL[m.key]||m.key}</div><div class="ms-label">${m.label}</div><div class="ms-date">${fmtFull(m.date)}</div><div class="ms-days ${st.dcls}">${st.txt}</div><div class="ms-edit-hint">click to edit</div></div>`;}).join('');
+  const msHtml=projMs.map(m=>{
+    const isDone=isMilestoneDone(m);
+    const isOverdue=isMilestoneOverdue(m);
+    const st=isDone?{cls:'done',dcls:'done',txt:'Done ✓'}:isOverdue?{cls:'overdue',dcls:'overdue',txt:Math.abs(daysDiff(m.date))+'d overdue'}:msStatus(m.date);
+    const ci=checkinStatus[m.id];
+    const slDot=ci?.stoplight?`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ci.stoplight==='green'?'#22c55e':ci.stoplight==='yellow'?'#eab308':'#ef4444'};margin-left:4px" title="Dept: ${ci.stoplight}"></span>`:'';
+    const hist=milestoneHistory[m.id]||[];
+    const origDate=m.original_date;
+    const variance=origDate&&m.date?Math.round((new Date(m.date+'T00:00:00')-new Date(origDate+'T00:00:00'))/86400000):0;
+    const slippageTag=hist.length&&origDate?`<span style="font-size:9px;padding:1px 5px;border-radius:8px;background:${variance>0?'var(--red-light)':'var(--success-bg)'};color:${variance>0?'var(--red)':'var(--success)'};font-weight:600;margin-left:4px" title="${hist.length} change${hist.length>1?'s':''} · Original: ${fmt(origDate)}">${variance>0?'+'+variance+'d':variance===0?'on track':variance+'d'}</span>`:'';
+    return`<div class="ms-item ${st.cls}" style="${isDone?'opacity:0.75':''}">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:4px">
+        <div class="ms-type">${TYPE_LBL[m.key]||m.key}</div>
+        <button onclick="toggleMilestoneDone('${m.id}','${m.project_id}',event)" style="background:${isDone?'var(--success)':'transparent'};border:1px solid ${isDone?'var(--success)':'var(--gray-300)'};border-radius:10px;padding:1px 7px;font-size:10px;cursor:pointer;color:${isDone?'white':'var(--gray-500)'};font-family:var(--font);flex-shrink:0">${isDone?'✓ Done':'Mark done'}</button>
+      </div>
+      <div class="ms-label" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')" style="cursor:pointer">${m.label}${slDot}${slippageTag}</div>
+      <div class="ms-date" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')" style="cursor:pointer">${fmtFull(m.date)}</div>
+      <div class="ms-days ${st.dcls}">${st.txt}</div>
+      ${hist.length&&origDate?`<div style="font-size:9px;color:var(--gray-400);margin-top:1px">Orig: ${fmt(origDate)}</div>`:''}
+    </div>`;
+  }).join('');
   const pillsHtml=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
     <div class="proj-pills" style="margin-bottom:0;flex:1">${projects.filter(p=>!pmFilter||(p.pm===pmFilter)).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
@@ -1377,22 +1460,66 @@ async function saveEditProj(id){
   closeModal();showToast('Saved ✓');await loadAll();
 }
 function openEditMs(id,label,date){
-  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:340px" onclick="event.stopPropagation()">
-    <div class="modal-head"><span class="modal-title">Edit milestone</span><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">
-      <div class="field" style="margin-bottom:10px"><label>Label</label><input value="${label}" id="em-lbl" style="font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>
-      <div class="field"><label>Date</label><input type="date" id="em-dt" value="${date||''}" style="font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>
-    </div>
-    <div class="modal-actions"><button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="deleteMs('${id}')">Remove</button><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditMs('${id}','${label}','${date||''}')">Save</button></div>
-  </div></div>`;
+  const ms=milestones.find(m=>m.id===id);
+  const history=milestoneHistory[id]||[];
+  const originalDate=ms?.original_date||null;
+  const hasChanged=originalDate&&date&&originalDate!==date;
+  const variance=originalDate&&date?Math.round((new Date(date+'T00:00:00')-new Date(originalDate+'T00:00:00'))/86400000):0;
+  const historyHtml=history.length?
+    '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--gray-100)">'+
+    '<div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:7px">Date change history</div>'+
+    history.map(h=>
+      '<div style="padding:6px 0;border-bottom:1px solid var(--gray-50);font-size:11px">'+
+      '<div><span style="color:var(--red);text-decoration:line-through">'+fmt(h.old_date)+'</span> &rarr; <span style="color:var(--success);font-weight:500">'+fmt(h.new_date)+'</span>'+
+      ' <span style="color:var(--gray-400);margin-left:6px">'+(h.changed_by||'')+' &middot; '+(h.changed_at?new Date(h.changed_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'')+' '+(h.reason?'</span><div style=\'color:var(--gray-600);font-style:italic;margin-top:2px\'>&ldquo;'+h.reason+'&rdquo;</div>':'</span>')+
+      '</div></div>'
+    ).join('')+
+    '</div>':'';
+  document.getElementById('modal-root').innerHTML='<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:400px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">'+
+    '<div class="modal-head"><span class="modal-title">Edit milestone</span><button class="modal-close" onclick="closeModal()">&times;</button></div>'+
+    '<div class="modal-body">'+
+    '<div class="field" style="margin-bottom:10px"><label>Label</label><input value="'+label+'" id="em-lbl" style="font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">'+
+    '<div class="field"><label>Original date</label><div style="font-size:12px;padding:7px 10px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius);color:var(--gray-500)">'+(originalDate?fmt(originalDate):'Not set yet')+'</div></div>'+
+    '<div class="field"><label>Date'+(hasChanged?' <span style=\'font-size:10px;color:var(--red);font-weight:400\'>('+( variance>0?'+':'')+variance+'d slippage)</span>':'')+'</label><input type="date" id="em-dt" value="'+(date||'')+'" style="font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>'+
+    '</div>'+
+    '<div class="field"><label>Reason for change <span style=\'font-weight:400;color:var(--gray-400)\'>— shown in history</span></label><input id="em-reason" placeholder="e.g. Parts delayed, client requested push..." style="font-size:12px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>'+
+    historyHtml+
+    '</div>'+
+    '<div class="modal-actions"><button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="deleteMs(\''+id+'\')">Remove</button><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditMs(\''+id+'\',\''+label+'\',\''+( date||'')+'\')">Save</button></div>'+
+  '</div></div>';
 }
 async function saveEditMs(id,oldLabel,oldDate){
   const newDate=document.getElementById('em-dt').value;
   const newLabel=document.getElementById('em-lbl').value.trim();
-  const{error}=await sb.from('milestones').update({label:newLabel,date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',id);
+  const reason=document.getElementById('em-reason')?.value.trim()||'';
+  const ms=milestones.find(m=>m.id===id);
+  const proj=ms?projects.find(p=>p.id===ms.project_id):null;
+
+  // Build update payload
+  const update={label:newLabel,date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()};
+
+  // Set original_date if this is the first time a date is being set
+  if(!ms?.original_date&&newDate){
+    update.original_date=newDate;
+  }
+
+  const{error}=await sb.from('milestones').update(update).eq('id',id);
   if(error){alert('Error: '+error.message);return;}
-  const ms=milestones.find(m=>m.id===id);const proj=ms?projects.find(p=>p.id===ms.project_id):null;
-  if(oldDate!==newDate)await logActivity('updated date',newLabel,newLabel,proj?.id||null,oldDate,newDate);
+
+  // Record history if date actually changed
+  if(oldDate&&newDate&&oldDate!==newDate){
+    await sb.from('milestone_history').insert({
+      milestone_id:id,
+      project_id:proj?.id||null,
+      old_date:oldDate,
+      new_date:newDate,
+      changed_by:currentUserName,
+      reason:reason||null,
+    });
+    await logActivity('updated date',newLabel,newLabel,proj?.id||null,oldDate,newDate);
+  }
+
   closeModal();showToast('Updated ✓');await loadAll();
 }
 async function deleteMs(id){if(!confirm('Remove this milestone?'))return;const ms=milestones.find(m=>m.id===id);await sb.from('milestones').delete().eq('id',id);await logActivity('removed milestone',ms?.label||'',ms?.label||'',ms?.project_id||null,ms?.date,null);closeModal();showToast('Removed');await loadAll();}
@@ -1435,6 +1562,21 @@ function exportToExcel(){
   const r5=[['Time','User','Action','Item','Project','Old Value','New Value']];
   activityLog.forEach(l=>{const proj=projects.find(p=>p.id===l.project_id);r5.push([fmtTime(l.created_at),l.user_name||l.user_email,l.action,l.entity_name,proj?.name||'',l.old_value||'',l.new_value||'']);});
   const ws5=XLSX.utils.aoa_to_sheet(r5);XLSX.utils.book_append_sheet(wb,ws5,'Activity Log');
+  // Sheet 6: Date change history
+  const r6=[['PROJECT','SO','MILESTONE','ORIGINAL DATE','CURRENT DATE','VARIANCE (days)','CHANGED ON','CHANGED BY','REASON']];
+  milestones.forEach(m=>{
+    const proj=projects.find(p=>p.id===m.project_id);
+    const hist=milestoneHistory[m.id]||[];
+    if(!m.original_date&&!hist.length)return;
+    const variance=m.original_date&&m.date?Math.round((new Date(m.date+'T00:00:00')-new Date(m.original_date+'T00:00:00'))/86400000):0;
+    if(hist.length){
+      hist.forEach(h=>{r6.push([proj?.name||'',proj?.so_number||'',m.label,m.original_date||'',m.date||'',variance,h.changed_at?new Date(h.changed_at).toLocaleDateString():'' ,h.changed_by||'',h.reason||'']);});
+    } else {
+      r6.push([proj?.name||'',proj?.so_number||'',m.label,m.original_date||'',m.date||'',variance,'','','No changes']);
+    }
+  });
+  const ws6=XLSX.utils.aoa_to_sheet(r6);ws6['!cols']=[{wch:24},{wch:12},{wch:26},{wch:14},{wch:14},{wch:14},{wch:14},{wch:18},{wch:40}];
+  XLSX.utils.book_append_sheet(wb,ws6,'Date Change History');
   XLSX.writeFile(wb,'Signifi_Ops_'+new Date().toISOString().split('T')[0]+'.xlsx');showToast('Excel downloaded ✓');
 }
 
@@ -2390,4 +2532,3 @@ function exportProjPageExcel(){
 loadAll();
 </script>
 </body>
-</html>
