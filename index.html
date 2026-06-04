@@ -158,16 +158,16 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .date-cell{font-family:var(--mono);font-size:11px;}
 .status-chip{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;display:inline-block;white-space:nowrap;}
 /* ── GANTT ── */
-.prod-gantt{overflow-x:auto;padding:0 16px 16px;position:relative;}
-.gantt-wrap{overflow-x:auto;}
-.gantt-table{border-collapse:collapse;width:100%;min-width:700px;}
-.gantt-table th{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 4px;text-align:center;border-bottom:1px solid var(--gray-100);font-weight:600;white-space:nowrap;min-width:28px;background:var(--white);}
-.gantt-table th.proj-col{text-align:left;min-width:180px;padding:5px 8px;position:sticky;left:0;z-index:3;background:var(--white);box-shadow:2px 0 4px rgba(0,0,0,0.08);}
-.gantt-table td{padding:4px 3px;border-bottom:1px solid var(--gray-50);vertical-align:middle;background:var(--white);}
-.gantt-table td.proj-name{font-size:12px;font-weight:500;color:var(--black);padding:4px 8px;white-space:nowrap;position:sticky;left:0;z-index:2;background:var(--white);box-shadow:2px 0 4px rgba(0,0,0,0.08);}
-.gantt-cell{position:relative;text-align:center;}
-.gantt-fill{height:20px;border-radius:3px;}
-.gantt-today-col{background:#fff8f8;}
+.prod-gantt{padding:0 16px 16px;}
+.gantt-wrap{overflow-x:auto;width:100%;}
+.gantt-table{border-collapse:separate;border-spacing:0;width:100%;min-width:700px;}
+.gantt-table th{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 4px;text-align:center;border-bottom:1px solid var(--gray-200);font-weight:600;white-space:nowrap;min-width:28px;background:var(--white);}
+.gantt-table th.proj-col{text-align:left;min-width:180px;padding:5px 8px;position:sticky;left:0;z-index:3;background:var(--white);border-right:2px solid var(--gray-200);}
+.gantt-table td{padding:3px;border-bottom:1px solid var(--gray-50);vertical-align:middle;background:var(--white);}
+.gantt-table td.proj-name{font-size:12px;font-weight:500;color:var(--black);padding:4px 8px;white-space:nowrap;position:sticky;left:0;z-index:2;background:var(--white);border-right:2px solid var(--gray-200);min-width:180px;}
+.gantt-cell{position:relative;text-align:center;height:26px;}
+.gantt-fill{height:20px;border-radius:3px;width:100%;}
+.gantt-today-col td,.gantt-today-col th{background:#fff5f5!important;}
 /* ── SCHEDULE ── */
 .sched-table{width:100%;border-collapse:collapse;}
 .sched-table th{font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:9px 12px;text-align:left;border-bottom:1px solid var(--gray-100);font-weight:600;background:var(--gray-50);white-space:nowrap;}
@@ -428,7 +428,17 @@ let planFilter={status:'',search:'',dateFrom:'',dateTo:''};
 let pmFilter='';
 
 // ── UTILS ──────────────────────────────────────────────────
-function today(){let t=new Date();t.setHours(0,0,0,0);return t;}
+function truncateSO(so,max=2){
+  if(!so)return'No SO';
+  // Split by common separators (comma, slash, space between SO numbers)
+  const parts=so.split(/[,\/\s]+/).map(s=>s.trim()).filter(Boolean);
+  if(parts.length<=max)return so;
+  return parts.slice(0,max).join(', ')+'…';
+}
+function truncateSOTitle(so){
+  // Full list for tooltip
+  return so||'';
+}
 function monday(dt){let r=new Date(dt);let d=r.getDay();r.setDate(r.getDate()+(d===0?-6:1-d));r.setHours(0,0,0,0);return r;}
 function addD(dt,n){let r=new Date(dt);r.setDate(r.getDate()+n);return r;}
 function sameDay(a,b){return a.toDateString()===b.toDateString();}
@@ -693,7 +703,7 @@ function renderGlance(){
             <div class="glance-proj-name">${p.name}</div>
             ${isComplete?'<span style="font-size:10px;padding:1px 7px;border-radius:10px;background:var(--gray-100);color:var(--gray-500);font-weight:600">Complete</span>':''}
           </div>
-          <div class="glance-proj-meta"><span class="glance-so">${p.so_number||'No SO'}</span><span class="glance-client">${p.client||''}</span></div>
+          <div class="glance-proj-meta"><span class="glance-so" title="${p.so_number||''}">${truncateSO(p.so_number)}</span><span class="glance-client">${p.client||''}</span></div>
           ${overallStart&&overallEnd?`<div style="margin-top:7px"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Overall progress</span><span style="font-size:9px;color:var(--gray-500)">${overallPct}%</span></div><div style="background:var(--gray-100);border-radius:3px;height:4px"><div style="height:4px;border-radius:3px;background:linear-gradient(90deg,#7c3aed,#e22f4a);width:${overallPct}%"></div></div></div>`:''}
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
@@ -785,7 +795,7 @@ function renderOverview(){
       <div class="section-head">
         <div class="section-title">${proj.name} <span style="font-size:11px;font-weight:400;color:var(--gray-500)">— ${proj.client}</span></div>
         <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-family:var(--mono);color:var(--red);font-size:11px">${proj.so_number||'No SO'}</span>
+          <span style="font-family:var(--mono);color:var(--red);font-size:11px" title="${proj.so_number||''}">${truncateSO(proj.so_number)}</span>
           ${healthRing(proj.id)}
           <button class="btn btn-primary" style="font-size:10px;padding:4px 10px" onclick="openEditProj('${proj.id}')">✏ Edit</button>
           <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
@@ -841,17 +851,22 @@ function buildGantt(startKeys,endKeys,segsFn,title,legend){
   let rS=monday(new Date(Math.min(...starts)));let rE=addD(new Date(Math.max(...ends)),5);
   const days=[];let cur=new Date(rS);while(cur<=rE){const dow=cur.getDay();if(dow!==0&&dow!==6)days.push(new Date(cur));cur=addD(cur,1);}
   const t=today();
-  const hdr=days.map(d=>`<th class="${sameDay(d,t)?'gantt-today-col':''}" style="min-width:28px">${d.getDate()===1||days.indexOf(d)===0?'<span style="font-size:8px;display:block">'+d.toLocaleDateString('en-US',{month:'short'})+'</span>'+d.getDate():d.getDate()}</th>`).join('');
+  const hdr=days.map(d=>{
+    const isT=sameDay(d,t);
+    const bg=isT?'style="background:#fff0f0"':'';
+    const monthLabel=d.getDate()===1||days.indexOf(d)===0?'<span style="font-size:8px;display:block">'+d.toLocaleDateString('en-US',{month:'short'})+'</span>':'';
+    return`<th ${bg} style="min-width:28px${isT?';background:#fff0f0':''}">${monthLabel}${d.getDate()}</th>`;
+  }).join('');
   const gRows=projects.map(p=>{
     const pMs=milestones.filter(m=>m.project_id===p.id);const getD=k=>pMs.find(m=>m.key===k)?.date;
     const segs=segsFn(getD).filter(x=>x.s);
     const cells=days.map(d=>{
       const isT=sameDay(d,t);let fill='';
       segs.forEach(sg=>{const sd=new Date(sg.s+'T00:00:00');const ed=sg.e?new Date(sg.e+'T00:00:00'):sd;if(d>=sd&&d<=ed)fill=`<div class="gantt-fill" style="background:${sg.bg};opacity:0.85" title="${sg.lbl}"></div>`;});
-      const tl=isT?'<div style="position:absolute;left:50%;top:0;width:2px;height:100%;background:rgba(200,16,46,0.4)"></div>':'';
-      return`<td class="gantt-cell ${isT?'gantt-today-col':''}" style="position:relative">${tl}${fill}</td>`;
+      const tl=isT?'<div style="position:absolute;left:50%;top:0;width:2px;height:100%;background:rgba(200,16,46,0.35);transform:translateX(-50%)"></div>':'';
+      return`<td class="gantt-cell" style="${isT?'background:#fff0f0;':''}">${tl}${fill}</td>`;
     }).join('');
-    return`<tr><td class="proj-name">${p.name}<br><span style="font-family:var(--mono);font-size:9px;color:var(--gray-500)">${p.so_number||''}</span></td>${cells}</tr>`;
+    return`<tr><td class="proj-name">${p.name}<br><span style="font-family:var(--mono);font-size:9px;color:var(--gray-500)" title="${p.so_number||''}">${truncateSO(p.so_number,2)}</span></td>${cells}</tr>`;
   }).join('');
   const legHtml=legend.map(l=>`<div class="leg"><div class="leg-dot" style="background:${l.c}"></div>${l.l}</div>`).join('');
   return`<div class="section" style="margin-bottom:10px"><div class="section-head"><div class="section-title">${title} — Gantt</div><div class="legend-row" style="margin:0;gap:8px">${legHtml}</div></div><div class="prod-gantt"><div class="gantt-wrap"><table class="gantt-table"><thead><tr><th class="proj-col">Project</th>${hdr}</tr></thead><tbody>${gRows}</tbody></table></div></div></div>`;
@@ -875,7 +890,7 @@ function renderDeptView(dept){
     else if(dept==='quality'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(ed)}</td><td class="date-cell">${dur}</td><td class="date-cell">${fmt(getMsDate(p.id,'vinyl'))}</td><td class="date-cell">${fmt(getMsDate(p.id,'uat'))}</td>`;}
     else if(dept==='shipping'){extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(getMsDate(p.id,'delivery'))}</td>`;}
     else if(dept==='installation'){extra=`<td class="date-cell">${fmt(getMsDate(p.id,'training'))}</td><td class="date-cell">${fmt(sd)}</td>`;}
-    return`<tr><td style="font-weight:500">${p.name}</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">${p.so_number||'—'}</td><td>${p.client||'—'}</td>${extra}<td><span class="status-chip ${st.chip}">${st.label}</span></td></tr>`;
+    return`<tr><td style="font-weight:500">${p.name}</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)" title="${p.so_number||''}">${truncateSO(p.so_number)}</td><td>${p.client||'—'}</td>${extra}<td><span class="status-chip ${st.chip}">${st.label}</span></td></tr>`;
   }).join('');
   el.innerHTML=`${ganttHtml}<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid ${c.color};padding-left:8px">${c.title}</div><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div><div class="dept-table-wrap"><table class="dept-table"><thead><tr>${c.cols.map(col=>`<th>${col}</th>`).join('')}</tr></thead><tbody>${rows||'<tr><td colspan="99" style="text-align:center;padding:2rem;color:var(--gray-500)">No projects yet.</td></tr>'}</tbody></table></div></div>`;
 }
