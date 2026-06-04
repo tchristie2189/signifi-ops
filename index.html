@@ -158,15 +158,16 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .date-cell{font-family:var(--mono);font-size:11px;}
 .status-chip{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;display:inline-block;white-space:nowrap;}
 /* ── GANTT ── */
-.prod-gantt{overflow-x:auto;padding:0 16px 16px;}
-.gantt-table{border-collapse:separate;border-spacing:0;width:100%;min-width:700px;}
+.prod-gantt{overflow-x:auto;padding:0 16px 16px;position:relative;}
+.gantt-wrap{overflow-x:auto;}
+.gantt-table{border-collapse:collapse;width:100%;min-width:700px;}
 .gantt-table th{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 4px;text-align:center;border-bottom:1px solid var(--gray-100);font-weight:600;white-space:nowrap;min-width:28px;background:var(--white);}
-.gantt-table th.proj-col{text-align:left;min-width:180px;padding:5px 8px;position:sticky;left:0;z-index:3;background:var(--white);box-shadow:2px 0 4px rgba(0,0,0,0.06);}
+.gantt-table th.proj-col{text-align:left;min-width:180px;padding:5px 8px;position:sticky;left:0;z-index:3;background:var(--white);box-shadow:2px 0 4px rgba(0,0,0,0.08);}
 .gantt-table td{padding:4px 3px;border-bottom:1px solid var(--gray-50);vertical-align:middle;background:var(--white);}
-.gantt-table td.proj-name{font-size:12px;font-weight:500;color:var(--black);padding:4px 8px;white-space:nowrap;position:sticky;left:0;z-index:2;background:var(--white);box-shadow:2px 0 4px rgba(0,0,0,0.06);}
+.gantt-table td.proj-name{font-size:12px;font-weight:500;color:var(--black);padding:4px 8px;white-space:nowrap;position:sticky;left:0;z-index:2;background:var(--white);box-shadow:2px 0 4px rgba(0,0,0,0.08);}
 .gantt-cell{position:relative;text-align:center;}
 .gantt-fill{height:20px;border-radius:3px;}
-.gantt-today-col{background:#fff8f8!important;}
+.gantt-today-col{background:#fff8f8;}
 /* ── SCHEDULE ── */
 .sched-table{width:100%;border-collapse:collapse;}
 .sched-table th{font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:9px 12px;text-align:left;border-bottom:1px solid var(--gray-100);font-weight:600;background:var(--gray-50);white-space:nowrap;}
@@ -853,7 +854,7 @@ function buildGantt(startKeys,endKeys,segsFn,title,legend){
     return`<tr><td class="proj-name">${p.name}<br><span style="font-family:var(--mono);font-size:9px;color:var(--gray-500)">${p.so_number||''}</span></td>${cells}</tr>`;
   }).join('');
   const legHtml=legend.map(l=>`<div class="leg"><div class="leg-dot" style="background:${l.c}"></div>${l.l}</div>`).join('');
-  return`<div class="section" style="margin-bottom:10px"><div class="section-head"><div class="section-title">${title} — Gantt</div><div class="legend-row" style="margin:0;gap:8px">${legHtml}</div></div><div class="prod-gantt"><table class="gantt-table"><thead><tr><th class="proj-col">Project</th>${hdr}</tr></thead><tbody>${gRows}</tbody></table></div></div>`;
+  return`<div class="section" style="margin-bottom:10px"><div class="section-head"><div class="section-title">${title} — Gantt</div><div class="legend-row" style="margin:0;gap:8px">${legHtml}</div></div><div class="prod-gantt"><div class="gantt-wrap"><table class="gantt-table"><thead><tr><th class="proj-col">Project</th>${hdr}</tr></thead><tbody>${gRows}</tbody></table></div></div></div>`;
 }
 function renderDeptView(dept){
   const el=document.getElementById('tab-'+dept);
@@ -1681,15 +1682,32 @@ function renderProjPageBody(){
     <td class="pp-actions"><button class="pp-del" onclick="ppDelTeam('${m.id}')">✕</button></td>
   </tr>`).join('');
 
-  // Milestones from hub
-  const MILESTONE_LABELS=['po-release','production-start','production-end','quality-start','quality-end','uat','shipping','delivery','installation'];
-  const msHtml=MILESTONE_LABELS.map(key=>{
-    const m=pMs.find(x=>x.key===key);
-    if(!m)return'';
+  // Milestones from hub — show ALL milestones not just preset keys
+  const msHtml=pMs.sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(m=>{
+    const isDone=isMilestoneDone(m);
+    const isOverdue=isMilestoneOverdue(m);
+    const isEscalation=isMilestoneEscalation(m);
+    const isAtRisk=isMilestoneAtRisk(m);
+    const ci=checkinStatus[m.id];
     const d=daysDiff(m.date);
-    const chip=d<0?'chip-done':d===0?'chip-active':d<=7?'chip-atrisk':'chip-future';
-    const lbl=d<0?'Done':d===0?'Today':'In '+d+'d';
-    return`<tr><td style="font-weight:500">${m.label}</td><td class="date-cell">${fmt(m.date)}</td><td><span class="status-chip ${chip}">${lbl}</span></td><td><button class="pp-del" style="color:var(--blue);font-size:11px" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')">edit</button></td></tr>`;
+    let chip,lbl;
+    if(isDone){chip='chip-done';lbl='Done ✓';}
+    else if(isEscalation){chip='chip-overdue';lbl='Escalation';}
+    else if(isOverdue){chip='chip-overdue';lbl=Math.abs(d)+'d overdue';}
+    else if(isAtRisk){chip='chip-atrisk';lbl='At risk';}
+    else if(d===0){chip='chip-active';lbl='Today';}
+    else if(d<=7){chip='chip-atrisk';lbl='In '+d+'d';}
+    else{chip='chip-future';lbl=fmt(m.date);}
+    const slDot=ci?.stoplight?`<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${ci.stoplight==='green'?'#22c55e':ci.stoplight==='yellow'?'#eab308':'#ef4444'};margin-left:4px" title="Dept: ${ci.stoplight}"></span>`:'';
+    return`<tr>
+      <td style="font-weight:500">${m.label}${slDot}</td>
+      <td class="date-cell">${fmt(m.date)}</td>
+      <td><span class="status-chip ${chip}">${lbl}</span></td>
+      <td style="display:flex;gap:4px;align-items:center">
+        <button class="pp-del" style="color:var(--blue);font-size:11px" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')">edit</button>
+        <button onclick="toggleMilestoneDone('${m.id}','${ppProjId}',event)" style="background:${isDone?'var(--success)':'transparent'};border:1px solid ${isDone?'var(--success)':'var(--gray-300)'};border-radius:10px;padding:1px 6px;font-size:10px;cursor:pointer;color:${isDone?'white':'var(--gray-500)'};font-family:var(--font)">${isDone?'✓':'done'}</button>
+      </td>
+    </tr>`;
   }).join('');
 
   // Action items
@@ -1794,7 +1812,7 @@ function renderProjPageBody(){
         <div class="pp-card-head"><span class="pp-card-title">Milestone tracker</span><span style="font-size:10px;color:var(--gray-400)">Synced from hub</span></div>
         <div style="overflow-x:auto">
           <table class="pp-table">
-            <thead><tr><th>Milestone</th><th>Date</th><th>Status</th><th style="width:32px"></th></tr></thead>
+            <thead><tr><th>Milestone</th><th>Date</th><th>Status</th><th style="width:80px"></th></tr></thead>
             <tbody>${msHtml||'<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--gray-300)">No milestones — add them in Project Overview</td></tr>'}</tbody>
           </table>
         </div>
@@ -2532,3 +2550,4 @@ function exportProjPageExcel(){
 loadAll();
 </script>
 </body>
+</html>
