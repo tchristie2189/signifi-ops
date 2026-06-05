@@ -159,10 +159,10 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .status-chip{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;display:inline-block;white-space:nowrap;}
 /* ── GANTT ── */
 .prod-gantt{padding:0 16px 16px;}
-.gantt-wrap{overflow-x:auto;width:100%;}
+.gantt-wrap{overflow-x:auto;overflow-y:auto;max-height:600px;width:100%;}
 .gantt-table{border-collapse:separate;border-spacing:0;width:100%;min-width:700px;}
-.gantt-table th{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 4px;text-align:center;border-bottom:1px solid var(--gray-200);font-weight:600;white-space:nowrap;min-width:28px;background:var(--white);}
-.gantt-table th.proj-col{text-align:left;min-width:180px;padding:5px 8px;position:sticky;left:0;z-index:3;background:var(--white);border-right:2px solid var(--gray-200);}
+.gantt-table th{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 4px;text-align:center;border-bottom:2px solid var(--gray-200);font-weight:600;white-space:nowrap;min-width:28px;background:var(--white);position:sticky;top:0;z-index:2;}
+.gantt-table th.proj-col{text-align:left;min-width:180px;padding:5px 8px;position:sticky;left:0;top:0;z-index:5;background:var(--white);border-right:2px solid var(--gray-200);}
 .gantt-table td{padding:3px;border-bottom:1px solid var(--gray-50);vertical-align:middle;background:var(--white);}
 .gantt-table td.proj-name{font-size:12px;font-weight:500;color:var(--black);padding:4px 8px;white-space:nowrap;position:sticky;left:0;z-index:2;background:var(--white);border-right:2px solid var(--gray-200);min-width:180px;}
 .gantt-cell{position:relative;text-align:center;height:26px;}
@@ -425,6 +425,7 @@ let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc
 let currentUser=null,currentUserName='';
 let vinylFilter={status:'',search:'',dateFrom:'',dateTo:''};
 let planFilter={status:'',search:'',dateFrom:'',dateTo:''};
+let deptFilter={shipping:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'},installation:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'}};
 let pmFilter='';
 
 // ── UTILS ──────────────────────────────────────────────────
@@ -908,7 +909,30 @@ function renderDeptView(dept){
   let ganttHtml='';
   if(dept==='production'){ganttHtml=buildGantt(['production-start'],['production-end','quality-end'],getD=>[{s:getD('production-start'),e:getD('production-end'),bg:'#7c3aed',lbl:'Build'},{s:getD('quality-start'),e:getD('quality-end'),bg:'#d97706',lbl:'QA'},{s:getD('shipping'),e:getD('shipping'),bg:'#059669',lbl:'Ship'},{s:getD('installation'),e:getD('installation'),bg:'#db2777',lbl:'Install'}],'Production',[{c:'#7c3aed',l:'Build'},{c:'#d97706',l:'QA'},{c:'#059669',l:'Ship'},{c:'#db2777',l:'Install'}]);}
   else if(dept==='quality'){ganttHtml=buildGantt(['quality-start'],['quality-end','uat'],getD=>[{s:getD('quality-start'),e:getD('quality-end'),bg:'#d97706',lbl:'QA'},{s:getD('vinyl'),e:getD('vinyl'),bg:'#2563eb',lbl:'Vinyl'},{s:getD('uat'),e:getD('uat'),bg:'#16a34a',lbl:'UAT'}],'Quality / QA',[{c:'#d97706',l:'QA'},{c:'#2563eb',l:'Vinyl'},{c:'#16a34a',l:'UAT'}]);}
-  const rows=projects.map(p=>{
+
+  // For shipping & installation add filtering and sorting
+  const hasFilter=dept==='shipping'||dept==='installation';
+  const f=hasFilter?deptFilter[dept]:null;
+
+  let filteredProjects=projects;
+  if(hasFilter&&f){
+    const mainDateKey=dept==='shipping'?'shipping':'installation';
+    filteredProjects=projects.filter(p=>{
+      const sd=getMsDate(p.id,mainDateKey);
+      if(f.search){const q=f.search.toLowerCase();if(!(p.name||'').toLowerCase().includes(q)&&!(p.so_number||'').toLowerCase().includes(q)&&!(p.client||'').toLowerCase().includes(q))return false;}
+      if(f.dateFrom&&sd&&sd<f.dateFrom)return false;
+      if(f.dateTo&&sd&&sd>f.dateTo)return false;
+      return true;
+    });
+    // Sort
+    filteredProjects=[...filteredProjects].sort((a,b)=>{
+      const da=getMsDate(a.id,mainDateKey)||'9999';
+      const db=getMsDate(b.id,mainDateKey)||'9999';
+      return f.sort==='date-asc'?da.localeCompare(db):db.localeCompare(da);
+    });
+  }
+
+  const rows=filteredProjects.map(p=>{
     const sd=getMsDate(p.id,c.startKey);const ed=c.endKey!==c.startKey?getMsDate(p.id,c.endKey):null;const st=stageStatus(sd,ed||sd);
     let extra='';
     if(dept==='production'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(ed)}</td><td class="date-cell">${dur}</td>`;}
@@ -917,7 +941,23 @@ function renderDeptView(dept){
     else if(dept==='installation'){extra=`<td class="date-cell">${fmt(getMsDate(p.id,'training'))}</td><td class="date-cell">${fmt(sd)}</td>`;}
     return`<tr><td style="font-weight:500">${p.name}</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)" title="${p.so_number||''}">${truncateSO(p.so_number)}</td><td>${p.client||'—'}</td>${extra}<td><span class="status-chip ${st.chip}">${st.label}</span></td></tr>`;
   }).join('');
-  el.innerHTML=`${ganttHtml}<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid ${c.color};padding-left:8px">${c.title}</div><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div><div class="dept-table-wrap"><table class="dept-table"><thead><tr>${c.cols.map(col=>`<th>${col}</th>`).join('')}</tr></thead><tbody>${rows||'<tr><td colspan="99" style="text-align:center;padding:2rem;color:var(--gray-500)">No projects yet.</td></tr>'}</tbody></table></div></div>`;
+
+  const activeFilters=hasFilter&&f?[f.search,f.dateFrom,f.dateTo].filter(Boolean).length:0;
+  const filterBar=hasFilter?`
+    <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
+      <input placeholder="🔍 Search project, SO, client..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:220px" value="${f.search}" oninput="deptFilter['${dept}'].search=this.value;renderDeptView('${dept}')">
+      <input type="date" title="Date from" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${f.dateFrom}" onchange="deptFilter['${dept}'].dateFrom=this.value;renderDeptView('${dept}')">
+      <span style="font-size:11px;color:var(--gray-500)">to</span>
+      <input type="date" title="Date to" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${f.dateTo}" onchange="deptFilter['${dept}'].dateTo=this.value;renderDeptView('${dept}')">
+      <select style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" onchange="deptFilter['${dept}'].sort=this.value;renderDeptView('${dept}')">
+        <option value="date-asc"${f.sort==='date-asc'?' selected':''}>Date ↑ earliest first</option>
+        <option value="date-desc"${f.sort==='date-desc'?' selected':''}>Date ↓ latest first</option>
+      </select>
+      ${activeFilters?`<button onclick="deptFilter['${dept}']={search:'',dateFrom:'',dateTo:'',sort:'date-asc'};renderDeptView('${dept}')" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>`:''}
+      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filteredProjects.length} of ${projects.length} projects${activeFilters?' (filtered)':''}</span>
+    </div>`:'';
+
+  el.innerHTML=`${ganttHtml}<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid ${c.color};padding-left:8px">${c.title}</div><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div>${filterBar}<div class="dept-table-wrap"><table class="dept-table"><thead><tr>${c.cols.map(col=>`<th>${col}</th>`).join('')}</tr></thead><tbody>${rows||'<tr><td colspan="99" style="text-align:center;padding:2rem;color:var(--gray-500)">No projects match the current filters.</td></tr>'}</tbody></table></div></div>`;
 }
 
 // ── VINYL ──────────────────────────────────────────────────
@@ -943,11 +983,11 @@ function renderVinyl(){
       <td style="${readStyle}">${item.so||'—'}</td>
       <td style="${readStyle}">${item.client||'—'}</td>
       <td style="${readStyle}">${item.name||'—'}</td>
-      <td style="${readStyle}">${item.vinylType||'—'}</td>
+      <td><select class="sched-select" onchange="vs(${origIdx},'vinylType',this.value)">${['','Decal','Partial Vinyl','Full Vinyl'].map(t=>`<option${t===item.vinylType?' selected':''}>${t||'Select...'}</option>`).join('')}</select></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vinylDateSync(${origIdx},this.value,'vinyl')" title="Syncs with project overview"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vinylDateSync(${origIdx},this.value,'ship')" title="Syncs with project overview"></td>
       <td style="${readStyle}">${item.pm||'—'}</td>
-      <td style="${readStyle}">${item.formFactor||'—'}</td>
+      <td><input class="sched-input" value="${item.formFactor||''}" placeholder="Form factor" style="width:110px" onchange="vs(${origIdx},'formFactor',this.value)"></td>
       <td><select class="sched-select" onchange="vs(${origIdx},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
       <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">✕</button></td>
     </tr>`;
