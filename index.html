@@ -798,7 +798,8 @@ function renderGlance(){
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
           ${h?healthRing(p.id):''}
-          <button onclick="toggleArchive('${p.id}','${p.status}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)" title="${isComplete?'Restore to active':'Mark complete'}">${isComplete?'↩ Restore':'✓ Complete'}</button>
+          <button onclick="goToProjPage('${p.id}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)" title="Open project page">↗ Project page</button>
+          <button onclick="toggleArchive('${p.id}','${p.status}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)">${isComplete?'↩ Restore':'✓ Complete'}</button>
         </div>
       </div>
       <div class="cycle-track"><div class="cycle-stages">${stagesHtml}</div></div>
@@ -896,6 +897,12 @@ function renderOverview(){
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
     </div>`:'<div class="empty-state">No projects yet.</div>'}`;
 }
+function goToProjPage(id){
+  selectedProjId=id;
+  ppProjId=id;
+  setTab('projpage');
+}
+
 function selProj(id){selectedProjId=id;renderOverview();}
 
 // ── WEEK ───────────────────────────────────────────────────
