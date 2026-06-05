@@ -423,7 +423,7 @@ const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date'];
 let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={};
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
 let currentUser=null,currentUserName='';
-let vinylFilter={status:'',search:'',dateFrom:'',dateTo:''};
+let vinylFilter={status:'',search:'',dateFrom:'',dateTo:'',pm:''};
 let planFilter={status:'',search:'',dateFrom:'',dateTo:''};
 let deptFilter={shipping:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'},installation:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'}};
 let adHocRows={shipping:[],installation:[]}; // standalone entries not tied to a project
@@ -697,6 +697,17 @@ let glanceFilter='active'; // 'active' or 'archived'
 let hideCompleted={glance:false,overview:false,week:false,production:false,quality:false,shipping:false,installation:false,briefing:false,vinyl:false,planogram:false};
 
 // Helper — filters out completed projects based on per-page toggle
+function pmDropdown(renderFn){
+  const pms=[...new Set(projects.map(p=>p.pm).filter(Boolean))].sort();
+  const onChange=renderFn.includes('(')?renderFn:renderFn+'()';
+  return`<select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pmFilter=this.value;${onChange}">
+    <option value="">All PMs</option>
+    ${pms.map(pm=>`<option value="${pm}"${pmFilter===pm?' selected':''}>${pm}</option>`).join('')}
+  </select>`;
+}
+function filterByPM(list){return pmFilter?list.filter(p=>p.pm===pmFilter):list;}
+
+// Helper — filters out completed projects based on per-page toggle
 function activeProjects(page){
   const hide=page?hideCompleted[page]:false;
   let list=projects.filter(p=>p.status!=='complete'||!hide);
@@ -822,11 +833,7 @@ function renderGlance(){
           <button class="ftab${glanceFilter==='archived'?' active':''}" onclick="glanceFilter='archived';renderGlance()">Completed (${allArchived.length})</button>
         </div>
         <div style="display:flex;align-items:center;gap:6px">
-          <label style="font-size:11px;color:var(--gray-500);white-space:nowrap">Filter by PM:</label>
-          <select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pmFilter=this.value;renderGlance()">
-            <option value="">All PMs</option>
-            ${[...new Set(projects.map(p=>p.pm).filter(Boolean))].map(pm=>`<option value="${pm}"${pmFilter===pm?' selected':''}>${pm}</option>`).join('')}
-          </select>
+${pmDropdown('renderGlance')}
         </div>
         <span style="font-size:11px;color:var(--gray-500)">Health score top-right · ✓ Complete to archive</span>
       </div>
@@ -866,13 +873,10 @@ function renderOverview(){
     </div>`;
   }).join('');
   const pillsHtml=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
-    <div class="proj-pills" style="margin-bottom:0;flex:1">${activeProjects('overview').filter(p=>!pmFilter||(p.pm===pmFilter)).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
+    <div class="proj-pills" style="margin-bottom:0;flex:1">${filterByPM(activeProjects('overview')).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
       <label style="font-size:11px;color:var(--gray-500);white-space:nowrap">PM:</label>
-      <select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pmFilter=this.value;renderOverview()">
-        <option value="">All</option>
-        ${[...new Set(projects.map(p=>p.pm).filter(Boolean))].map(pm=>`<option value="${pm}"${pmFilter===pm?' selected':''}>${pm}</option>`).join('')}
-      </select>
+      ${pmDropdown('renderOverview')}
     </div>
   </div>`;
   el.innerHTML=`
@@ -909,7 +913,7 @@ function selProj(id){selectedProjId=id;renderOverview();}
 function renderWeek(){
   const el=document.getElementById('tab-week');
   const we=addD(weekStart,6);
-  const ap=activeProjects('week');const allMs=milestones.filter(m=>ap.some(p=>p.id===m.project_id)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
+  const ap=filterByPM(activeProjects('week'));const allMs=milestones.filter(m=>ap.some(p=>p.id===m.project_id)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
   const overdueMs=allMs.filter(m=>m.date&&daysDiff(m.date)<0&&daysDiff(m.date)>=-14);
   const overdueHtml=overdueMs.length?`<div class="overdue-bar"><div><div class="overdue-title">⚠ Overdue</div>${overdueMs.map(m=>`<div class="overdue-item">${m.label} — ${m.projectName} (was ${fmt(m.date)})</div>`).join('')}</div></div>`:'';
   const DAY=['Monday','Tuesday','Wednesday','Thursday','Friday'];
@@ -926,6 +930,7 @@ function renderWeek(){
       <button class="wnav" onclick="shiftW(1)">&#8250;</button>
       <button class="wnav" onclick="goToday()">Today</button>
       <button class="btn-add" onclick="openAddEvModal()">+ Add</button>
+      ${pmDropdown('renderWeek')}
       ${hideCompletedBtn('week')}
       <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
     </div>
@@ -957,7 +962,7 @@ function buildGantt(startKeys,endKeys,segsFn,title,legend){
     const monthLabel=d.getDate()===1||days.indexOf(d)===0?'<span style="font-size:8px;display:block">'+d.toLocaleDateString('en-US',{month:'short'})+'</span>':'';
     return`<th ${bg} style="min-width:28px${isT?';background:#fff0f0':''}">${monthLabel}${d.getDate()}</th>`;
   }).join('');
-  const gRows=activeProjects(title.toLowerCase().includes('prod')?'production':'quality').map(p=>{
+  const gRows=filterByPM(activeProjects(title.toLowerCase().includes('prod')?'production':'quality')).map(p=>{
     const pMs=milestones.filter(m=>m.project_id===p.id);const getD=k=>pMs.find(m=>m.key===k)?.date;
     const segs=segsFn(getD).filter(x=>x.s);
     const cells=days.map(d=>{
@@ -988,7 +993,7 @@ function renderDeptView(dept){
   const f=hasFilter?deptFilter[dept]:null;
   const mainKey=dept==='shipping'?'shipping':'installation';
 
-  let filteredProjects=activeProjects(dept);
+  let filteredProjects=filterByPM(activeProjects(dept));
   if(hasFilter&&f){
     if(f.search){const q=f.search.toLowerCase();filteredProjects=filteredProjects.filter(p=>(p.name||'').toLowerCase().includes(q)||(p.so_number||'').toLowerCase().includes(q)||(p.client||'').toLowerCase().includes(q));}
     if(f.dateFrom){filteredProjects=filteredProjects.filter(p=>{const d=getMsDate(p.id,mainKey);return!d||d>=f.dateFrom;});}
@@ -1054,7 +1059,7 @@ function renderDeptView(dept){
     '<div class="section">'+
     '<div class="section-head">'+
     '<div class="section-title" style="border-left:3px solid '+c.color+';padding-left:8px">'+c.title+'</div>'+
-    '<div style="display:flex;gap:7px;align-items:center">'+hideCompletedBtn(dept)+'<button class="btn-export" onclick="exportToExcel()">&#8675; Excel</button></div>'+
+    '<div style="display:flex;gap:7px;align-items:center">'+pmDropdown('renderDeptView.bind(null,"'+dept+'")') + hideCompletedBtn(dept)+'<button class="btn-export" onclick="exportToExcel()">&#8675; Excel</button></div>'+
     '</div>'+filterBar+
     '<div class="dept-table-wrap"><table class="dept-table"><thead><tr>'+
     c.cols.map(col=>'<th>'+col+'</th>').join('')+
@@ -1075,6 +1080,7 @@ function deptFilterClear(dept){deptFilter[dept]={search:'',dateFrom:'',dateTo:''
 function applyVinylFilter(data){
   return data.filter(item=>{
     if(vinylFilter.status&&item.status!==vinylFilter.status)return false;
+    if(vinylFilter.pm&&(item.pm||'')!==vinylFilter.pm)return false;
     if(vinylFilter.search){const q=vinylFilter.search.toLowerCase();if(!(item.name||'').toLowerCase().includes(q)&&!(item.so||'').toLowerCase().includes(q)&&!(item.client||'').toLowerCase().includes(q))return false;}
     if(vinylFilter.dateFrom&&item.date&&item.date<vinylFilter.dateFrom)return false;
     if(vinylFilter.dateTo&&item.date&&item.date>vinylFilter.dateTo)return false;
@@ -1083,7 +1089,8 @@ function applyVinylFilter(data){
 }
 function renderVinyl(){
   const el=document.getElementById('tab-vinyl');
-  const source=hideCompleted['vinyl']?vinylSchedule.filter(v=>v.status!=='Complete'):vinylSchedule;
+  const vinylBase=hideCompleted['vinyl']?vinylSchedule.filter(v=>v.status!=='Complete'):vinylSchedule;
+  const source=pmFilter?vinylBase.filter(v=>{const p=projects.find(x=>x.id===v.project_id);return p?p.pm===pmFilter:!pmFilter;}):vinylBase;
   const filtered=applyVinylFilter(source);
   const activeFilters=[vinylFilter.status,vinylFilter.search,vinylFilter.dateFrom,vinylFilter.dateTo].filter(Boolean).length;
   const rows=filtered.map((item,i)=>{
@@ -1105,7 +1112,7 @@ function renderVinyl(){
     </tr>`;
   }).join('');
   el.innerHTML=`<div class="section">
-    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px;align-items:center">${hideCompletedBtn('vinyl')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
+    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderVinyl')}${hideCompletedBtn('vinyl')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
     <!-- FILTER BAR -->
     <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
       <input placeholder="🔍 Search name, SO, client..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:210px" value="${vinylFilter.search}" oninput="vinylFilter.search=this.value;renderVinyl()">
@@ -1149,7 +1156,8 @@ function applyPlanFilter(data){
 }
 function renderPlanogram(){
   const el=document.getElementById('tab-planogram');
-  const source=hideCompleted['planogram']?planogramSchedule.filter(v=>v.status!=='Complete'):planogramSchedule;
+  const planBase=hideCompleted['planogram']?planogramSchedule.filter(v=>v.status!=='Complete'):planogramSchedule;
+  const source=pmFilter?planBase.filter(v=>{const p=projects.find(x=>x.id===v.project_id);return p?p.pm===pmFilter:!pmFilter;}):planBase;
   const filtered=applyPlanFilter(source);
   const activeFilters=[planFilter.status,planFilter.search,planFilter.dateFrom,planFilter.dateTo].filter(Boolean).length;
   const rows=filtered.map((item,i)=>{
@@ -1168,7 +1176,7 @@ function renderPlanogram(){
     </tr>`;
   }).join('');
   el.innerHTML=`<div class="section">
-    <div class="section-head"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div><div style="display:flex;gap:7px;align-items:center">${hideCompletedBtn('planogram')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
+    <div class="section-head"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderPlanogram')}${hideCompletedBtn('planogram')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
     <!-- FILTER BAR -->
     <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
       <input placeholder="🔍 Search name, SO, client, machine..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:230px" value="${planFilter.search}" oninput="planFilter.search=this.value;renderPlanogram()">
@@ -1372,7 +1380,7 @@ function renderCheckinOverview(){
   const el=document.getElementById('tab-checkin');
   const base=monday(today());
   const weeks=[{label:'This week',start:base},{label:'Next week',start:addD(base,7)}];
-  const apci=activeProjects('checkin');
+  const apci=filterByPM(activeProjects('checkin'));
   const depts=Object.keys(DEPT_KEYS);
 
   function getDeptMs(dept,wStart){
@@ -1445,7 +1453,7 @@ function renderCheckinOverview(){
   el.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">'+
     '<div><div style="font-size:16px;font-weight:600">🚦 Department check-in</div>'+
     '<div style="font-size:12px;color:var(--gray-500);margin-top:2px">Dept leads update via <strong>signifi-ops.vercel.app/checkin</strong></div></div>'+
-    '<button class="btn-export" onclick="loadAll()">↻ Refresh</button></div>'+
+    pmDropdown('renderCheckinOverview')+'<button class="btn-export" onclick="loadAll()">↻ Refresh</button></div>'+
     '<div style="background:var(--blue-bg);border:1px solid #bfdbfe;border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;font-size:11px;color:var(--blue)">'+
     '<strong>Dept passcodes:</strong> Production: <code>prod2026</code> · UI: <code>ui2026</code> · Inventory: <code>inv2026</code> · Procurement: <code>proc2026</code> · MO: <code>mo2026</code> · QA: <code>qa2026</code> · Shipping: <code>ship2026</code> · Deployment: <code>deploy2026</code></div>'+
     weeksHtml;
@@ -1454,14 +1462,14 @@ function renderCheckinOverview(){
 // ── BRIEFING ───────────────────────────────────────────────
 function renderBriefing(){
   const el=document.getElementById('tab-briefing');
-  const ap2=activeProjects('briefing');const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+  const ap2=filterByPM(activeProjects('briefing'));const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
   const timeStr=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
   const allMs=milestones.map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:'',so:p?p.so_number:'',client:p?p.client:''};});
   const thisWeekMs=allMs.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).sort((a,b)=>a.date.localeCompare(b.date));
   const overdueMs=allMs.filter(m=>m.date&&daysDiff(m.date)<0).sort((a,b)=>b.date.localeCompare(a.date));
   const upcomingMs=allMs.filter(m=>m.date&&daysDiff(m.date)>6&&daysDiff(m.date)<=14).sort((a,b)=>a.date.localeCompare(b.date));
   const STAGES=[{label:'Readiness',startKey:'po-release',endKey:'arrival'},{label:'Production',startKey:'production-start',endKey:'production-end'},{label:'Quality / QA',startKey:'quality-start',endKey:'quality-end'},{label:'UAT',startKey:'uat',endKey:'uat'},{label:'Shipping',startKey:'shipping',endKey:'shipping'},{label:'Installation',startKey:'installation',endKey:'installation'}];
-  const projSummary=activeProjects('briefing').map(p=>{
+  const projSummary=filterByPM(activeProjects('briefing')).map(p=>{
     const currentStage=STAGES.find(s=>{const sd=getMsDate(p.id,s.startKey);const ed=getMsDate(p.id,s.endKey);if(!sd)return false;const t=today();const start=new Date(sd+'T00:00:00');const end=ed?new Date(ed+'T00:00:00'):start;return t>=start&&t<=end;});
     const nextMs=allMs.filter(m=>m.project_id===p.id&&m.date&&daysDiff(m.date)>=0).sort((a,b)=>a.date.localeCompare(b.date))[0];
     const h=calcHealth(p.id);
@@ -1477,7 +1485,10 @@ function renderBriefing(){
         <div style="font-size:20px;font-weight:600">Daily Ops Briefing</div>
         <div style="font-size:12px;color:#aaa;margin-top:2px">${dateStr} · ${timeStr} · Prepared by ${currentUserName}</div>
       </div>
-      <button class="no-print" style="background:#1a1a1a;color:white;border:1px solid #333;padding:8px 16px;border-radius:var(--radius);cursor:pointer;font-family:var(--font);font-size:12px" onclick="window.print()">🖨 Print / Save PDF</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        ${pmDropdown('renderBriefing')}
+        <button class="no-print" style="background:#1a1a1a;color:white;border:1px solid #333;padding:8px 16px;border-radius:var(--radius);cursor:pointer;font-family:var(--font);font-size:12px" onclick="window.print()">🖨 Print / Save PDF</button>
+      </div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
       <div class="metric"><div class="metric-label">Active projects</div><div class="metric-val">${projects.length}</div></div>
@@ -1861,7 +1872,11 @@ function renderProjPage(){
   if(!projects.length){el.innerHTML='<div class="empty-state">No projects yet.</div>';return;}
   if(!ppProjId)ppProjId=selectedProjId||projects[0].id;
   const sortedProjs=[...projects].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  const projOpts=sortedProjs.map(p=>`<option value="${p.id}">${p.name}${p.so_number?' — '+p.so_number:''}</option>`).join('');
+  // Build a name->id map for the search
+  const projNameMap={};
+  sortedProjs.forEach(p=>{projNameMap[p.name+(p.so_number?' — '+p.so_number:'')]=p.id;});
+  // Datalist uses display text as value so browser shows names not UUIDs
+  const projOpts=sortedProjs.map(p=>`<option value="${p.name+(p.so_number?' — '+p.so_number:'')}">`).join('');
   el.innerHTML=`
     <div class="proj-sel-bar">
       <label>Project</label>
@@ -1883,9 +1898,15 @@ function renderProjPage(){
 }
 
 function onProjPageSearch(val){
-  // Find project by name match from the datalist
-  const match=projects.find(p=>p.name===val||(p.name+(p.so_number?' — '+p.so_number:''))===val);
-  if(match&&match.id!==ppProjId){switchProjPage(match.id);document.getElementById('pp-proj-search').blur();}
+  // Find project by display name match
+  const match=projects.find(p=>{
+    const display=p.name+(p.so_number?' — '+p.so_number:'');
+    return display===val||p.name===val;
+  });
+  if(match&&match.id!==ppProjId){
+    switchProjPage(match.id);
+    document.getElementById('pp-proj-search').blur();
+  }
 }
 async function switchProjPage(id){
   ppProjId=id;
