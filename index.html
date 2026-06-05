@@ -21,7 +21,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .logo-text{font-size:12px;font-weight:600;color:white;letter-spacing:0.06em;text-transform:uppercase;}
 .logo-chevron{font-size:10px;color:#555;margin-left:2px;}
 /* DROPDOWN MENU */
-.nav-dropdown{position:absolute;top:calc(100% + 6px);left:0;background:#111;border:1px solid #2a2a2a;border-radius:var(--radius-lg);padding:6px;min-width:200px;display:none;z-index:300;box-shadow:0 8px 24px rgba(0,0,0,0.4);}
+.nav-dropdown{position:absolute;top:calc(100% + 6px);left:0;background:#111;border:1px solid #2a2a2a;border-radius:var(--radius-lg);padding:6px;min-width:200px;display:none;z-index:300;box-shadow:0 8px 24px rgba(0,0,0,0.4);max-height:calc(100vh - 70px);overflow-y:auto;}
 .nav-dropdown.open{display:block;}
 .nav-group-label{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#444;padding:8px 10px 4px;}
 .nav-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:var(--radius);cursor:pointer;color:#aaa;font-size:12px;font-weight:500;transition:all 0.1s;border:none;background:transparent;width:100%;text-align:left;font-family:var(--font);}
@@ -159,10 +159,10 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .status-chip{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;display:inline-block;white-space:nowrap;}
 /* ── GANTT ── */
 .prod-gantt{padding:0 16px 16px;}
-.gantt-wrap{overflow-x:auto;width:100%;}
+.gantt-wrap{overflow-x:auto;overflow-y:auto;max-height:600px;width:100%;}
 .gantt-table{border-collapse:separate;border-spacing:0;width:100%;min-width:700px;}
-.gantt-table th{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 4px;text-align:center;border-bottom:1px solid var(--gray-200);font-weight:600;white-space:nowrap;min-width:28px;background:var(--white);}
-.gantt-table th.proj-col{text-align:left;min-width:180px;padding:5px 8px;position:sticky;left:0;z-index:3;background:var(--white);border-right:2px solid var(--gray-200);}
+.gantt-table th{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 4px;text-align:center;border-bottom:2px solid var(--gray-200);font-weight:600;white-space:nowrap;min-width:28px;background:var(--white);position:sticky;top:0;z-index:2;}
+.gantt-table th.proj-col{text-align:left;min-width:180px;padding:5px 8px;position:sticky;left:0;top:0;z-index:5;background:var(--white);border-right:2px solid var(--gray-200);}
 .gantt-table td{padding:3px;border-bottom:1px solid var(--gray-50);vertical-align:middle;background:var(--white);}
 .gantt-table td.proj-name{font-size:12px;font-weight:500;color:var(--black);padding:4px 8px;white-space:nowrap;position:sticky;left:0;z-index:2;background:var(--white);border-right:2px solid var(--gray-200);min-width:180px;}
 .gantt-cell{position:relative;text-align:center;height:26px;}
@@ -425,6 +425,8 @@ let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc
 let currentUser=null,currentUserName='';
 let vinylFilter={status:'',search:'',dateFrom:'',dateTo:''};
 let planFilter={status:'',search:'',dateFrom:'',dateTo:''};
+let deptFilter={shipping:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'},installation:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'}};
+let adHocRows={shipping:[],installation:[]}; // standalone entries not tied to a project
 let pmFilter='';
 
 // ── UTILS ──────────────────────────────────────────────────
@@ -595,23 +597,37 @@ function renderTab(){
 
 // ── DATA ───────────────────────────────────────────────────
 async function loadAll(){
-  const[pr,ms,lg,ci,md,mh]=await Promise.all([
+  const[pr,ms,lg,ci,md,mh,ah]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
     sb.from('checkin_status').select('*').order('updated_at',{ascending:false}),
     sb.from('milestone_done').select('*'),
     sb.from('milestone_history').select('*').order('changed_at',{ascending:true}),
+    sb.from('adhoc_schedule').select('*').order('created_at'),
   ]);
   projects=pr.data||[];milestones=ms.data||[];activityLog=lg.data||[];
   checkinStatus={};(ci.data||[]).forEach(c=>{checkinStatus[c.milestone_id]=c;});
   milestoneDone={};(md.data||[]).forEach(d=>{milestoneDone[d.milestone_id]=d;});
-  // Group history by milestone_id
   milestoneHistory={};
   (mh.data||[]).forEach(h=>{
     if(!milestoneHistory[h.milestone_id])milestoneHistory[h.milestone_id]=[];
     milestoneHistory[h.milestone_id].push(h);
   });
+  // Load ad hoc rows grouped by dept, sorted by date (missing dates at bottom)
+  adHocRows={shipping:[],installation:[]};
+  (ah.data||[]).forEach(r=>{
+    if(r.dept==='shipping')adHocRows.shipping.push({...r,shipDate:r.ship_date,deliveryDate:r.delivery_date});
+    else if(r.dept==='installation')adHocRows.installation.push({...r,trainingDate:r.training_date,installDate:r.install_date});
+  });
+  // Sort each dept by primary date, missing dates at bottom
+  const sortByDate=(arr,dateKey)=>arr.sort((a,b)=>{
+    const da=a[dateKey]||'';const db=b[dateKey]||'';
+    if(!da&&!db)return 0;if(!da)return 1;if(!db)return -1;
+    return da.localeCompare(db);
+  });
+  sortByDate(adHocRows.shipping,'shipDate');
+  sortByDate(adHocRows.installation,'installDate');
   if(projects.length&&!selectedProjId)selectedProjId=projects[0].id;
 
   // Load vinyl schedule from Supabase, then merge with project data
@@ -636,20 +652,40 @@ async function loadAll(){
     const vm=p?milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'):null;
     const sh=p?milestones.find(m=>m.project_id===p.id&&m.key==='shipping'):null;
     return{...v,vinylType:p?.vinyl_type||v.vinyl_type||'',date:vm?.date||v.date||'',shipDate:sh?.date||v.ship_date||'',pm:p?.pm||v.pm||'',formFactor:p?.form_factor||v.form_factor||'',name:p?.name||v.name,so:p?.so_number||v.so,client:p?.client||v.client};
-  }).concat(newVinylRows).sort((a,b)=>(a.priority||0)-(b.priority||0));
+  }).concat(newVinylRows)
+  // Sort: rows with dates first (by date asc), missing dates at bottom
+  .sort((a,b)=>{
+    const da=a.date||'';const db=b.date||'';
+    if(!da&&!db)return 0;
+    if(!da)return 1;
+    if(!db)return -1;
+    return da.localeCompare(db);
+  });
 
   // Build planogram schedule similarly
   const planProjectIds=new Set(savedPlan.map(v=>v.project_id).filter(Boolean));
   const newPlanRows=projects.filter(p=>!planProjectIds.has(p.id)).map((p,i)=>{
-    const pm2=milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram'));
-    return{id:null,project_id:p.id,name:p.name,so:p.so_number,client:p.client,machine_type:'',date:pm2?.date||'',status:'Pending',priority:savedPlan.length+i+1,is_standalone:false};
+    const pm2=milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram sign'));
+    const pmStart=milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram start'));
+    const pmEnd=milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram end'));
+    return{id:null,project_id:p.id,name:p.name,so:p.so_number,client:p.client,machine_type:'',date:pm2?.date||'',planStart:pmStart?.date||'',planEnd:pmEnd?.date||'',status:'Pending',priority:savedPlan.length+i+1,is_standalone:false};
   });
   planogramSchedule=savedPlan.map(v=>{
-    if(v.is_standalone)return{...v,machineType:v.machine_type};
+    if(v.is_standalone)return{...v,machineType:v.machine_type,planStart:v.plan_start||'',planEnd:v.plan_end||''};
     const p=projects.find(x=>x.id===v.project_id);
-    const pm2=p?milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram')):null;
-    return{...v,machineType:p?v.machine_type||'':v.machine_type||'',date:pm2?.date||v.date||'',name:p?.name||v.name,so:p?.so_number||v.so,client:p?.client||v.client};
-  }).concat(newPlanRows).sort((a,b)=>(a.priority||0)-(b.priority||0));
+    const pm2=p?milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram sign')):null;
+    const pmStart=p?milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram start')):null;
+    const pmEnd=p?milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram end')):null;
+    return{...v,machineType:v.machine_type||'',date:pm2?.date||v.date||'',planStart:pmStart?.date||v.plan_start||'',planEnd:pmEnd?.date||v.plan_end||'',name:p?.name||v.name,so:p?.so_number||v.so,client:p?.client||v.client};
+  }).concat(newPlanRows)
+  // Sort: rows with dates first (by date asc), missing dates at bottom
+  .sort((a,b)=>{
+    const da=a.date||'';const db=b.date||'';
+    if(!da&&!db)return 0;
+    if(!da)return 1;
+    if(!db)return -1;
+    return da.localeCompare(db);
+  });
 
   document.getElementById('hdate').textContent=new Date().toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
   renderTab();
@@ -657,6 +693,35 @@ async function loadAll(){
 
 // ── AT A GLANCE ────────────────────────────────────────────
 let glanceFilter='active'; // 'active' or 'archived'
+// Per-page hide completed state
+let hideCompleted={glance:false,overview:false,week:false,production:false,quality:false,shipping:false,installation:false,briefing:false,vinyl:false,planogram:false};
+
+// Helper — filters out completed projects based on per-page toggle
+function activeProjects(page){
+  const hide=page?hideCompleted[page]:false;
+  let list=projects.filter(p=>p.status!=='complete'||!hide);
+  if(!hide)return projects;
+  // For dept pages also filter out projects where the key milestone is done
+  const stageKeyMap={
+    production:'production-end',
+    quality:'quality-end',
+    shipping:'shipping',
+    installation:'installation',
+  };
+  const stageKey=stageKeyMap[page];
+  if(stageKey){
+    list=list.filter(p=>{
+      const m=milestones.find(ms=>ms.project_id===p.id&&ms.key===stageKey);
+      if(!m)return true; // no milestone = not done, show it
+      return !isMilestoneDone(m);
+    });
+  }
+  return list;
+}
+function hideCompletedBtn(page){
+  const active=hideCompleted[page];
+  return`<button onclick="hideCompleted['${page}']=!hideCompleted['${page}'];renderTab()" style="font-size:11px;padding:4px 12px;border-radius:20px;border:1px solid ${active?'var(--black)':'var(--gray-300)'};background:${active?'var(--black)':'var(--white)'};color:${active?'white':'var(--gray-500)'};cursor:pointer;font-family:var(--font);font-weight:500">${active?'✓ ':''} Hide completed</button>`;
+}
 
 function renderGlance(){
   const el=document.getElementById('tab-glance');
@@ -764,6 +829,7 @@ function renderGlance(){
         </div>
         <span style="font-size:11px;color:var(--gray-500)">Health score top-right · ✓ Complete to archive</span>
       </div>
+      ${hideCompletedBtn('glance')}
       <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
     </div>
     ${visibleProjects.length?`<div class="glance-grid">${cards}</div>`:'<div class="empty-state" style="margin-top:2rem">'+(glanceFilter==='archived'?'No completed projects yet. Mark a project complete using the ✓ button on its card.':'No active projects. Check the Completed tab or add a new project.')+'</div>'}`;
@@ -775,7 +841,7 @@ function renderOverview(){
   const upcoming=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=14).length;
   const overdue=milestones.filter(m=>m.date&&daysDiff(m.date)<0).length;
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
-  const proj=projects.find(p=>p.id===selectedProjId);
+  const proj=activeProjects('overview').find(p=>p.id===selectedProjId)||projects.find(p=>p.id===selectedProjId);
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
   const msHtml=projMs.map(m=>{
     const isDone=isMilestoneDone(m);
@@ -799,7 +865,7 @@ function renderOverview(){
     </div>`;
   }).join('');
   const pillsHtml=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
-    <div class="proj-pills" style="margin-bottom:0;flex:1">${projects.filter(p=>!pmFilter||(p.pm===pmFilter)).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
+    <div class="proj-pills" style="margin-bottom:0;flex:1">${activeProjects('overview').filter(p=>!pmFilter||(p.pm===pmFilter)).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
       <label style="font-size:11px;color:var(--gray-500);white-space:nowrap">PM:</label>
       <select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pmFilter=this.value;renderOverview()">
@@ -820,6 +886,7 @@ function renderOverview(){
       <div class="section-head">
         <div class="section-title">${proj.name} <span style="font-size:11px;font-weight:400;color:var(--gray-500)">— ${proj.client}</span></div>
         <div style="display:flex;align-items:center;gap:8px">
+          ${hideCompletedBtn('overview')}
           <span style="font-family:var(--mono);color:var(--red);font-size:11px" title="${proj.so_number||''}">${truncateSO(proj.so_number)}</span>
           ${healthRing(proj.id)}
           <button class="btn btn-primary" style="font-size:10px;padding:4px 10px" onclick="openEditProj('${proj.id}')">✏ Edit</button>
@@ -835,7 +902,7 @@ function selProj(id){selectedProjId=id;renderOverview();}
 function renderWeek(){
   const el=document.getElementById('tab-week');
   const we=addD(weekStart,6);
-  const allMs=milestones.map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
+  const ap=activeProjects('week');const allMs=milestones.filter(m=>ap.some(p=>p.id===m.project_id)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
   const overdueMs=allMs.filter(m=>m.date&&daysDiff(m.date)<0&&daysDiff(m.date)>=-14);
   const overdueHtml=overdueMs.length?`<div class="overdue-bar"><div><div class="overdue-title">⚠ Overdue</div>${overdueMs.map(m=>`<div class="overdue-item">${m.label} — ${m.projectName} (was ${fmt(m.date)})</div>`).join('')}</div></div>`:'';
   const DAY=['Monday','Tuesday','Wednesday','Thursday','Friday'];
@@ -852,6 +919,7 @@ function renderWeek(){
       <button class="wnav" onclick="shiftW(1)">&#8250;</button>
       <button class="wnav" onclick="goToday()">Today</button>
       <button class="btn-add" onclick="openAddEvModal()">+ Add</button>
+      ${hideCompletedBtn('week')}
       <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
     </div>
     ${overdueHtml}
@@ -882,7 +950,7 @@ function buildGantt(startKeys,endKeys,segsFn,title,legend){
     const monthLabel=d.getDate()===1||days.indexOf(d)===0?'<span style="font-size:8px;display:block">'+d.toLocaleDateString('en-US',{month:'short'})+'</span>':'';
     return`<th ${bg} style="min-width:28px${isT?';background:#fff0f0':''}">${monthLabel}${d.getDate()}</th>`;
   }).join('');
-  const gRows=projects.map(p=>{
+  const gRows=activeProjects(title.toLowerCase().includes('prod')?'production':'quality').map(p=>{
     const pMs=milestones.filter(m=>m.project_id===p.id);const getD=k=>pMs.find(m=>m.key===k)?.date;
     const segs=segsFn(getD).filter(x=>x.s);
     const cells=days.map(d=>{
@@ -908,7 +976,31 @@ function renderDeptView(dept){
   let ganttHtml='';
   if(dept==='production'){ganttHtml=buildGantt(['production-start'],['production-end','quality-end'],getD=>[{s:getD('production-start'),e:getD('production-end'),bg:'#7c3aed',lbl:'Build'},{s:getD('quality-start'),e:getD('quality-end'),bg:'#d97706',lbl:'QA'},{s:getD('shipping'),e:getD('shipping'),bg:'#059669',lbl:'Ship'},{s:getD('installation'),e:getD('installation'),bg:'#db2777',lbl:'Install'}],'Production',[{c:'#7c3aed',l:'Build'},{c:'#d97706',l:'QA'},{c:'#059669',l:'Ship'},{c:'#db2777',l:'Install'}]);}
   else if(dept==='quality'){ganttHtml=buildGantt(['quality-start'],['quality-end','uat'],getD=>[{s:getD('quality-start'),e:getD('quality-end'),bg:'#d97706',lbl:'QA'},{s:getD('vinyl'),e:getD('vinyl'),bg:'#2563eb',lbl:'Vinyl'},{s:getD('uat'),e:getD('uat'),bg:'#16a34a',lbl:'UAT'}],'Quality / QA',[{c:'#d97706',l:'QA'},{c:'#2563eb',l:'Vinyl'},{c:'#16a34a',l:'UAT'}]);}
-  const rows=projects.map(p=>{
+
+  // For shipping & installation add filtering and sorting
+  const hasFilter=dept==='shipping'||dept==='installation';
+  const f=hasFilter?deptFilter[dept]:null;
+
+  let filteredProjects=activeProjects(dept);
+  if(hasFilter&&f){
+    const mainDateKey=dept==='shipping'?'shipping':'installation';
+    filteredProjects=projects.filter(p=>{
+      const sd=getMsDate(p.id,mainDateKey);
+      if(f.search){const q=f.search.toLowerCase();if(!(p.name||'').toLowerCase().includes(q)&&!(p.so_number||'').toLowerCase().includes(q)&&!(p.client||'').toLowerCase().includes(q))return false;}
+      if(f.dateFrom&&sd&&sd<f.dateFrom)return false;
+      if(f.dateTo&&sd&&sd>f.dateTo)return false;
+      return true;
+    });
+    // Sort
+    filteredProjects=[...filteredProjects].sort((a,b)=>{
+      const da=getMsDate(a.id,mainDateKey)||'9999';
+      const db=getMsDate(b.id,mainDateKey)||'9999';
+      return f.sort==='date-asc'?da.localeCompare(db):db.localeCompare(da);
+    });
+  }
+
+  if(!hasFilter)filteredProjects=activeProjects(dept);
+  const rows=filteredProjects.map(p=>{
     const sd=getMsDate(p.id,c.startKey);const ed=c.endKey!==c.startKey?getMsDate(p.id,c.endKey):null;const st=stageStatus(sd,ed||sd);
     let extra='';
     if(dept==='production'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(ed)}</td><td class="date-cell">${dur}</td>`;}
@@ -917,7 +1009,53 @@ function renderDeptView(dept){
     else if(dept==='installation'){extra=`<td class="date-cell">${fmt(getMsDate(p.id,'training'))}</td><td class="date-cell">${fmt(sd)}</td>`;}
     return`<tr><td style="font-weight:500">${p.name}</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)" title="${p.so_number||''}">${truncateSO(p.so_number)}</td><td>${p.client||'—'}</td>${extra}<td><span class="status-chip ${st.chip}">${st.label}</span></td></tr>`;
   }).join('');
-  el.innerHTML=`${ganttHtml}<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid ${c.color};padding-left:8px">${c.title}</div><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div><div class="dept-table-wrap"><table class="dept-table"><thead><tr>${c.cols.map(col=>`<th>${col}</th>`).join('')}</tr></thead><tbody>${rows||'<tr><td colspan="99" style="text-align:center;padding:2rem;color:var(--gray-500)">No projects yet.</td></tr>'}</tbody></table></div></div>`;
+
+  const activeFilters=hasFilter&&f?[f.search,f.dateFrom,f.dateTo].filter(Boolean).length:0;
+  const filterBar=hasFilter?`
+    <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
+      <input placeholder="🔍 Search project, SO, client..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:220px" value="${f.search}" oninput="deptFilter['${dept}'].search=this.value;renderDeptView('${dept}')">
+      <input type="date" title="Date from" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${f.dateFrom}" onchange="deptFilter['${dept}'].dateFrom=this.value;renderDeptView('${dept}')">
+      <span style="font-size:11px;color:var(--gray-500)">to</span>
+      <input type="date" title="Date to" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${f.dateTo}" onchange="deptFilter['${dept}'].dateTo=this.value;renderDeptView('${dept}')">
+      <select style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" onchange="deptFilter['${dept}'].sort=this.value;renderDeptView('${dept}')">
+        <option value="date-asc"${f.sort==='date-asc'?' selected':''}>Date ↑ earliest first</option>
+        <option value="date-desc"${f.sort==='date-desc'?' selected':''}>Date ↓ latest first</option>
+      </select>
+      ${activeFilters?`<button onclick="deptFilter['${dept}']={search:'',dateFrom:'',dateTo:'',sort:'date-asc'};renderDeptView('${dept}')" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>`:''}
+      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filteredProjects.length} of ${projects.length} projects${activeFilters?' (filtered)':''}</span>
+    </div>`:'';
+
+  // Ad hoc rows for shipping and installation
+  const adHoc=hasFilter?adHocRows[dept]||[]:[];
+  const adHocFiltered=hasFilter&&f?adHoc.filter(r=>{
+    if(f.search){const q=f.search.toLowerCase();if(!(r.name||'').toLowerCase().includes(q)&&!(r.so||'').toLowerCase().includes(q)&&!(r.client||'').toLowerCase().includes(q))return false;}
+    const mainDate=dept==='shipping'?r.shipDate:r.installDate;
+    if(f.dateFrom&&mainDate&&mainDate<f.dateFrom)return false;
+    if(f.dateTo&&mainDate&&mainDate>f.dateTo)return false;
+    return true;
+  }):adHoc;
+
+  const adHocRows_html=adHocFiltered.map((r,i)=>{
+    const origIdx=adHocRows[dept].indexOf(r);
+    let extra='';
+    if(dept==='shipping'){extra=`<td class="date-cell">${fmt(r.shipDate||r.ship_date)}</td><td class="date-cell">${fmt(r.deliveryDate||r.delivery_date)}</td>`;}
+    else{extra=`<td class="date-cell">${fmt(r.trainingDate||r.training_date)}</td><td class="date-cell">${fmt(r.installDate||r.install_date)}</td>`;}
+    return`<tr style="background:var(--blue-bg)">
+      <td style="font-weight:500">${r.name} <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px;margin-left:4px">Ad hoc</span></td>
+      <td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">${r.so||'—'}</td>
+      <td>${r.client||'—'}</td>
+      ${extra}
+      <td><span class="status-chip chip-future">${r.status||'Scheduled'}</span></td>
+      <td style="display:flex;gap:4px;align-items:center;padding:6px 8px">
+        <button onclick="openEditAdHoc('${dept}',${origIdx})" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;font-family:var(--font)">Edit</button>
+        <button onclick="removeAdHoc('${dept}',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-400);font-size:13px">✕</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const addBtn=hasFilter?`<div class="actions-row"><button class="btn-add" onclick="openAdHocModal('${dept}')">+ Add ${dept==='shipping'?'shipment':'installation'}</button><span style="font-size:11px;color:var(--gray-500);margin-left:8px">Standalone entries not linked to a project</span></div>`:'';
+
+  el.innerHTML=`${ganttHtml}<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid ${c.color};padding-left:8px">${c.title}</div><div style="display:flex;gap:7px;align-items:center">${hideCompletedBtn(dept)}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>${filterBar}<div class="dept-table-wrap"><table class="dept-table"><thead><tr>${c.cols.map(col=>`<th>${col}</th>`).join('')}${hasFilter?'<th style="width:28px"></th>':''}</tr></thead><tbody>${rows}${adHocRows_html||''}</tbody></table></div>${addBtn}</div>`;
 }
 
 // ── VINYL ──────────────────────────────────────────────────
@@ -932,7 +1070,8 @@ function applyVinylFilter(data){
 }
 function renderVinyl(){
   const el=document.getElementById('tab-vinyl');
-  const filtered=applyVinylFilter(vinylSchedule);
+  const source=hideCompleted['vinyl']?vinylSchedule.filter(v=>v.status!=='Complete'):vinylSchedule;
+  const filtered=applyVinylFilter(source);
   const activeFilters=[vinylFilter.status,vinylFilter.search,vinylFilter.dateFrom,vinylFilter.dateTo].filter(Boolean).length;
   const rows=filtered.map((item,i)=>{
     const origIdx=vinylSchedule.indexOf(item);
@@ -943,17 +1082,17 @@ function renderVinyl(){
       <td style="${readStyle}">${item.so||'—'}</td>
       <td style="${readStyle}">${item.client||'—'}</td>
       <td style="${readStyle}">${item.name||'—'}</td>
-      <td style="${readStyle}">${item.vinylType||'—'}</td>
+      <td><select class="sched-select" onchange="vs(${origIdx},'vinylType',this.value)">${['','Decal','Partial Vinyl','Full Vinyl'].map(t=>`<option${t===item.vinylType?' selected':''}>${t||'Select...'}</option>`).join('')}</select></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vinylDateSync(${origIdx},this.value,'vinyl')" title="Syncs with project overview"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vinylDateSync(${origIdx},this.value,'ship')" title="Syncs with project overview"></td>
       <td style="${readStyle}">${item.pm||'—'}</td>
-      <td style="${readStyle}">${item.formFactor||'—'}</td>
+      <td><input class="sched-input" value="${item.formFactor||''}" placeholder="Form factor" style="width:110px" onchange="vs(${origIdx},'formFactor',this.value)"></td>
       <td><select class="sched-select" onchange="vs(${origIdx},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
       <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">✕</button></td>
     </tr>`;
   }).join('');
   el.innerHTML=`<div class="section">
-    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px"><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
+    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px;align-items:center">${hideCompletedBtn('vinyl')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
     <!-- FILTER BAR -->
     <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
       <input placeholder="🔍 Search name, SO, client..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:210px" value="${vinylFilter.search}" oninput="vinylFilter.search=this.value;renderVinyl()">
@@ -965,7 +1104,7 @@ function renderVinyl(){
       <span style="font-size:11px;color:var(--gray-500)">to</span>
       <input type="date" title="Vinyl date to" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${vinylFilter.dateTo}" onchange="vinylFilter.dateTo=this.value;renderVinyl()">
       ${activeFilters?`<button onclick="vinylFilter={status:'',search:'',dateFrom:'',dateTo:''};renderVinyl()" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear filters</button>`:''}
-      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filtered.length} of ${vinylSchedule.length} rows${activeFilters?' (filtered)':''}</span>
+      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filtered.length} of ${source.length} rows${activeFilters?' (filtered)':''}</span>
     </div>
     <div style="overflow-x:auto"><table class="sched-table"><thead><tr>
       <th style="width:28px"></th><th style="width:32px">#</th>
@@ -997,23 +1136,26 @@ function applyPlanFilter(data){
 }
 function renderPlanogram(){
   const el=document.getElementById('tab-planogram');
-  const filtered=applyPlanFilter(planogramSchedule);
+  const source=hideCompleted['planogram']?planogramSchedule.filter(v=>v.status!=='Complete'):planogramSchedule;
+  const filtered=applyPlanFilter(source);
   const activeFilters=[planFilter.status,planFilter.search,planFilter.dateFrom,planFilter.dateTo].filter(Boolean).length;
   const rows=filtered.map((item,i)=>{
     const origIdx=planogramSchedule.indexOf(item);
     return`<tr draggable="true" data-idx="${origIdx}" data-type="planogram" ondragstart="dragStart(event,${origIdx},'planogram')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'planogram')" ondragleave="dragLeave(event)">
-      <td><span class="drag-handle">⠿</span></td><td><span class="priority-num">${item.priority}</span></td>
+      <td><span class="drag-handle">⠿</span></td><td><span class="priority-num">${item.priority||i+1}</span></td>
       <td><input class="sched-input" value="${item.so||''}" style="width:100px" onchange="ps2(${origIdx},'so',this.value)"></td>
       <td><input class="sched-input" value="${item.client||''}" onchange="ps2(${origIdx},'client',this.value)"></td>
       <td><input class="sched-input" value="${item.name||''}" onchange="ps2(${origIdx},'name',this.value)"></td>
       <td><input class="sched-input" value="${item.machineType||''}" style="width:120px" onchange="ps2(${origIdx},'machineType',this.value)"></td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${item.planStart||''}" onchange="ps2(${origIdx},'planStart',this.value)" title="Planogram start"></td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${item.planEnd||''}" onchange="ps2(${origIdx},'planEnd',this.value)" title="Planogram end"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${origIdx},'date',this.value,'planogram')"></td>
       <td><select class="sched-select" onchange="ps2(${origIdx},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
       <td><button onclick="removeSchedRow('planogram',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></td>
     </tr>`;
   }).join('');
   el.innerHTML=`<div class="section">
-    <div class="section-head"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div><div style="display:flex;gap:7px"><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
+    <div class="section-head"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div><div style="display:flex;gap:7px;align-items:center">${hideCompletedBtn('planogram')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
     <!-- FILTER BAR -->
     <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
       <input placeholder="🔍 Search name, SO, client, machine..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:230px" value="${planFilter.search}" oninput="planFilter.search=this.value;renderPlanogram()">
@@ -1025,7 +1167,7 @@ function renderPlanogram(){
       <span style="font-size:11px;color:var(--gray-500)">to</span>
       <input type="date" title="Date to" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${planFilter.dateTo}" onchange="planFilter.dateTo=this.value;renderPlanogram()">
       ${activeFilters?`<button onclick="planFilter={status:'',search:'',dateFrom:'',dateTo:''};renderPlanogram()" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear filters</button>`:''}
-      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filtered.length} of ${planogramSchedule.length} rows${activeFilters?' (filtered)':''}</span>
+      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filtered.length} of ${source.length} rows${activeFilters?' (filtered)':''}</span>
     </div>
     <div style="overflow-x:auto"><table class="sched-table"><thead><tr>
       <th style="width:28px"></th><th style="width:32px">#</th>
@@ -1033,7 +1175,9 @@ function renderPlanogram(){
       <th onclick="sortPlan('client')" style="cursor:pointer">Customer ↕</th>
       <th onclick="sortPlan('name')" style="cursor:pointer">Project ↕</th>
       <th onclick="sortPlan('machineType')" style="cursor:pointer">Machine Type ↕</th>
-      <th onclick="sortPlan('date')" style="cursor:pointer">Planogram Date ↕</th>
+      <th onclick="sortPlan('planStart')" style="cursor:pointer">Plan Start ↕</th>
+      <th onclick="sortPlan('planEnd')" style="cursor:pointer">Plan End ↕</th>
+      <th onclick="sortPlan('date')" style="cursor:pointer">Sign-off Date ↕</th>
       <th onclick="sortPlan('status')" style="cursor:pointer">Status ↕</th>
       <th style="width:28px"></th>
     </tr></thead><tbody>${rows||'<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
@@ -1215,13 +1359,14 @@ function renderCheckinOverview(){
   const el=document.getElementById('tab-checkin');
   const base=monday(today());
   const weeks=[{label:'This week',start:base},{label:'Next week',start:addD(base,7)}];
+  const apci=activeProjects('checkin');
   const depts=Object.keys(DEPT_KEYS);
 
   function getDeptMs(dept,wStart){
     const wEnd=addD(wStart,6);
     const keys=DEPT_KEYS[dept]||[];
     const lbls=DEPT_LABEL_MATCH[dept]||[];
-    return milestones.filter(m=>{
+    return milestones.filter(m=>{if(!apci.some(p=>p.id===m.project_id))return false;
       if(!m.date)return false;
       const d=new Date(m.date+'T00:00:00');
       if(d<wStart||d>wEnd)return false;
@@ -1296,14 +1441,14 @@ function renderCheckinOverview(){
 // ── BRIEFING ───────────────────────────────────────────────
 function renderBriefing(){
   const el=document.getElementById('tab-briefing');
-  const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+  const ap2=activeProjects('briefing');const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
   const timeStr=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
   const allMs=milestones.map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:'',so:p?p.so_number:'',client:p?p.client:''};});
   const thisWeekMs=allMs.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).sort((a,b)=>a.date.localeCompare(b.date));
   const overdueMs=allMs.filter(m=>m.date&&daysDiff(m.date)<0).sort((a,b)=>b.date.localeCompare(a.date));
   const upcomingMs=allMs.filter(m=>m.date&&daysDiff(m.date)>6&&daysDiff(m.date)<=14).sort((a,b)=>a.date.localeCompare(b.date));
   const STAGES=[{label:'Readiness',startKey:'po-release',endKey:'arrival'},{label:'Production',startKey:'production-start',endKey:'production-end'},{label:'Quality / QA',startKey:'quality-start',endKey:'quality-end'},{label:'UAT',startKey:'uat',endKey:'uat'},{label:'Shipping',startKey:'shipping',endKey:'shipping'},{label:'Installation',startKey:'installation',endKey:'installation'}];
-  const projSummary=projects.map(p=>{
+  const projSummary=activeProjects('briefing').map(p=>{
     const currentStage=STAGES.find(s=>{const sd=getMsDate(p.id,s.startKey);const ed=getMsDate(p.id,s.endKey);if(!sd)return false;const t=today();const start=new Date(sd+'T00:00:00');const end=ed?new Date(ed+'T00:00:00'):start;return t>=start&&t<=end;});
     const nextMs=allMs.filter(m=>m.project_id===p.id&&m.date&&daysDiff(m.date)>=0).sort((a,b)=>a.date.localeCompare(b.date))[0];
     const h=calcHealth(p.id);
@@ -1357,11 +1502,16 @@ function renderIntake(){
       <div class="intake-section-lbl">Project information</div>
       <div class="field"><label>Project name *</label><input id="i-name" placeholder="e.g. Smart Control Drawer — Acme Corp"></div>
       <div class="field"><label>Sales order (SO) number *</label><input id="i-so" placeholder="e.g. SO-2026-0142" style="font-family:var(--mono)"></div>
-      <div class="field"><label>Client *</label><input id="i-client" placeholder="Client name"></div>
+      <div class="field"><label>End Client *</label><input id="i-client" placeholder="End client name"></div>
+      <div class="field"><label>Channel Partner (CP)</label><input id="i-cp" placeholder="e.g. Direct, TD Synnex..."></div>
       <div class="field"><label>Product type</label><input id="i-type" placeholder="e.g. Smart Control Drawer, Custom Locker..."></div>
       <div class="field"><label>Quantity</label><input id="i-qty" type="number" min="1" placeholder="e.g. 2"></div>
       <div class="field"><label>Delivery location</label><input id="i-loc" placeholder="City, Province, Country"></div>
       <div class="field"><label>Project Manager</label><input id="i-pm" placeholder="PM name"></div>
+      <div class="field"><label>SDM (Service Delivery Manager)</label><input id="i-sdm" placeholder="SDM name"></div>
+      <div class="field"><label>Solutions</label><input id="i-solutions" placeholder="Solutions contact"></div>
+      <div class="field"><label>Sales</label><input id="i-sales" placeholder="Sales contact"></div>
+      <div class="field"><label>Account Manager</label><input id="i-am" placeholder="Account Manager name"></div>
       <div class="field"><label>Vinyl type</label><select id="i-vinyl-type"><option value="">Select...</option><option>Decal</option><option>Partial Vinyl</option><option>Full Vinyl</option></select></div>
       <div class="field"><label>Form factor</label><input id="i-form-factor" placeholder="e.g. Freestanding, Wall mount..."></div>
 
@@ -1382,6 +1532,8 @@ function renderIntake(){
           <div class="field"><label>Production start *</label><input id="i-ps" type="date"></div>
           <div class="field"><label>Production end *</label><input id="i-pe" type="date"></div>
           <div class="field"><label>Planogram sign-off</label><input id="i-plan" type="date"></div>
+          <div class="field"><label>Planogram start</label><input id="i-plan-start" type="date"></div>
+          <div class="field"><label>Planogram end</label><input id="i-plan-end" type="date"></div>
           <div class="field" style="margin-top:6px"><label>Notes</label><textarea id="i-notes-production" placeholder="Production notes..." style="min-height:55px"></textarea></div>
         </div>
 
@@ -1433,9 +1585,14 @@ async function saveIntake(){
     document.getElementById('i-notes').value.trim(),
   ].filter(Boolean).join('\n\n');
   const pm=document.getElementById('i-pm').value.trim();
+  const sdm=document.getElementById('i-sdm')?.value.trim()||'';
+  const solutions=document.getElementById('i-solutions')?.value.trim()||'';
+  const sales=document.getElementById('i-sales')?.value.trim()||'';
+  const accountManager=document.getElementById('i-am')?.value.trim()||'';
+  const channelPartner=document.getElementById('i-cp')?.value.trim()||'';
   const vinylType=document.getElementById('i-vinyl-type').value;
   const formFactor=document.getElementById('i-form-factor').value.trim();
-  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,product_type:document.getElementById('i-type').value,quantity:parseInt(document.getElementById('i-qty').value)||null,location:document.getElementById('i-loc').value,notes:sectionNotes,status:'active',changed_by:currentUserName,pm,vinyl_type:vinylType,form_factor:formFactor}).select().single();
+  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,channel_partner:channelPartner,product_type:document.getElementById('i-type').value,quantity:parseInt(document.getElementById('i-qty').value)||null,location:document.getElementById('i-loc').value,notes:sectionNotes,status:'active',changed_by:currentUserName,pm,sdm,solutions,sales,account_manager:accountManager,vinyl_type:vinylType,form_factor:formFactor}).select().single();
   if(error){alert('Error: '+error.message);return;}
   const msFields=[
     {id:'i-po',key:'po-release',label:'PO Release'},
@@ -1446,6 +1603,8 @@ async function saveIntake(){
     {id:'i-ps',key:'production-start',label:'Production start'},
     {id:'i-pe',key:'production-end',label:'Production end'},
     {id:'i-plan',key:'other',label:'Planogram sign-off'},
+    {id:'i-plan-start',key:'other',label:'Planogram start'},
+    {id:'i-plan-end',key:'other',label:'Planogram end'},
     {id:'i-ui-s',key:'other',label:'UI start'},
     {id:'i-ui-e',key:'other',label:'UI end'},
     {id:'i-qs',key:'quality-start',label:'Quality start'},
@@ -1476,8 +1635,13 @@ function openEditProj(id){
       <div class="form-grid" style="margin-bottom:12px">
         <div class="field"><label>Project name</label><input id="ep-name" value="${proj.name||''}""></div>
         <div class="field"><label>SO number</label><input id="ep-so" value="${proj.so_number||''}" style="font-family:var(--mono)"></div>
-        <div class="field"><label>Client</label><input id="ep-client" value="${proj.client||''}""></div>
+        <div class="field"><label>End Client</label><input id="ep-client" value="${proj.client||''}""></div>
+        <div class="field"><label>Channel Partner (CP)</label><input id="ep-cp" value="${proj.channel_partner||''}" placeholder="e.g. Direct, TD Synnex..."></div>
         <div class="field"><label>Project Manager</label><input id="ep-pm" value="${proj.pm||''}" placeholder="PM name"></div>
+        <div class="field"><label>SDM</label><input id="ep-sdm" value="${proj.sdm||''}" placeholder="SDM name"></div>
+        <div class="field"><label>Solutions</label><input id="ep-solutions" value="${proj.solutions||''}" placeholder="Solutions contact"></div>
+        <div class="field"><label>Sales</label><input id="ep-sales" value="${proj.sales||''}" placeholder="Sales contact"></div>
+        <div class="field"><label>Account Manager</label><input id="ep-am" value="${proj.account_manager||''}" placeholder="Account Manager"></div>
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
         <div class="field full"><label>Notes</label><textarea id="ep-notes" style="min-height:55px">${proj.notes||''}</textarea></div>
       </div>
@@ -1503,6 +1667,11 @@ async function saveEditProj(id){
     so_number:document.getElementById('ep-so').value.trim(),
     client:document.getElementById('ep-client').value.trim(),
     pm:document.getElementById('ep-pm').value.trim(),
+    sdm:document.getElementById('ep-sdm')?.value.trim()||null,
+    solutions:document.getElementById('ep-solutions')?.value.trim()||null,
+    sales:document.getElementById('ep-sales')?.value.trim()||null,
+    account_manager:document.getElementById('ep-am')?.value.trim()||null,
+    channel_partner:document.getElementById('ep-cp')?.value.trim()||null,
     status:document.getElementById('ep-status').value,
     notes:document.getElementById('ep-notes').value,
     odoo_url:document.getElementById('ep-odoo').value.trim(),
@@ -1612,18 +1781,19 @@ async function saveEv(){
 
 // ── EXCEL EXPORT ───────────────────────────────────────────
 function exportToExcel(){
+  const exportProjects=activeProjects(currentTab)||projects;
   const wb=XLSX.utils.book_new();
   const r1=[['Project','SO Number','Client','Product Type','Status','Milestone','Type','Date','Days from today','Last changed by']];
-  projects.forEach(p=>{const pMs=milestones.filter(m=>m.project_id===p.id);if(!pMs.length){r1.push([p.name,p.so_number,p.client,p.product_type,p.status,'','','','','']);}else{pMs.forEach((m,i)=>r1.push([i===0?p.name:'',i===0?p.so_number:'',i===0?p.client:'',i===0?p.product_type:'',i===0?p.status:'',m.label,TYPE_LBL[m.key]||m.key,m.date,m.date?daysDiff(m.date):'',m.changed_by||'']));}}); 
+  exportProjects.forEach(p=>{const pMs=milestones.filter(m=>m.project_id===p.id);if(!pMs.length){r1.push([p.name,p.so_number,p.client,p.product_type,p.status,'','','','','']);}else{pMs.forEach((m,i)=>r1.push([i===0?p.name:'',i===0?p.so_number:'',i===0?p.client:'',i===0?p.product_type:'',i===0?p.status:'',m.label,TYPE_LBL[m.key]||m.key,m.date,m.date?daysDiff(m.date):'',m.changed_by||'']));}}); 
   const ws1=XLSX.utils.aoa_to_sheet(r1);ws1['!cols']=[{wch:28},{wch:14},{wch:18},{wch:18},{wch:10},{wch:26},{wch:16},{wch:12},{wch:14},{wch:18}];XLSX.utils.book_append_sheet(wb,ws1,'Projects & Milestones');
   const r2=[['Priority','SO','Customer','Project','Type','Vinyl Date','Ship Date','PM','Form Factor','Status']];
   vinylSchedule.forEach((item,i)=>r2.push([i+1,item.so,item.client,item.name,item.vinylType,item.date||'TBD',item.shipDate||'TBD',item.pm,item.formFactor,item.status]));
   const ws2=XLSX.utils.aoa_to_sheet(r2);XLSX.utils.book_append_sheet(wb,ws2,'Vinyl Schedule');
-  const r3=[['Priority','SO','Customer','Project','Machine Type','Planogram Date','Status']];
-  planogramSchedule.forEach((item,i)=>r3.push([i+1,item.so,item.client,item.name,item.machineType,item.date||'TBD',item.status]));
+  const r3=[['Priority','SO','Customer','Project','Machine Type','Plan Start','Plan End','Sign-off Date','Status']];
+  planogramSchedule.forEach((item,i)=>r3.push([i+1,item.so,item.client,item.name,item.machineType,item.planStart||'',item.planEnd||'',item.date||'TBD',item.status]));
   const ws3=XLSX.utils.aoa_to_sheet(r3);XLSX.utils.book_append_sheet(wb,ws3,'Planogram Schedule');
   const r4=[['Project','SO','Client','Prod Start','Prod End','Duration','Status']];
-  projects.forEach(p=>{const sd=getMsDate(p.id,'production-start');const ed=getMsDate(p.id,'production-end');const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000):'';const st=stageStatus(sd,ed);r4.push([p.name,p.so_number,p.client,sd||'',ed||'',dur,st.label]);});
+  exportProjects.forEach(p=>{const sd=getMsDate(p.id,'production-start');const ed=getMsDate(p.id,'production-end');const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000):'';const st=stageStatus(sd,ed);r4.push([p.name,p.so_number,p.client,sd||'',ed||'',dur,st.label]);});
   const ws4=XLSX.utils.aoa_to_sheet(r4);XLSX.utils.book_append_sheet(wb,ws4,'Production');
   const r5=[['Time','User','Action','Item','Project','Old Value','New Value']];
   activityLog.forEach(l=>{const proj=projects.find(p=>p.id===l.project_id);r5.push([fmtTime(l.created_at),l.user_name||l.user_email,l.action,l.entity_name,proj?.name||'',l.old_value||'',l.new_value||'']);});
@@ -1675,18 +1845,33 @@ function renderProjPage(){
   const el=document.getElementById('tab-projpage');
   if(!projects.length){el.innerHTML='<div class="empty-state">No projects yet.</div>';return;}
   if(!ppProjId)ppProjId=selectedProjId||projects[0].id;
-  const projOpts=projects.map(p=>`<option value="${p.id}"${p.id===ppProjId?' selected':''}>${p.name}</option>`).join('');
+  const sortedProjs=[...projects].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const projOpts=sortedProjs.map(p=>`<option value="${p.id}">${p.name}${p.so_number?' — '+p.so_number:''}</option>`).join('');
   el.innerHTML=`
     <div class="proj-sel-bar">
       <label>Project</label>
-      <select onchange="switchProjPage(this.value)">${projOpts}</select>
+      <div style="flex:1;position:relative">
+        <input id="pp-proj-search" list="pp-proj-list" placeholder="Search or select project..." style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);width:100%" onchange="onProjPageSearch(this.value)" oninput="onProjPageSearch(this.value)">
+        <datalist id="pp-proj-list">${projOpts}</datalist>
+      </div>
       <span id="pp-saved" class="pp-saved">Saved ✓</span>
     </div>
     <div id="pp-body"><div style="text-align:center;padding:3rem;color:var(--gray-500)"><div style="font-size:20px;margin-bottom:8px">⏳</div>Loading project page...</div></div>`;
   // Always reload from Supabase when visiting this tab
-  loadProjPage(ppProjId).then(()=>renderProjPageBody());
+  loadProjPage(ppProjId).then(()=>{
+    renderProjPageBody();
+    // Set the search input to show current project name
+    const proj=projects.find(p=>p.id===ppProjId);
+    const inp=document.getElementById('pp-proj-search');
+    if(inp&&proj)inp.value=proj.name+(proj.so_number?' — '+proj.so_number:'');
+  });
 }
 
+function onProjPageSearch(val){
+  // Find project by name match from the datalist
+  const match=projects.find(p=>p.name===val||(p.name+(p.so_number?' — '+p.so_number:''))===val);
+  if(match&&match.id!==ppProjId){switchProjPage(match.id);document.getElementById('pp-proj-search').blur();}
+}
 async function switchProjPage(id){
   ppProjId=id;
   selectedProjId=id;
@@ -1983,6 +2168,7 @@ async function savePPLink(label,url){
     'Product Template':'product_template_url',
     'Badge Reader':'badge_reader_url',
     'Employee List':'employee_list_url',
+    'Vinyl Render Odoo':'vinyl_odoo_url',
   };
   // If this label maps to a hub field, write back to the projects table too
   const hubField=HUB_FIELD_MAP[label];
@@ -2231,6 +2417,7 @@ function renderInstallForm(){
     ${fld('if-template','Product template link','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Product Template'))}
     ${fld('if-badge','Badge reader link','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Badge Reader'))}
     ${fld('if-employee','Employee list link','https://...','full','text',getDocLink('Employee List'))}
+    ${fld('if-vinyl-odoo','Vinyl render Odoo link','https://signifisolutions.odoo.com/...','full','text',getDocLink('Vinyl Render Odoo'))}
     ${fldTA('if-scope','Scope of work (leave blank for standard)','1. Deliver and install...\n2. Position unit...')}
     ${fldTA('if-special','Special requirements','Any special notes...')}
   </div>
@@ -2364,6 +2551,7 @@ Sales Order (SO): ${g('if-so')}
 25. QA Task: ${g('if-qa-task')}
 ${g('if-badge')?`26. Badge Reader Link: ${g('if-badge')}`:''}
 ${g('if-employee')?`27. Employee List: ${g('if-employee')}`:''}
+${g('if-vinyl-odoo')?`28. Vinyl Render Odoo: ${g('if-vinyl-odoo')}`:''}
 ${g('if-odoo')?`
 Odoo Task: ${g('if-odoo')}`:''}
 
@@ -2474,6 +2662,141 @@ function copyDoc(type){
     const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast('Copied ✓');
   });
 }
+// ── AD HOC SHIPPING / INSTALLATION ────────────────────────
+function openAdHocModal(dept){
+  const isShip=dept==='shipping';
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:480px" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <span class="modal-title">Add ${isShip?'shipment':'installation'}</span>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field"><label>Project / Job name *</label><input id="ah-name" placeholder="e.g. Acme Corp - Unit 3"></div>
+          <div class="field"><label>SO Number</label><input id="ah-so" placeholder="e.g. S17999" style="font-family:var(--mono)"></div>
+          <div class="field"><label>Client</label><input id="ah-client" placeholder="Client name"></div>
+          <div class="field"><label>Status</label><select id="ah-status">${STATUS_OPTS.map(s=>`<option>${s}</option>`).join('')}</select></div>
+          ${isShip?`
+          <div class="field"><label>Pack & ship date</label><input type="date" id="ah-ship"></div>
+          <div class="field"><label>Delivery date</label><input type="date" id="ah-delivery"></div>
+          `:`
+          <div class="field"><label>Training date</label><input type="date" id="ah-training"></div>
+          <div class="field"><label>Installation date</label><input type="date" id="ah-install"></div>
+          `}
+          <div class="field full"><label>Notes</label><input id="ah-notes" placeholder="Any special notes..."></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveAdHoc('${dept}')">Add to schedule</button>
+      </div>
+    </div>
+  </div>`;
+}
+async function saveAdHoc(dept){
+  const name=document.getElementById('ah-name')?.value.trim();
+  if(!name){alert('Please enter a name.');return;}
+  const isShip=dept==='shipping';
+  const row={
+    dept,name,
+    so:document.getElementById('ah-so')?.value.trim()||null,
+    client:document.getElementById('ah-client')?.value.trim()||null,
+    status:document.getElementById('ah-status')?.value||'Scheduled',
+    notes:document.getElementById('ah-notes')?.value.trim()||null,
+    created_by:currentUserName,
+  };
+  if(isShip){
+    row.ship_date=document.getElementById('ah-ship')?.value||null;
+    row.delivery_date=document.getElementById('ah-delivery')?.value||null;
+  } else {
+    row.training_date=document.getElementById('ah-training')?.value||null;
+    row.install_date=document.getElementById('ah-install')?.value||null;
+  }
+  const{error}=await sb.from('adhoc_schedule').insert(row);
+  if(error){alert('Error saving: '+error.message);return;}
+  closeModal();showToast('Added and saved ✓');await loadAll();renderDeptView(dept);
+}
+function openEditAdHoc(dept,idx){
+  const r=adHocRows[dept][idx];
+  if(!r)return;
+  const isShip=dept==='shipping';
+  const shipDate=r.shipDate||r.ship_date||'';
+  const delivDate=r.deliveryDate||r.delivery_date||'';
+  const trainDate=r.trainingDate||r.training_date||'';
+  const instDate=r.installDate||r.install_date||'';
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:480px" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <span class="modal-title">Edit ${isShip?'shipment':'installation'}</span>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field"><label>Project / Job name *</label><input id="eh-name" value="${r.name||''}" placeholder="e.g. Acme Corp - Unit 3"></div>
+          <div class="field"><label>SO Number</label><input id="eh-so" value="${r.so||''}" placeholder="e.g. S17999" style="font-family:var(--mono)"></div>
+          <div class="field"><label>Client</label><input id="eh-client" value="${r.client||''}" placeholder="Client name"></div>
+          <div class="field"><label>Status</label><select id="eh-status">${STATUS_OPTS.map(s=>`<option${s===(r.status||'Scheduled')?' selected':''}>${s}</option>`).join('')}</select></div>
+          ${isShip?`
+          <div class="field"><label>Pack & ship date</label><input type="date" id="eh-ship" value="${shipDate}"></div>
+          <div class="field"><label>Delivery date</label><input type="date" id="eh-delivery" value="${delivDate}"></div>
+          `:`
+          <div class="field"><label>Training date</label><input type="date" id="eh-training" value="${trainDate}"></div>
+          <div class="field"><label>Installation date</label><input type="date" id="eh-install" value="${instDate}"></div>
+          `}
+          <div class="field full"><label>Notes</label><input id="eh-notes" value="${r.notes||''}" placeholder="Any special notes..."></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="removeAdHoc('${dept}',${idx});closeModal()">Delete</button>
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveEditAdHoc('${dept}',${idx})">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function saveEditAdHoc(dept,idx){
+  const r=adHocRows[dept][idx];
+  if(!r)return;
+  const isShip=dept==='shipping';
+  const updates={
+    name:document.getElementById('eh-name')?.value.trim()||r.name,
+    so:document.getElementById('eh-so')?.value.trim()||null,
+    client:document.getElementById('eh-client')?.value.trim()||null,
+    status:document.getElementById('eh-status')?.value||'Scheduled',
+    notes:document.getElementById('eh-notes')?.value.trim()||null,
+  };
+  if(isShip){
+    updates.ship_date=document.getElementById('eh-ship')?.value||null;
+    updates.delivery_date=document.getElementById('eh-delivery')?.value||null;
+  } else {
+    updates.training_date=document.getElementById('eh-training')?.value||null;
+    updates.install_date=document.getElementById('eh-install')?.value||null;
+  }
+  if(r.id){
+    const{error}=await sb.from('adhoc_schedule').update({...updates,updated_at:new Date().toISOString()}).eq('id',r.id);
+    if(error){alert('Error saving: '+error.message);return;}
+  }
+  // Update local state
+  Object.assign(adHocRows[dept][idx],updates,{
+    shipDate:updates.ship_date,deliveryDate:updates.delivery_date,
+    trainingDate:updates.training_date,installDate:updates.install_date,
+  });
+  closeModal();showToast('Saved ✓');renderDeptView(dept);
+}
+
+async function removeAdHoc(dept,idx){
+  const item=adHocRows[dept][idx];
+  if(item?.id){
+    await sb.from('adhoc_schedule').delete().eq('id',item.id);
+  }
+  adHocRows[dept].splice(idx,1);
+  renderDeptView(dept);showToast('Removed');
+}
+
 function toggleNotes(id){
   const el=document.getElementById(id);
   if(el)el.classList.toggle('open');
