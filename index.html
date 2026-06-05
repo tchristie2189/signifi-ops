@@ -377,6 +377,10 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
         </div>
       </div>
       <div class="header-right">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:11px;color:#888;user-select:none;padding:4px 8px;border-radius:var(--radius);border:1px solid #2a2a2a">
+          <input type="checkbox" id="hide-completed-toggle" checked onchange="hideCompleted=this.checked;renderTab()" style="accent-color:#e22f4a;cursor:pointer;width:12px;height:12px">
+          Hide completed
+        </label>
         <span class="hdate" id="hdate"></span>
         <div class="user-chip" id="user-chip">
           <div class="user-avatar" id="user-avatar">?</div>
@@ -426,6 +430,7 @@ let currentUser=null,currentUserName='';
 let vinylFilter={status:'',search:'',dateFrom:'',dateTo:''};
 let planFilter={status:'',search:'',dateFrom:'',dateTo:''};
 let deptFilter={shipping:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'},installation:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'}};
+let adHocRows={shipping:[],installation:[]}; // standalone entries not tied to a project
 let pmFilter='';
 
 // ── UTILS ──────────────────────────────────────────────────
@@ -658,6 +663,12 @@ async function loadAll(){
 
 // ── AT A GLANCE ────────────────────────────────────────────
 let glanceFilter='active'; // 'active' or 'archived'
+let hideCompleted=true; // global toggle — hides completed projects across all views
+
+// Helper — filters out completed projects based on global toggle
+function activeProjects(){
+  return hideCompleted?projects.filter(p=>p.status!=='complete'):projects;
+}
 
 function renderGlance(){
   const el=document.getElementById('tab-glance');
@@ -776,7 +787,7 @@ function renderOverview(){
   const upcoming=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=14).length;
   const overdue=milestones.filter(m=>m.date&&daysDiff(m.date)<0).length;
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
-  const proj=projects.find(p=>p.id===selectedProjId);
+  const proj=activeProjects().find(p=>p.id===selectedProjId)||projects.find(p=>p.id===selectedProjId);
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
   const msHtml=projMs.map(m=>{
     const isDone=isMilestoneDone(m);
@@ -800,7 +811,7 @@ function renderOverview(){
     </div>`;
   }).join('');
   const pillsHtml=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
-    <div class="proj-pills" style="margin-bottom:0;flex:1">${projects.filter(p=>!pmFilter||(p.pm===pmFilter)).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
+    <div class="proj-pills" style="margin-bottom:0;flex:1">${activeProjects().filter(p=>!pmFilter||(p.pm===pmFilter)).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
       <label style="font-size:11px;color:var(--gray-500);white-space:nowrap">PM:</label>
       <select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pmFilter=this.value;renderOverview()">
@@ -836,7 +847,7 @@ function selProj(id){selectedProjId=id;renderOverview();}
 function renderWeek(){
   const el=document.getElementById('tab-week');
   const we=addD(weekStart,6);
-  const allMs=milestones.map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
+  const ap=activeProjects();const allMs=milestones.filter(m=>ap.some(p=>p.id===m.project_id)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
   const overdueMs=allMs.filter(m=>m.date&&daysDiff(m.date)<0&&daysDiff(m.date)>=-14);
   const overdueHtml=overdueMs.length?`<div class="overdue-bar"><div><div class="overdue-title">⚠ Overdue</div>${overdueMs.map(m=>`<div class="overdue-item">${m.label} — ${m.projectName} (was ${fmt(m.date)})</div>`).join('')}</div></div>`:'';
   const DAY=['Monday','Tuesday','Wednesday','Thursday','Friday'];
@@ -883,7 +894,7 @@ function buildGantt(startKeys,endKeys,segsFn,title,legend){
     const monthLabel=d.getDate()===1||days.indexOf(d)===0?'<span style="font-size:8px;display:block">'+d.toLocaleDateString('en-US',{month:'short'})+'</span>':'';
     return`<th ${bg} style="min-width:28px${isT?';background:#fff0f0':''}">${monthLabel}${d.getDate()}</th>`;
   }).join('');
-  const gRows=projects.map(p=>{
+  const gRows=activeProjects().map(p=>{
     const pMs=milestones.filter(m=>m.project_id===p.id);const getD=k=>pMs.find(m=>m.key===k)?.date;
     const segs=segsFn(getD).filter(x=>x.s);
     const cells=days.map(d=>{
@@ -914,7 +925,7 @@ function renderDeptView(dept){
   const hasFilter=dept==='shipping'||dept==='installation';
   const f=hasFilter?deptFilter[dept]:null;
 
-  let filteredProjects=projects;
+  let filteredProjects=activeProjects();
   if(hasFilter&&f){
     const mainDateKey=dept==='shipping'?'shipping':'installation';
     filteredProjects=projects.filter(p=>{
@@ -957,7 +968,33 @@ function renderDeptView(dept){
       <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filteredProjects.length} of ${projects.length} projects${activeFilters?' (filtered)':''}</span>
     </div>`:'';
 
-  el.innerHTML=`${ganttHtml}<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid ${c.color};padding-left:8px">${c.title}</div><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div>${filterBar}<div class="dept-table-wrap"><table class="dept-table"><thead><tr>${c.cols.map(col=>`<th>${col}</th>`).join('')}</tr></thead><tbody>${rows||'<tr><td colspan="99" style="text-align:center;padding:2rem;color:var(--gray-500)">No projects match the current filters.</td></tr>'}</tbody></table></div></div>`;
+  // Ad hoc rows for shipping and installation
+  const adHoc=hasFilter?adHocRows[dept]||[]:[];
+  const adHocFiltered=hasFilter&&f?adHoc.filter(r=>{
+    if(f.search){const q=f.search.toLowerCase();if(!(r.name||'').toLowerCase().includes(q)&&!(r.so||'').toLowerCase().includes(q)&&!(r.client||'').toLowerCase().includes(q))return false;}
+    const mainDate=dept==='shipping'?r.shipDate:r.installDate;
+    if(f.dateFrom&&mainDate&&mainDate<f.dateFrom)return false;
+    if(f.dateTo&&mainDate&&mainDate>f.dateTo)return false;
+    return true;
+  }):adHoc;
+
+  const adHocRows_html=adHocFiltered.map((r,i)=>{
+    let extra='';
+    if(dept==='shipping'){extra=`<td class="date-cell">${fmt(r.shipDate)}</td><td class="date-cell">${fmt(r.deliveryDate)}</td>`;}
+    else{extra=`<td class="date-cell">${fmt(r.trainingDate)}</td><td class="date-cell">${fmt(r.installDate)}</td>`;}
+    return`<tr style="background:var(--blue-bg)">
+      <td style="font-weight:500">${r.name} <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px;margin-left:4px">Ad hoc</span></td>
+      <td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">${r.so||'—'}</td>
+      <td>${r.client||'—'}</td>
+      ${extra}
+      <td><span class="status-chip chip-future">${r.status||'Scheduled'}</span></td>
+      <td><button onclick="removeAdHoc('${dept}',${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-400);font-size:13px">✕</button></td>
+    </tr>`;
+  }).join('');
+
+  const addBtn=hasFilter?`<div class="actions-row"><button class="btn-add" onclick="openAdHocModal('${dept}')">+ Add ${dept==='shipping'?'shipment':'installation'}</button><span style="font-size:11px;color:var(--gray-500);margin-left:8px">Standalone entries not linked to a project</span></div>`:'';
+
+  el.innerHTML=`${ganttHtml}<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid ${c.color};padding-left:8px">${c.title}</div><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div>${filterBar}<div class="dept-table-wrap"><table class="dept-table"><thead><tr>${c.cols.map(col=>`<th>${col}</th>`).join('')}${hasFilter?'<th style="width:28px"></th>':''}</tr></thead><tbody>${rows}${adHocRows_html||''}</tbody></table></div>${addBtn}</div>`;
 }
 
 // ── VINYL ──────────────────────────────────────────────────
@@ -1255,13 +1292,14 @@ function renderCheckinOverview(){
   const el=document.getElementById('tab-checkin');
   const base=monday(today());
   const weeks=[{label:'This week',start:base},{label:'Next week',start:addD(base,7)}];
+  const apci=activeProjects();
   const depts=Object.keys(DEPT_KEYS);
 
   function getDeptMs(dept,wStart){
     const wEnd=addD(wStart,6);
     const keys=DEPT_KEYS[dept]||[];
     const lbls=DEPT_LABEL_MATCH[dept]||[];
-    return milestones.filter(m=>{
+    return milestones.filter(m=>{if(!apci.some(p=>p.id===m.project_id))return false;
       if(!m.date)return false;
       const d=new Date(m.date+'T00:00:00');
       if(d<wStart||d>wEnd)return false;
@@ -1336,14 +1374,14 @@ function renderCheckinOverview(){
 // ── BRIEFING ───────────────────────────────────────────────
 function renderBriefing(){
   const el=document.getElementById('tab-briefing');
-  const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+  const ap2=activeProjects();const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
   const timeStr=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
   const allMs=milestones.map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:'',so:p?p.so_number:'',client:p?p.client:''};});
   const thisWeekMs=allMs.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).sort((a,b)=>a.date.localeCompare(b.date));
   const overdueMs=allMs.filter(m=>m.date&&daysDiff(m.date)<0).sort((a,b)=>b.date.localeCompare(a.date));
   const upcomingMs=allMs.filter(m=>m.date&&daysDiff(m.date)>6&&daysDiff(m.date)<=14).sort((a,b)=>a.date.localeCompare(b.date));
   const STAGES=[{label:'Readiness',startKey:'po-release',endKey:'arrival'},{label:'Production',startKey:'production-start',endKey:'production-end'},{label:'Quality / QA',startKey:'quality-start',endKey:'quality-end'},{label:'UAT',startKey:'uat',endKey:'uat'},{label:'Shipping',startKey:'shipping',endKey:'shipping'},{label:'Installation',startKey:'installation',endKey:'installation'}];
-  const projSummary=projects.map(p=>{
+  const projSummary=activeProjects().map(p=>{
     const currentStage=STAGES.find(s=>{const sd=getMsDate(p.id,s.startKey);const ed=getMsDate(p.id,s.endKey);if(!sd)return false;const t=today();const start=new Date(sd+'T00:00:00');const end=ed?new Date(ed+'T00:00:00'):start;return t>=start&&t<=end;});
     const nextMs=allMs.filter(m=>m.project_id===p.id&&m.date&&daysDiff(m.date)>=0).sort((a,b)=>a.date.localeCompare(b.date))[0];
     const h=calcHealth(p.id);
@@ -2514,6 +2552,55 @@ function copyDoc(type){
     const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast('Copied ✓');
   });
 }
+// ── AD HOC SHIPPING / INSTALLATION ────────────────────────
+function openAdHocModal(dept){
+  const isShip=dept==='shipping';
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:480px" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <span class="modal-title">Add ${isShip?'shipment':'installation'}</span>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field"><label>Project / Job name *</label><input id="ah-name" placeholder="e.g. Acme Corp - Unit 3"></div>
+          <div class="field"><label>SO Number</label><input id="ah-so" placeholder="e.g. S17999" style="font-family:var(--mono)"></div>
+          <div class="field"><label>Client</label><input id="ah-client" placeholder="Client name"></div>
+          <div class="field"><label>Status</label><select id="ah-status">${STATUS_OPTS.map(s=>`<option>${s}</option>`).join('')}</select></div>
+          ${isShip?`
+          <div class="field"><label>Pack & ship date</label><input type="date" id="ah-ship"></div>
+          <div class="field"><label>Delivery date</label><input type="date" id="ah-delivery"></div>
+          `:`
+          <div class="field"><label>Training date</label><input type="date" id="ah-training"></div>
+          <div class="field"><label>Installation date</label><input type="date" id="ah-install"></div>
+          `}
+          <div class="field full"><label>Notes</label><input id="ah-notes" placeholder="Any special notes..."></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveAdHoc('${dept}')">Add to schedule</button>
+      </div>
+    </div>
+  </div>`;
+}
+function saveAdHoc(dept){
+  const name=document.getElementById('ah-name')?.value.trim();
+  if(!name){alert('Please enter a name.');return;}
+  const isShip=dept==='shipping';
+  const row={name,so:document.getElementById('ah-so')?.value.trim()||'',client:document.getElementById('ah-client')?.value.trim()||'',status:document.getElementById('ah-status')?.value||'Scheduled',notes:document.getElementById('ah-notes')?.value.trim()||''};
+  if(isShip){row.shipDate=document.getElementById('ah-ship')?.value||'';row.deliveryDate=document.getElementById('ah-delivery')?.value||'';}
+  else{row.trainingDate=document.getElementById('ah-training')?.value||'';row.installDate=document.getElementById('ah-install')?.value||'';}
+  if(!adHocRows[dept])adHocRows[dept]=[];
+  adHocRows[dept].push(row);
+  closeModal();showToast('Added ✓');renderDeptView(dept);
+}
+function removeAdHoc(dept,idx){
+  adHocRows[dept].splice(idx,1);
+  renderDeptView(dept);showToast('Removed');
+}
+
 function toggleNotes(id){
   const el=document.getElementById(id);
   if(el)el.classList.toggle('open');
