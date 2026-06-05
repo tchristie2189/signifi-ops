@@ -1035,12 +1035,17 @@ function renderDeptView(dept){
     const ed=c.endKey!==c.startKey?getMsDate(p.id,c.endKey):null;
     const st=stageStatus(sd,ed||sd);
     let extra='';
-    if(dept==='shipping'){extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(getMsDate(p.id,'delivery'))}</td>`;}
-    else if(dept==='installation'){extra=`<td class="date-cell">${fmt(getMsDate(p.id,'training'))}</td><td class="date-cell">${fmt(sd)}</td>`;}
-    return{
-      _date:sd||'',
-      html:`<tr><td style="font-weight:500">${p.name}</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)" title="${p.so_number||''}">${truncateSO(p.so_number)}</td><td>${p.client||'—'}</td>${extra}<td><span class="status-chip ${st.chip}">${st.label}</span></td><td></td></tr>`
-    };
+    if(dept==='shipping'){extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'delivery'))+'</td>';}
+    else if(dept==='installation'){extra='<td class="date-cell">'+fmt(getMsDate(p.id,'training'))+'</td><td class="date-cell">'+fmt(sd)+'</td>';}
+    const html='<tr>'+
+      '<td style="font-weight:500">'+p.name+'</td>'+
+      '<td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)" title="'+(p.so_number||'')+'">'+truncateSO(p.so_number)+'</td>'+
+      '<td>'+(p.client||'—')+'</td>'+
+      extra+
+      '<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+
+      '<td></td>'+
+    '</tr>';
+    return{_date:sd||'',html};
   }):[];
 
   const adHocFiltered=hasFilter&&f?adHoc.filter(r=>{
@@ -1055,23 +1060,20 @@ function renderDeptView(dept){
     const origIdx=adHocRows[dept].indexOf(r);
     const mainDate=dept==='shipping'?(r.shipDate||r.ship_date||''):(r.installDate||r.install_date||'');
     let extra='';
-    if(dept==='shipping'){extra=`<td class="date-cell">${fmt(r.shipDate||r.ship_date)}</td><td class="date-cell">${fmt(r.deliveryDate||r.delivery_date)}</td>`;}
-    else{extra=`<td class="date-cell">${fmt(r.trainingDate||r.training_date)}</td><td class="date-cell">${fmt(r.installDate||r.install_date)}</td>`;}
-    return{
-      _date:mainDate,
-      _type:'adhoc',
-      html:`<tr style="background:var(--blue-bg)">
-        <td style="font-weight:500">${r.name} <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px;margin-left:4px">Ad hoc</span></td>
-        <td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">${r.so||'—'}</td>
-        <td>${r.client||'—'}</td>
-        ${extra}
-        <td><span class="status-chip chip-future">${r.status||'Scheduled'}</span></td>
-        <td style="display:flex;gap:4px;align-items:center;padding:6px 8px">
-          <button onclick="openEditAdHoc('${dept}',${origIdx})" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;font-family:var(--font)">Edit</button>
-          <button onclick="removeAdHoc('${dept}',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-400);font-size:13px">✕</button>
-        </td>
-      </tr>`
-    };
+    if(dept==='shipping'){extra='<td class="date-cell">'+fmt(r.shipDate||r.ship_date)+'</td><td class="date-cell">'+fmt(r.deliveryDate||r.delivery_date)+'</td>';}
+    else{extra='<td class="date-cell">'+fmt(r.trainingDate||r.training_date)+'</td><td class="date-cell">'+fmt(r.installDate||r.install_date)+'</td>';}
+    const adHocBadge='<span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px;margin-left:4px">Ad hoc</span>';
+    const editBtn='<button onclick="openEditAdHoc(\''+dept+'\','+origIdx+')" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;font-family:var(--font)">Edit</button>';
+    const delBtn='<button onclick="removeAdHoc(\''+dept+'\','+origIdx+')" style="background:none;border:none;cursor:pointer;color:var(--gray-400);font-size:13px">✕</button>';
+    const html='<tr style="background:var(--blue-bg)">'+
+      '<td style="font-weight:500">'+r.name+' '+adHocBadge+'</td>'+
+      '<td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+(r.so||'—')+'</td>'+
+      '<td>'+(r.client||'—')+'</td>'+
+      extra+
+      '<td><span class="status-chip chip-future">'+(r.status||'Scheduled')+'</span></td>'+
+      '<td style="display:flex;gap:4px;align-items:center;padding:6px 8px">'+editBtn+delBtn+'</td>'+
+    '</tr>';
+    return{_date:mainDate,html};
   });
 
   // Merge and sort by date — missing dates go to bottom
