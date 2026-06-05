@@ -613,17 +613,44 @@ async function loadAll(){
     milestoneHistory[h.milestone_id].push(h);
   });
   if(projects.length&&!selectedProjId)selectedProjId=projects[0].id;
-  vinylSchedule=projects.map((p,i)=>{
-    const ex=vinylSchedule.find(v=>v.id===p.id);
+
+  // Load vinyl schedule from Supabase, then merge with project data
+  const[vsRes,psRes]=await Promise.all([
+    sb.from('vinyl_schedule').select('*').order('priority'),
+    sb.from('planogram_schedule').select('*').order('priority'),
+  ]);
+  const savedVinyl=vsRes.data||[];
+  const savedPlan=psRes.data||[];
+
+  // Build vinyl schedule: saved rows + any projects not yet in the table
+  const vinylProjectIds=new Set(savedVinyl.map(v=>v.project_id).filter(Boolean));
+  const newVinylRows=projects.filter(p=>!vinylProjectIds.has(p.id)).map((p,i)=>{
     const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl');
     const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping');
-    return ex?{...ex,date:vm?.date||ex.date,shipDate:sh?.date||ex.shipDate,pm:p.pm||ex.pm||'',vinylType:p.vinyl_type||ex.vinylType||'',formFactor:p.form_factor||ex.formFactor||''}:{id:p.id,name:p.name,so:p.so_number,client:p.client,vinylType:p.vinyl_type||'',date:vm?.date||'',shipDate:sh?.date||'',pm:p.pm||'',formFactor:p.form_factor||'',status:'Scheduled',priority:i+1};
-  }).sort((a,b)=>a.priority-b.priority);
-  planogramSchedule=projects.map((p,i)=>{
-    const ex=planogramSchedule.find(v=>v.id===p.id);
+    return{id:null,project_id:p.id,name:p.name,so:p.so_number,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+1,is_standalone:false};
+  });
+  // Merge saved rows with fresh project data (dates/pm/type always from project)
+  vinylSchedule=savedVinyl.map(v=>{
+    if(v.is_standalone)return{...v,id:v.id,vinylType:v.vinyl_type,shipDate:v.ship_date,formFactor:v.form_factor};
+    const p=projects.find(x=>x.id===v.project_id);
+    const vm=p?milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'):null;
+    const sh=p?milestones.find(m=>m.project_id===p.id&&m.key==='shipping'):null;
+    return{...v,vinylType:p?.vinyl_type||v.vinyl_type||'',date:vm?.date||v.date||'',shipDate:sh?.date||v.ship_date||'',pm:p?.pm||v.pm||'',formFactor:p?.form_factor||v.form_factor||'',name:p?.name||v.name,so:p?.so_number||v.so,client:p?.client||v.client};
+  }).concat(newVinylRows).sort((a,b)=>(a.priority||0)-(b.priority||0));
+
+  // Build planogram schedule similarly
+  const planProjectIds=new Set(savedPlan.map(v=>v.project_id).filter(Boolean));
+  const newPlanRows=projects.filter(p=>!planProjectIds.has(p.id)).map((p,i)=>{
     const pm2=milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram'));
-    return ex?{...ex,date:pm2?.date||ex.date}:{id:p.id,name:p.name,so:p.so_number,client:p.client,machineType:'',date:pm2?.date||'',status:'Pending',priority:i+1};
-  }).sort((a,b)=>a.priority-b.priority);
+    return{id:null,project_id:p.id,name:p.name,so:p.so_number,client:p.client,machine_type:'',date:pm2?.date||'',status:'Pending',priority:savedPlan.length+i+1,is_standalone:false};
+  });
+  planogramSchedule=savedPlan.map(v=>{
+    if(v.is_standalone)return{...v,machineType:v.machine_type};
+    const p=projects.find(x=>x.id===v.project_id);
+    const pm2=p?milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram')):null;
+    return{...v,machineType:p?v.machine_type||'':v.machine_type||'',date:pm2?.date||v.date||'',name:p?.name||v.name,so:p?.so_number||v.so,client:p?.client||v.client};
+  }).concat(newPlanRows).sort((a,b)=>(a.priority||0)-(b.priority||0));
+
   document.getElementById('hdate').textContent=new Date().toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
   renderTab();
 }
@@ -1017,25 +1044,46 @@ function sortPlan(key){
   planogramSchedule.sort((a,b)=>{const av=a[key]||'';const bv=b[key]||'';return av.localeCompare(bv);});
   renderPlanogram();showToast('Sorted by '+key);
 }
-function vs(i,k,v){vinylSchedule[i][k]=v;}
-function ps2(i,k,v){planogramSchedule[i][k]=v;}
+function vs(i,k,v){
+  vinylSchedule[i][k]=v;
+  const item=vinylSchedule[i];
+  if(item.id){
+    // Map local keys to DB column names
+    const colMap={so:'so',client:'client',name:'name',vinylType:'vinyl_type',shipDate:'ship_date',pm:'pm',formFactor:'form_factor',status:'status'};
+    const col=colMap[k]||k;
+    sb.from('vinyl_schedule').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('vs save error',error);});
+  }
+}
+function ps2(i,k,v){
+  planogramSchedule[i][k]=v;
+  const item=planogramSchedule[i];
+  if(item.id){
+    const colMap={so:'so',client:'client',name:'name',machineType:'machine_type',status:'status'};
+    const col=colMap[k]||k;
+    sb.from('planogram_schedule').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('ps2 save error',error);});
+  }
+}
 // Vinyl date sync — updates both the local schedule AND the milestone in Supabase
 async function vinylDateSync(i,val,type){
-  vinylSchedule[i][type==='ship'?'shipDate':'date']=val;
-  const proj=projects.find(p=>p.id===vinylSchedule[i].id);
-  if(!proj)return;
-  const msKey=type==='ship'?'shipping':'vinyl';
-  const msLabel=type==='ship'?'Pack & ship':'Vinyl / branding';
-  const existing=milestones.find(m=>m.project_id===proj.id&&m.key===msKey);
-  if(existing){
-    await sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id);
-    await logActivity('updated date',msLabel,msLabel,proj.id,existing.date,val);
-  } else {
-    await sb.from('milestones').insert({project_id:proj.id,key:msKey,label:msLabel,date:val,changed_by:currentUserName});
-    await logActivity('added milestone',msLabel,msLabel,proj.id,null,val);
+  const field=type==='ship'?'shipDate':'date';
+  const dbField=type==='ship'?'ship_date':'date';
+  vinylSchedule[i][field]=val;
+  // Save to vinyl_schedule table if this row has a DB id
+  const item=vinylSchedule[i];
+  if(item.id){
+    await sb.from('vinyl_schedule').update({[dbField]:val||null,updated_at:new Date().toISOString()}).eq('id',item.id);
   }
-  await loadAll();
-  showToast('Date synced to project overview ✓');
+  // Also sync back to project milestone
+  const proj=projects.find(p=>p.id===item.project_id);
+  if(proj&&val){
+    const msKey=type==='ship'?'shipping':'vinyl';
+    const msLabel=type==='ship'?'Pack & ship':'Vinyl / branding';
+    const existing=milestones.find(m=>m.project_id===proj.id&&m.key===msKey);
+    if(existing){await sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id);await logActivity('updated date',msLabel,msLabel,proj.id,existing.date,val);}
+    else{await sb.from('milestones').insert({project_id:proj.id,key:msKey,label:msLabel,date:val,changed_by:currentUserName});await logActivity('added milestone',msLabel,msLabel,proj.id,null,val);}
+    await loadAll();
+  }
+  showToast('Date saved ✓');
 }
 function vsDate(i,field,val,type){
   const data=type==='vinyl'?vinylSchedule:planogramSchedule;data[i][field]=val;
@@ -1089,34 +1137,36 @@ function addSchedRow(type){
   </div>`;
 }
 
-function saveSchedRow(type){
+async function saveSchedRow(type){
   const isVinyl=type==='vinyl';
   const name=document.getElementById('asr-name')?.value.trim();
   if(!name){alert('Please enter a project name.');return;}
-  const row={
-    id:'custom-'+Date.now(),
-    name,
-    so:document.getElementById('asr-so')?.value.trim()||'',
-    client:document.getElementById('asr-client')?.value.trim()||'',
-    date:document.getElementById('asr-date')?.value||'',
-    status:document.getElementById('asr-status')?.value||'Scheduled',
-    priority:isVinyl?vinylSchedule.length+1:planogramSchedule.length+1,
-  };
+  const base={name,so:document.getElementById('asr-so')?.value.trim()||'',client:document.getElementById('asr-client')?.value.trim()||'',date:document.getElementById('asr-date')?.value||null,status:document.getElementById('asr-status')?.value||'Scheduled',is_standalone:true,project_id:null};
   if(isVinyl){
-    row.vinylType=document.getElementById('asr-vinyltype')?.value||'';
-    row.shipDate=document.getElementById('asr-shipdate')?.value||'';
-    row.pm=document.getElementById('asr-pm')?.value.trim()||'';
-    row.formFactor=document.getElementById('asr-formfactor')?.value.trim()||'';
-    vinylSchedule.push(row);
+    base.vinyl_type=document.getElementById('asr-vinyltype')?.value||'';
+    base.ship_date=document.getElementById('asr-shipdate')?.value||null;
+    base.pm=document.getElementById('asr-pm')?.value.trim()||'';
+    base.form_factor=document.getElementById('asr-formfactor')?.value.trim()||'';
+    base.priority=vinylSchedule.length+1;
+    const{error}=await sb.from('vinyl_schedule').insert(base);
+    if(error){alert('Error: '+error.message);return;}
   } else {
-    row.machineType=document.getElementById('asr-machinetype')?.value.trim()||'';
-    planogramSchedule.push(row);
+    base.machine_type=document.getElementById('asr-machinetype')?.value.trim()||'';
+    base.priority=planogramSchedule.length+1;
+    const{error}=await sb.from('planogram_schedule').insert(base);
+    if(error){alert('Error: '+error.message);return;}
   }
-  closeModal();
-  showToast('Added to schedule ✓');
-  if(isVinyl)renderVinyl();else renderPlanogram();
+  closeModal();showToast('Added and saved ✓');await loadAll();
 }
-function removeSchedRow(type,i){if(type==='vinyl')vinylSchedule.splice(i,1);else planogramSchedule.splice(i,1);if(type==='vinyl')renderVinyl();else renderPlanogram();}
+async function removeSchedRow(type,i){
+  const item=type==='vinyl'?vinylSchedule[i]:planogramSchedule[i];
+  if(item?.id){
+    await sb.from(type==='vinyl'?'vinyl_schedule':'planogram_schedule').delete().eq('id',item.id);
+  }
+  if(type==='vinyl')vinylSchedule.splice(i,1);else planogramSchedule.splice(i,1);
+  if(type==='vinyl')renderVinyl();else renderPlanogram();
+  showToast('Removed');
+}
 function dragStart(e,idx,type){dragSrc=idx;dragType=type;e.currentTarget.classList.add('dragging');}
 function dragOver(e){e.preventDefault();e.currentTarget.classList.add('drag-over');}
 function dragLeave(e){e.currentTarget.classList.remove('drag-over');}
@@ -2565,3 +2615,4 @@ function exportProjPageExcel(){
 loadAll();
 </script>
 </body>
+</html>
