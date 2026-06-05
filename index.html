@@ -1022,40 +1022,72 @@ function renderDeptView(dept){
         <option value="date-desc"${f.sort==='date-desc'?' selected':''}>Date ↓ latest first</option>
       </select>
       ${activeFilters?`<button onclick="deptFilter['${dept}']={search:'',dateFrom:'',dateTo:'',sort:'date-asc'};renderDeptView('${dept}')" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>`:''}
-      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filteredProjects.length} of ${projects.length} projects${activeFilters?' (filtered)':''}</span>
+      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filteredProjects.length} projects + ${adHocFiltered?.length||0} ad hoc${activeFilters?' (filtered)':''}</span>
     </div>`:'';
 
-  // Ad hoc rows for shipping and installation
+  // Ad hoc rows for shipping and installation — merge with project rows and sort together
   const adHoc=hasFilter?adHocRows[dept]||[]:[];
+  const mainDateKey=dept==='shipping'?'shipping':'installation';
+
+  // Build unified row objects for sorting
+  const projRowObjs=filteredProjects.map(p=>{
+    const sd=getMsDate(p.id,c.startKey);
+    const st=stageStatus(sd,null);
+    let extra='';
+    if(dept==='shipping'){extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(getMsDate(p.id,'delivery'))}</td>`;}
+    else{extra=`<td class="date-cell">${fmt(getMsDate(p.id,'training'))}</td><td class="date-cell">${fmt(sd)}</td>`;}
+    return{
+      _date:sd||'',
+      _type:'project',
+      html:`<tr><td style="font-weight:500">${p.name}</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)" title="${p.so_number||''}">${truncateSO(p.so_number)}</td><td>${p.client||'—'}</td>${extra}<td><span class="status-chip ${st.chip}">${st.label}</span></td><td></td></tr>`
+    };
+  });
+
   const adHocFiltered=hasFilter&&f?adHoc.filter(r=>{
     if(f.search){const q=f.search.toLowerCase();if(!(r.name||'').toLowerCase().includes(q)&&!(r.so||'').toLowerCase().includes(q)&&!(r.client||'').toLowerCase().includes(q))return false;}
-    const mainDate=dept==='shipping'?r.shipDate:r.installDate;
+    const mainDate=dept==='shipping'?(r.shipDate||r.ship_date):(r.installDate||r.install_date);
     if(f.dateFrom&&mainDate&&mainDate<f.dateFrom)return false;
     if(f.dateTo&&mainDate&&mainDate>f.dateTo)return false;
     return true;
   }):adHoc;
 
-  const adHocRows_html=adHocFiltered.map((r,i)=>{
+  const adHocRowObjs=adHocFiltered.map(r=>{
     const origIdx=adHocRows[dept].indexOf(r);
+    const mainDate=dept==='shipping'?(r.shipDate||r.ship_date||''):(r.installDate||r.install_date||'');
     let extra='';
     if(dept==='shipping'){extra=`<td class="date-cell">${fmt(r.shipDate||r.ship_date)}</td><td class="date-cell">${fmt(r.deliveryDate||r.delivery_date)}</td>`;}
     else{extra=`<td class="date-cell">${fmt(r.trainingDate||r.training_date)}</td><td class="date-cell">${fmt(r.installDate||r.install_date)}</td>`;}
-    return`<tr style="background:var(--blue-bg)">
-      <td style="font-weight:500">${r.name} <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px;margin-left:4px">Ad hoc</span></td>
-      <td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">${r.so||'—'}</td>
-      <td>${r.client||'—'}</td>
-      ${extra}
-      <td><span class="status-chip chip-future">${r.status||'Scheduled'}</span></td>
-      <td style="display:flex;gap:4px;align-items:center;padding:6px 8px">
-        <button onclick="openEditAdHoc('${dept}',${origIdx})" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;font-family:var(--font)">Edit</button>
-        <button onclick="removeAdHoc('${dept}',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-400);font-size:13px">✕</button>
-      </td>
-    </tr>`;
-  }).join('');
+    return{
+      _date:mainDate,
+      _type:'adhoc',
+      html:`<tr style="background:var(--blue-bg)">
+        <td style="font-weight:500">${r.name} <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px;margin-left:4px">Ad hoc</span></td>
+        <td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">${r.so||'—'}</td>
+        <td>${r.client||'—'}</td>
+        ${extra}
+        <td><span class="status-chip chip-future">${r.status||'Scheduled'}</span></td>
+        <td style="display:flex;gap:4px;align-items:center;padding:6px 8px">
+          <button onclick="openEditAdHoc('${dept}',${origIdx})" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;font-family:var(--font)">Edit</button>
+          <button onclick="removeAdHoc('${dept}',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-400);font-size:13px">✕</button>
+        </td>
+      </tr>`
+    };
+  });
 
+  // Merge and sort by date — missing dates go to bottom
+  const allRows=[...projRowObjs,...adHocRowObjs].sort((a,b)=>{
+    const da=a._date||'';const db=b._date||'';
+    if(!da&&!db)return 0;
+    if(!da)return 1;
+    if(!db)return -1;
+    return f?.sort==='date-desc'?db.localeCompare(da):da.localeCompare(db);
+  });
+
+  const combinedHtml=allRows.map(r=>r.html).join('');
+  const totalCount=projRowObjs.length+adHocRowObjs.length;
   const addBtn=hasFilter?`<div class="actions-row"><button class="btn-add" onclick="openAdHocModal('${dept}')">+ Add ${dept==='shipping'?'shipment':'installation'}</button><span style="font-size:11px;color:var(--gray-500);margin-left:8px">Standalone entries not linked to a project</span></div>`:'';
 
-  el.innerHTML=`${ganttHtml}<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid ${c.color};padding-left:8px">${c.title}</div><div style="display:flex;gap:7px;align-items:center">${hideCompletedBtn(dept)}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>${filterBar}<div class="dept-table-wrap"><table class="dept-table"><thead><tr>${c.cols.map(col=>`<th>${col}</th>`).join('')}${hasFilter?'<th style="width:28px"></th>':''}</tr></thead><tbody>${rows}${adHocRows_html||''}</tbody></table></div>${addBtn}</div>`;
+  el.innerHTML=`${ganttHtml}<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid ${c.color};padding-left:8px">${c.title}</div><div style="display:flex;gap:7px;align-items:center">${hideCompletedBtn(dept)}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>${filterBar}<div class="dept-table-wrap"><table class="dept-table"><thead><tr>${c.cols.map(col=>`<th>${col}</th>`).join('')}${hasFilter?'<th style="width:28px"></th>':''}</tr></thead><tbody>${combinedHtml||'<tr><td colspan="99" style="text-align:center;padding:2rem;color:var(--gray-500)">No entries match the current filters.</td></tr>'}</tbody></table></div>${addBtn}</div>`;
 }
 
 // ── VINYL ──────────────────────────────────────────────────
@@ -1653,6 +1685,7 @@ function openEditProj(id){
         <div class="field full"><label>Product template URL</label><input id="ep-product" value="${proj.product_template_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..."></div>
         <div class="field full"><label>Badge reader URL</label><input id="ep-badge" value="${proj.badge_reader_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..."></div>
         <div class="field full"><label>Employee list URL</label><input id="ep-employee" value="${proj.employee_list_url||''}" placeholder="SharePoint or Jira link..."></div>
+        <div class="field full"><label>Vinyl render Odoo URL</label><input id="ep-vinyl-odoo" value="${proj.vinyl_odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..."></div>
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">Milestone dates</div>
       ${msRows}
@@ -1680,6 +1713,7 @@ async function saveEditProj(id){
     product_template_url:document.getElementById('ep-product').value.trim(),
     badge_reader_url:document.getElementById('ep-badge').value.trim(),
     employee_list_url:document.getElementById('ep-employee').value.trim(),
+    vinyl_odoo_url:document.getElementById('ep-vinyl-odoo')?.value.trim()||null,
     changed_by:currentUserName,changed_at:new Date().toISOString()
   }).eq('id',id);
   if(error){alert('Error: '+error.message);return;}
@@ -1896,7 +1930,7 @@ function renderProjPageBody(){
   const LINK_CATS=[
     {cat:'Meetings',items:[{label:'Kickoff recording',key:'kickoff_rec'},{label:'Meeting minutes',key:'meeting_min'},{label:'Project calendar',key:'proj_cal'}]},
     {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Project Charter',key:'charter'},{label:'Requirements',key:'requirements'},{label:'Site Survey',key:'site_survey'},{label:'Deployment Plan',key:'deploy_plan'}]},
-    {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira / UI Task',key:'jira'},{label:'QA Task',key:'qa_task'},{label:'Product Template',key:'product_template'},{label:'Badge Reader',key:'badge_reader'},{label:'Employee List',key:'employee_list'},{label:'Odoo Task',key:'odoo'},{label:'Client Portal',key:'client_portal'}]},
+    {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira / UI Task',key:'jira'},{label:'QA Task',key:'qa_task'},{label:'Product Template',key:'product_template'},{label:'Badge Reader',key:'badge_reader'},{label:'Employee List',key:'employee_list'},{label:'Odoo Task',key:'odoo'},{label:'Vinyl Render Odoo',key:'vinyl_odoo'},{label:'Client Portal',key:'client_portal'}]},
   ];
   // Start with anything saved in project_links table
   const linkVals=Object.fromEntries(ppData.links.map(l=>[l.label,l.url]));
@@ -1907,6 +1941,7 @@ function renderProjPageBody(){
   if(proj.product_template_url)linkVals['Product Template']=proj.product_template_url;
   if(proj.badge_reader_url)linkVals['Badge Reader']=proj.badge_reader_url;
   if(proj.employee_list_url)linkVals['Employee List']=proj.employee_list_url;
+  if(proj.vinyl_odoo_url)linkVals['Vinyl Render Odoo']=proj.vinyl_odoo_url;
 
   const linksHtml=LINK_CATS.map(cat=>`
     <div style="margin-bottom:10px">
