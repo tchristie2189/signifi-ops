@@ -159,10 +159,10 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .status-chip{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;display:inline-block;white-space:nowrap;}
 /* ── GANTT ── */
 .prod-gantt{padding:0 16px 16px;}
-.gantt-wrap{overflow-x:auto;overflow-y:auto;max-height:600px;width:100%;}
+.gantt-wrap{overflow-x:auto;width:100%;}
 .gantt-table{border-collapse:separate;border-spacing:0;width:100%;min-width:700px;}
-.gantt-table th{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 4px;text-align:center;border-bottom:2px solid var(--gray-200);font-weight:600;white-space:nowrap;min-width:28px;background:var(--white);position:sticky;top:0;z-index:2;}
-.gantt-table th.proj-col{text-align:left;min-width:180px;padding:5px 8px;position:sticky;left:0;top:0;z-index:5;background:var(--white);border-right:2px solid var(--gray-200);}
+.gantt-table th{font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:5px 4px;text-align:center;border-bottom:1px solid var(--gray-200);font-weight:600;white-space:nowrap;min-width:28px;background:var(--white);}
+.gantt-table th.proj-col{text-align:left;min-width:180px;padding:5px 8px;position:sticky;left:0;z-index:3;background:var(--white);border-right:2px solid var(--gray-200);}
 .gantt-table td{padding:3px;border-bottom:1px solid var(--gray-50);vertical-align:middle;background:var(--white);}
 .gantt-table td.proj-name{font-size:12px;font-weight:500;color:var(--black);padding:4px 8px;white-space:nowrap;position:sticky;left:0;z-index:2;background:var(--white);border-right:2px solid var(--gray-200);min-width:180px;}
 .gantt-cell{position:relative;text-align:center;height:26px;}
@@ -425,8 +425,6 @@ let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc
 let currentUser=null,currentUserName='';
 let vinylFilter={status:'',search:'',dateFrom:'',dateTo:''};
 let planFilter={status:'',search:'',dateFrom:'',dateTo:''};
-let deptFilter={shipping:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'},installation:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'}};
-let adHocRows={shipping:[],installation:[]}; // standalone entries not tied to a project
 let pmFilter='';
 
 // ── UTILS ──────────────────────────────────────────────────
@@ -597,28 +595,22 @@ function renderTab(){
 
 // ── DATA ───────────────────────────────────────────────────
 async function loadAll(){
-  const[pr,ms,lg,ci,md,mh,ah]=await Promise.all([
+  const[pr,ms,lg,ci,md,mh]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
     sb.from('checkin_status').select('*').order('updated_at',{ascending:false}),
     sb.from('milestone_done').select('*'),
     sb.from('milestone_history').select('*').order('changed_at',{ascending:true}),
-    sb.from('adhoc_schedule').select('*').order('created_at'),
   ]);
   projects=pr.data||[];milestones=ms.data||[];activityLog=lg.data||[];
   checkinStatus={};(ci.data||[]).forEach(c=>{checkinStatus[c.milestone_id]=c;});
   milestoneDone={};(md.data||[]).forEach(d=>{milestoneDone[d.milestone_id]=d;});
+  // Group history by milestone_id
   milestoneHistory={};
   (mh.data||[]).forEach(h=>{
     if(!milestoneHistory[h.milestone_id])milestoneHistory[h.milestone_id]=[];
     milestoneHistory[h.milestone_id].push(h);
-  });
-  // Load ad hoc rows grouped by dept
-  adHocRows={shipping:[],installation:[]};
-  (ah.data||[]).forEach(r=>{
-    if(r.dept==='shipping')adHocRows.shipping.push({...r,shipDate:r.ship_date,deliveryDate:r.delivery_date});
-    else if(r.dept==='installation')adHocRows.installation.push({...r,trainingDate:r.training_date,installDate:r.install_date});
   });
   if(projects.length&&!selectedProjId)selectedProjId=projects[0].id;
 
@@ -665,18 +657,6 @@ async function loadAll(){
 
 // ── AT A GLANCE ────────────────────────────────────────────
 let glanceFilter='active'; // 'active' or 'archived'
-// Per-page hide completed state
-let hideCompleted={glance:false,overview:false,week:false,production:false,quality:false,shipping:false,installation:false,briefing:false};
-
-// Helper — filters out completed projects based on per-page toggle
-function activeProjects(page){
-  const hide=page?hideCompleted[page]:false;
-  return hide?projects.filter(p=>p.status!=='complete'):projects;
-}
-function hideCompletedBtn(page){
-  const active=hideCompleted[page];
-  return`<button onclick="hideCompleted['${page}']=!hideCompleted['${page}'];renderTab()" style="font-size:11px;padding:4px 12px;border-radius:20px;border:1px solid ${active?'var(--black)':'var(--gray-300)'};background:${active?'var(--black)':'var(--white)'};color:${active?'white':'var(--gray-500)'};cursor:pointer;font-family:var(--font);font-weight:500">${active?'✓ ':''} Hide completed</button>`;
-}
 
 function renderGlance(){
   const el=document.getElementById('tab-glance');
@@ -784,7 +764,6 @@ function renderGlance(){
         </div>
         <span style="font-size:11px;color:var(--gray-500)">Health score top-right · ✓ Complete to archive</span>
       </div>
-      ${hideCompletedBtn('glance')}
       <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
     </div>
     ${visibleProjects.length?`<div class="glance-grid">${cards}</div>`:'<div class="empty-state" style="margin-top:2rem">'+(glanceFilter==='archived'?'No completed projects yet. Mark a project complete using the ✓ button on its card.':'No active projects. Check the Completed tab or add a new project.')+'</div>'}`;
@@ -796,7 +775,7 @@ function renderOverview(){
   const upcoming=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=14).length;
   const overdue=milestones.filter(m=>m.date&&daysDiff(m.date)<0).length;
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
-  const proj=activeProjects('overview').find(p=>p.id===selectedProjId)||projects.find(p=>p.id===selectedProjId);
+  const proj=projects.find(p=>p.id===selectedProjId);
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
   const msHtml=projMs.map(m=>{
     const isDone=isMilestoneDone(m);
@@ -820,7 +799,7 @@ function renderOverview(){
     </div>`;
   }).join('');
   const pillsHtml=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
-    <div class="proj-pills" style="margin-bottom:0;flex:1">${activeProjects('overview').filter(p=>!pmFilter||(p.pm===pmFilter)).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
+    <div class="proj-pills" style="margin-bottom:0;flex:1">${projects.filter(p=>!pmFilter||(p.pm===pmFilter)).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
       <label style="font-size:11px;color:var(--gray-500);white-space:nowrap">PM:</label>
       <select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pmFilter=this.value;renderOverview()">
@@ -841,7 +820,6 @@ function renderOverview(){
       <div class="section-head">
         <div class="section-title">${proj.name} <span style="font-size:11px;font-weight:400;color:var(--gray-500)">— ${proj.client}</span></div>
         <div style="display:flex;align-items:center;gap:8px">
-          ${hideCompletedBtn('overview')}
           <span style="font-family:var(--mono);color:var(--red);font-size:11px" title="${proj.so_number||''}">${truncateSO(proj.so_number)}</span>
           ${healthRing(proj.id)}
           <button class="btn btn-primary" style="font-size:10px;padding:4px 10px" onclick="openEditProj('${proj.id}')">✏ Edit</button>
@@ -857,7 +835,7 @@ function selProj(id){selectedProjId=id;renderOverview();}
 function renderWeek(){
   const el=document.getElementById('tab-week');
   const we=addD(weekStart,6);
-  const ap=activeProjects('week');const allMs=milestones.filter(m=>ap.some(p=>p.id===m.project_id)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
+  const allMs=milestones.map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
   const overdueMs=allMs.filter(m=>m.date&&daysDiff(m.date)<0&&daysDiff(m.date)>=-14);
   const overdueHtml=overdueMs.length?`<div class="overdue-bar"><div><div class="overdue-title">⚠ Overdue</div>${overdueMs.map(m=>`<div class="overdue-item">${m.label} — ${m.projectName} (was ${fmt(m.date)})</div>`).join('')}</div></div>`:'';
   const DAY=['Monday','Tuesday','Wednesday','Thursday','Friday'];
@@ -874,7 +852,6 @@ function renderWeek(){
       <button class="wnav" onclick="shiftW(1)">&#8250;</button>
       <button class="wnav" onclick="goToday()">Today</button>
       <button class="btn-add" onclick="openAddEvModal()">+ Add</button>
-      ${hideCompletedBtn('week')}
       <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
     </div>
     ${overdueHtml}
@@ -905,7 +882,7 @@ function buildGantt(startKeys,endKeys,segsFn,title,legend){
     const monthLabel=d.getDate()===1||days.indexOf(d)===0?'<span style="font-size:8px;display:block">'+d.toLocaleDateString('en-US',{month:'short'})+'</span>':'';
     return`<th ${bg} style="min-width:28px${isT?';background:#fff0f0':''}">${monthLabel}${d.getDate()}</th>`;
   }).join('');
-  const gRows=activeProjects(title.toLowerCase().includes('prod')?'production':'quality').map(p=>{
+  const gRows=projects.map(p=>{
     const pMs=milestones.filter(m=>m.project_id===p.id);const getD=k=>pMs.find(m=>m.key===k)?.date;
     const segs=segsFn(getD).filter(x=>x.s);
     const cells=days.map(d=>{
@@ -931,31 +908,7 @@ function renderDeptView(dept){
   let ganttHtml='';
   if(dept==='production'){ganttHtml=buildGantt(['production-start'],['production-end','quality-end'],getD=>[{s:getD('production-start'),e:getD('production-end'),bg:'#7c3aed',lbl:'Build'},{s:getD('quality-start'),e:getD('quality-end'),bg:'#d97706',lbl:'QA'},{s:getD('shipping'),e:getD('shipping'),bg:'#059669',lbl:'Ship'},{s:getD('installation'),e:getD('installation'),bg:'#db2777',lbl:'Install'}],'Production',[{c:'#7c3aed',l:'Build'},{c:'#d97706',l:'QA'},{c:'#059669',l:'Ship'},{c:'#db2777',l:'Install'}]);}
   else if(dept==='quality'){ganttHtml=buildGantt(['quality-start'],['quality-end','uat'],getD=>[{s:getD('quality-start'),e:getD('quality-end'),bg:'#d97706',lbl:'QA'},{s:getD('vinyl'),e:getD('vinyl'),bg:'#2563eb',lbl:'Vinyl'},{s:getD('uat'),e:getD('uat'),bg:'#16a34a',lbl:'UAT'}],'Quality / QA',[{c:'#d97706',l:'QA'},{c:'#2563eb',l:'Vinyl'},{c:'#16a34a',l:'UAT'}]);}
-
-  // For shipping & installation add filtering and sorting
-  const hasFilter=dept==='shipping'||dept==='installation';
-  const f=hasFilter?deptFilter[dept]:null;
-
-  let filteredProjects=activeProjects(dept);
-  if(hasFilter&&f){
-    const mainDateKey=dept==='shipping'?'shipping':'installation';
-    filteredProjects=projects.filter(p=>{
-      const sd=getMsDate(p.id,mainDateKey);
-      if(f.search){const q=f.search.toLowerCase();if(!(p.name||'').toLowerCase().includes(q)&&!(p.so_number||'').toLowerCase().includes(q)&&!(p.client||'').toLowerCase().includes(q))return false;}
-      if(f.dateFrom&&sd&&sd<f.dateFrom)return false;
-      if(f.dateTo&&sd&&sd>f.dateTo)return false;
-      return true;
-    });
-    // Sort
-    filteredProjects=[...filteredProjects].sort((a,b)=>{
-      const da=getMsDate(a.id,mainDateKey)||'9999';
-      const db=getMsDate(b.id,mainDateKey)||'9999';
-      return f.sort==='date-asc'?da.localeCompare(db):db.localeCompare(da);
-    });
-  }
-
-  if(!hasFilter)filteredProjects=activeProjects(dept);
-  const rows=filteredProjects.map(p=>{
+  const rows=projects.map(p=>{
     const sd=getMsDate(p.id,c.startKey);const ed=c.endKey!==c.startKey?getMsDate(p.id,c.endKey):null;const st=stageStatus(sd,ed||sd);
     let extra='';
     if(dept==='production'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra=`<td class="date-cell">${fmt(sd)}</td><td class="date-cell">${fmt(ed)}</td><td class="date-cell">${dur}</td>`;}
@@ -964,49 +917,7 @@ function renderDeptView(dept){
     else if(dept==='installation'){extra=`<td class="date-cell">${fmt(getMsDate(p.id,'training'))}</td><td class="date-cell">${fmt(sd)}</td>`;}
     return`<tr><td style="font-weight:500">${p.name}</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)" title="${p.so_number||''}">${truncateSO(p.so_number)}</td><td>${p.client||'—'}</td>${extra}<td><span class="status-chip ${st.chip}">${st.label}</span></td></tr>`;
   }).join('');
-
-  const activeFilters=hasFilter&&f?[f.search,f.dateFrom,f.dateTo].filter(Boolean).length:0;
-  const filterBar=hasFilter?`
-    <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
-      <input placeholder="🔍 Search project, SO, client..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:220px" value="${f.search}" oninput="deptFilter['${dept}'].search=this.value;renderDeptView('${dept}')">
-      <input type="date" title="Date from" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${f.dateFrom}" onchange="deptFilter['${dept}'].dateFrom=this.value;renderDeptView('${dept}')">
-      <span style="font-size:11px;color:var(--gray-500)">to</span>
-      <input type="date" title="Date to" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${f.dateTo}" onchange="deptFilter['${dept}'].dateTo=this.value;renderDeptView('${dept}')">
-      <select style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" onchange="deptFilter['${dept}'].sort=this.value;renderDeptView('${dept}')">
-        <option value="date-asc"${f.sort==='date-asc'?' selected':''}>Date ↑ earliest first</option>
-        <option value="date-desc"${f.sort==='date-desc'?' selected':''}>Date ↓ latest first</option>
-      </select>
-      ${activeFilters?`<button onclick="deptFilter['${dept}']={search:'',dateFrom:'',dateTo:'',sort:'date-asc'};renderDeptView('${dept}')" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>`:''}
-      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filteredProjects.length} of ${projects.length} projects${activeFilters?' (filtered)':''}</span>
-    </div>`:'';
-
-  // Ad hoc rows for shipping and installation
-  const adHoc=hasFilter?adHocRows[dept]||[]:[];
-  const adHocFiltered=hasFilter&&f?adHoc.filter(r=>{
-    if(f.search){const q=f.search.toLowerCase();if(!(r.name||'').toLowerCase().includes(q)&&!(r.so||'').toLowerCase().includes(q)&&!(r.client||'').toLowerCase().includes(q))return false;}
-    const mainDate=dept==='shipping'?r.shipDate:r.installDate;
-    if(f.dateFrom&&mainDate&&mainDate<f.dateFrom)return false;
-    if(f.dateTo&&mainDate&&mainDate>f.dateTo)return false;
-    return true;
-  }):adHoc;
-
-  const adHocRows_html=adHocFiltered.map((r,i)=>{
-    let extra='';
-    if(dept==='shipping'){extra=`<td class="date-cell">${fmt(r.shipDate)}</td><td class="date-cell">${fmt(r.deliveryDate)}</td>`;}
-    else{extra=`<td class="date-cell">${fmt(r.trainingDate)}</td><td class="date-cell">${fmt(r.installDate)}</td>`;}
-    return`<tr style="background:var(--blue-bg)">
-      <td style="font-weight:500">${r.name} <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px;margin-left:4px">Ad hoc</span></td>
-      <td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">${r.so||'—'}</td>
-      <td>${r.client||'—'}</td>
-      ${extra}
-      <td><span class="status-chip chip-future">${r.status||'Scheduled'}</span></td>
-      <td><button onclick="removeAdHoc('${dept}',${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-400);font-size:13px">✕</button></td>
-    </tr>`;
-  }).join('');
-
-  const addBtn=hasFilter?`<div class="actions-row"><button class="btn-add" onclick="openAdHocModal('${dept}')">+ Add ${dept==='shipping'?'shipment':'installation'}</button><span style="font-size:11px;color:var(--gray-500);margin-left:8px">Standalone entries not linked to a project</span></div>`:'';
-
-  el.innerHTML=`${ganttHtml}<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid ${c.color};padding-left:8px">${c.title}</div><div style="display:flex;gap:7px;align-items:center">${hideCompletedBtn(dept)}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>${filterBar}<div class="dept-table-wrap"><table class="dept-table"><thead><tr>${c.cols.map(col=>`<th>${col}</th>`).join('')}${hasFilter?'<th style="width:28px"></th>':''}</tr></thead><tbody>${rows}${adHocRows_html||''}</tbody></table></div>${addBtn}</div>`;
+  el.innerHTML=`${ganttHtml}<div class="section"><div class="section-head"><div class="section-title" style="border-left:3px solid ${c.color};padding-left:8px">${c.title}</div><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div><div class="dept-table-wrap"><table class="dept-table"><thead><tr>${c.cols.map(col=>`<th>${col}</th>`).join('')}</tr></thead><tbody>${rows||'<tr><td colspan="99" style="text-align:center;padding:2rem;color:var(--gray-500)">No projects yet.</td></tr>'}</tbody></table></div></div>`;
 }
 
 // ── VINYL ──────────────────────────────────────────────────
@@ -1032,11 +943,11 @@ function renderVinyl(){
       <td style="${readStyle}">${item.so||'—'}</td>
       <td style="${readStyle}">${item.client||'—'}</td>
       <td style="${readStyle}">${item.name||'—'}</td>
-      <td><select class="sched-select" onchange="vs(${origIdx},'vinylType',this.value)">${['','Decal','Partial Vinyl','Full Vinyl'].map(t=>`<option${t===item.vinylType?' selected':''}>${t||'Select...'}</option>`).join('')}</select></td>
+      <td style="${readStyle}">${item.vinylType||'—'}</td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vinylDateSync(${origIdx},this.value,'vinyl')" title="Syncs with project overview"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vinylDateSync(${origIdx},this.value,'ship')" title="Syncs with project overview"></td>
       <td style="${readStyle}">${item.pm||'—'}</td>
-      <td><input class="sched-input" value="${item.formFactor||''}" placeholder="Form factor" style="width:110px" onchange="vs(${origIdx},'formFactor',this.value)"></td>
+      <td style="${readStyle}">${item.formFactor||'—'}</td>
       <td><select class="sched-select" onchange="vs(${origIdx},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
       <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">✕</button></td>
     </tr>`;
@@ -1304,14 +1215,13 @@ function renderCheckinOverview(){
   const el=document.getElementById('tab-checkin');
   const base=monday(today());
   const weeks=[{label:'This week',start:base},{label:'Next week',start:addD(base,7)}];
-  const apci=activeProjects('checkin');
   const depts=Object.keys(DEPT_KEYS);
 
   function getDeptMs(dept,wStart){
     const wEnd=addD(wStart,6);
     const keys=DEPT_KEYS[dept]||[];
     const lbls=DEPT_LABEL_MATCH[dept]||[];
-    return milestones.filter(m=>{if(!apci.some(p=>p.id===m.project_id))return false;
+    return milestones.filter(m=>{
       if(!m.date)return false;
       const d=new Date(m.date+'T00:00:00');
       if(d<wStart||d>wEnd)return false;
@@ -1386,14 +1296,14 @@ function renderCheckinOverview(){
 // ── BRIEFING ───────────────────────────────────────────────
 function renderBriefing(){
   const el=document.getElementById('tab-briefing');
-  const ap2=activeProjects('briefing');const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+  const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
   const timeStr=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
   const allMs=milestones.map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:'',so:p?p.so_number:'',client:p?p.client:''};});
   const thisWeekMs=allMs.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).sort((a,b)=>a.date.localeCompare(b.date));
   const overdueMs=allMs.filter(m=>m.date&&daysDiff(m.date)<0).sort((a,b)=>b.date.localeCompare(a.date));
   const upcomingMs=allMs.filter(m=>m.date&&daysDiff(m.date)>6&&daysDiff(m.date)<=14).sort((a,b)=>a.date.localeCompare(b.date));
   const STAGES=[{label:'Readiness',startKey:'po-release',endKey:'arrival'},{label:'Production',startKey:'production-start',endKey:'production-end'},{label:'Quality / QA',startKey:'quality-start',endKey:'quality-end'},{label:'UAT',startKey:'uat',endKey:'uat'},{label:'Shipping',startKey:'shipping',endKey:'shipping'},{label:'Installation',startKey:'installation',endKey:'installation'}];
-  const projSummary=activeProjects('briefing').map(p=>{
+  const projSummary=projects.map(p=>{
     const currentStage=STAGES.find(s=>{const sd=getMsDate(p.id,s.startKey);const ed=getMsDate(p.id,s.endKey);if(!sd)return false;const t=today();const start=new Date(sd+'T00:00:00');const end=ed?new Date(ed+'T00:00:00'):start;return t>=start&&t<=end;});
     const nextMs=allMs.filter(m=>m.project_id===p.id&&m.date&&daysDiff(m.date)>=0).sort((a,b)=>a.date.localeCompare(b.date))[0];
     const h=calcHealth(p.id);
@@ -1702,10 +1612,9 @@ async function saveEv(){
 
 // ── EXCEL EXPORT ───────────────────────────────────────────
 function exportToExcel(){
-  const exportProjects=activeProjects(currentTab)||projects;
   const wb=XLSX.utils.book_new();
   const r1=[['Project','SO Number','Client','Product Type','Status','Milestone','Type','Date','Days from today','Last changed by']];
-  exportProjects.forEach(p=>{const pMs=milestones.filter(m=>m.project_id===p.id);if(!pMs.length){r1.push([p.name,p.so_number,p.client,p.product_type,p.status,'','','','','']);}else{pMs.forEach((m,i)=>r1.push([i===0?p.name:'',i===0?p.so_number:'',i===0?p.client:'',i===0?p.product_type:'',i===0?p.status:'',m.label,TYPE_LBL[m.key]||m.key,m.date,m.date?daysDiff(m.date):'',m.changed_by||'']));}}); 
+  projects.forEach(p=>{const pMs=milestones.filter(m=>m.project_id===p.id);if(!pMs.length){r1.push([p.name,p.so_number,p.client,p.product_type,p.status,'','','','','']);}else{pMs.forEach((m,i)=>r1.push([i===0?p.name:'',i===0?p.so_number:'',i===0?p.client:'',i===0?p.product_type:'',i===0?p.status:'',m.label,TYPE_LBL[m.key]||m.key,m.date,m.date?daysDiff(m.date):'',m.changed_by||'']));}}); 
   const ws1=XLSX.utils.aoa_to_sheet(r1);ws1['!cols']=[{wch:28},{wch:14},{wch:18},{wch:18},{wch:10},{wch:26},{wch:16},{wch:12},{wch:14},{wch:18}];XLSX.utils.book_append_sheet(wb,ws1,'Projects & Milestones');
   const r2=[['Priority','SO','Customer','Project','Type','Vinyl Date','Ship Date','PM','Form Factor','Status']];
   vinylSchedule.forEach((item,i)=>r2.push([i+1,item.so,item.client,item.name,item.vinylType,item.date||'TBD',item.shipDate||'TBD',item.pm,item.formFactor,item.status]));
@@ -1714,7 +1623,7 @@ function exportToExcel(){
   planogramSchedule.forEach((item,i)=>r3.push([i+1,item.so,item.client,item.name,item.machineType,item.date||'TBD',item.status]));
   const ws3=XLSX.utils.aoa_to_sheet(r3);XLSX.utils.book_append_sheet(wb,ws3,'Planogram Schedule');
   const r4=[['Project','SO','Client','Prod Start','Prod End','Duration','Status']];
-  exportProjects.forEach(p=>{const sd=getMsDate(p.id,'production-start');const ed=getMsDate(p.id,'production-end');const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000):'';const st=stageStatus(sd,ed);r4.push([p.name,p.so_number,p.client,sd||'',ed||'',dur,st.label]);});
+  projects.forEach(p=>{const sd=getMsDate(p.id,'production-start');const ed=getMsDate(p.id,'production-end');const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000):'';const st=stageStatus(sd,ed);r4.push([p.name,p.so_number,p.client,sd||'',ed||'',dur,st.label]);});
   const ws4=XLSX.utils.aoa_to_sheet(r4);XLSX.utils.book_append_sheet(wb,ws4,'Production');
   const r5=[['Time','User','Action','Item','Project','Old Value','New Value']];
   activityLog.forEach(l=>{const proj=projects.find(p=>p.id===l.project_id);r5.push([fmtTime(l.created_at),l.user_name||l.user_email,l.action,l.entity_name,proj?.name||'',l.old_value||'',l.new_value||'']);});
@@ -2565,71 +2474,6 @@ function copyDoc(type){
     const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast('Copied ✓');
   });
 }
-// ── AD HOC SHIPPING / INSTALLATION ────────────────────────
-function openAdHocModal(dept){
-  const isShip=dept==='shipping';
-  document.getElementById('modal-root').innerHTML=`
-  <div class="modal-backdrop" onclick="closeModal()">
-    <div class="modal" style="width:480px" onclick="event.stopPropagation()">
-      <div class="modal-head">
-        <span class="modal-title">Add ${isShip?'shipment':'installation'}</span>
-        <button class="modal-close" onclick="closeModal()">×</button>
-      </div>
-      <div class="modal-body">
-        <div class="form-grid">
-          <div class="field"><label>Project / Job name *</label><input id="ah-name" placeholder="e.g. Acme Corp - Unit 3"></div>
-          <div class="field"><label>SO Number</label><input id="ah-so" placeholder="e.g. S17999" style="font-family:var(--mono)"></div>
-          <div class="field"><label>Client</label><input id="ah-client" placeholder="Client name"></div>
-          <div class="field"><label>Status</label><select id="ah-status">${STATUS_OPTS.map(s=>`<option>${s}</option>`).join('')}</select></div>
-          ${isShip?`
-          <div class="field"><label>Pack & ship date</label><input type="date" id="ah-ship"></div>
-          <div class="field"><label>Delivery date</label><input type="date" id="ah-delivery"></div>
-          `:`
-          <div class="field"><label>Training date</label><input type="date" id="ah-training"></div>
-          <div class="field"><label>Installation date</label><input type="date" id="ah-install"></div>
-          `}
-          <div class="field full"><label>Notes</label><input id="ah-notes" placeholder="Any special notes..."></div>
-        </div>
-      </div>
-      <div class="modal-actions">
-        <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveAdHoc('${dept}')">Add to schedule</button>
-      </div>
-    </div>
-  </div>`;
-}
-async function saveAdHoc(dept){
-  const name=document.getElementById('ah-name')?.value.trim();
-  if(!name){alert('Please enter a name.');return;}
-  const isShip=dept==='shipping';
-  const row={
-    dept,name,
-    so:document.getElementById('ah-so')?.value.trim()||null,
-    client:document.getElementById('ah-client')?.value.trim()||null,
-    status:document.getElementById('ah-status')?.value||'Scheduled',
-    notes:document.getElementById('ah-notes')?.value.trim()||null,
-    created_by:currentUserName,
-  };
-  if(isShip){
-    row.ship_date=document.getElementById('ah-ship')?.value||null;
-    row.delivery_date=document.getElementById('ah-delivery')?.value||null;
-  } else {
-    row.training_date=document.getElementById('ah-training')?.value||null;
-    row.install_date=document.getElementById('ah-install')?.value||null;
-  }
-  const{error}=await sb.from('adhoc_schedule').insert(row);
-  if(error){alert('Error saving: '+error.message);return;}
-  closeModal();showToast('Added and saved ✓');await loadAll();renderDeptView(dept);
-}
-async function removeAdHoc(dept,idx){
-  const item=adHocRows[dept][idx];
-  if(item?.id){
-    await sb.from('adhoc_schedule').delete().eq('id',item.id);
-  }
-  adHocRows[dept].splice(idx,1);
-  renderDeptView(dept);showToast('Removed');
-}
-
 function toggleNotes(id){
   const el=document.getElementById(id);
   if(el)el.classList.toggle('open');
