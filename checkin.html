@@ -179,16 +179,20 @@ function getGreeting(){const h=new Date().getHours();return h<12?'morning':h<17?
 
 // ── DATA ──────────────────────────────────────────────────
 async function loadCheckinData(){
-  const[pr,ms,ci]=await Promise.all([
+  const[pr,ms,ci,ah]=await Promise.all([
     sb.from('projects').select('*').neq('status','complete').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('checkin_status').select('*'),
+    sb.from('adhoc_schedule').select('*').order('created_at'),
   ]);
   projects=pr.data||[];
   milestones=ms.data||[];
-  // Build checkins lookup by milestone_id
   checkins={};
   (ci.data||[]).forEach(c=>{checkins[c.milestone_id]=c;});
+  // Also index by adhoc id for ad hoc stoplights
+  (ci.data||[]).forEach(c=>{if(c.adhoc_id)checkins['adhoc-'+c.adhoc_id]=c;});
+  window._adHocShipping=(ah.data||[]).filter(r=>r.dept==='shipping');
+  window._adHocInstall=(ah.data||[]).filter(r=>r.dept==='installation');
   render();
 }
 
@@ -205,38 +209,56 @@ function render(){
   const{start,end}=getWeekRange();
   const dept=currentDept;
 
-  // Find all milestones for this dept that fall in the week range
-  // Match by key OR by label
+  // Find all milestones for this dept in the week range
   const deptMilestones=milestones.filter(m=>{
     if(!m.date)return false;
     const d=new Date(m.date+'T00:00:00');
     if(d<start||d>end)return false;
-    // Key match
     if(dept.milestoneKeys.includes(m.key))return true;
-    // Label match for special cases
     if(dept.labelMatch){
       return dept.labelMatch.some(lbl=>(m.label||'').toLowerCase().includes(lbl.toLowerCase()));
     }
     return false;
   });
 
-  // Group by project
+  // Add ad hoc items for shipping/deployment depts
+  const adHocItems=[];
+  if(dept.passcode==='ship2026'){
+    (window._adHocShipping||[]).forEach(r=>{
+      const d=r.ship_date||'';
+      if(!d)return;
+      const dt=new Date(d+'T00:00:00');
+      if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-ship-'+r.id,_adhoc:true,label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||''});
+    });
+  }
+  if(dept.passcode==='deploy2026'){
+    (window._adHocInstall||[]).forEach(r=>{
+      const d=r.install_date||'';
+      if(!d)return;
+      const dt=new Date(d+'T00:00:00');
+      if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-inst-'+r.id,_adhoc:true,label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||''});
+    });
+  }
+
+  // Group project milestones by project
   const byProject={};
   deptMilestones.forEach(m=>{
     if(!byProject[m.project_id])byProject[m.project_id]=[];
     byProject[m.project_id].push(m);
   });
 
-  // Summary counts
+  // Summary counts (project milestones + ad hoc)
+  const allItems=[...deptMilestones,...adHocItems];
   let greens=0,yellows=0,reds=0;
-  deptMilestones.forEach(m=>{
-    const ci=checkins[m.id];
+  allItems.forEach(m=>{
+    const id=m._id||m.id;
+    const ci=checkins[id];
     if(ci?.stoplight==='green')greens++;
     else if(ci?.stoplight==='yellow')yellows++;
     else if(ci?.stoplight==='red')reds++;
   });
 
-  document.getElementById('summary-bar').innerHTML=deptMilestones.length?`
+  document.getElementById('summary-bar').innerHTML=allItems.length?`
     <div class="summary-bar">
       <div><div class="sb-val sb-green">${greens}</div><div class="sb-label">On track</div></div>
       <div><div class="sb-val sb-yellow">${yellows}</div><div class="sb-label">In trouble</div></div>
@@ -244,39 +266,19 @@ function render(){
     </div>`:'';
 
   const wLabel=currentWeek==='this'?'this week':'next week';
-  const content=document.getElementById('ci-content');
+  const ciContent=document.getElementById('ci-content');
 
-  if(!deptMilestones.length){
-    content.innerHTML=`<div class="empty"><div class="empty-icon">🎉</div>No ${dept.name} milestones ${wLabel}.<br>Check next week!</div>`;
+  if(!allItems.length){
+    ciContent.innerHTML=`<div class="empty"><div class="empty-icon">🎉</div>No ${dept.name} items ${wLabel}.<br>Check next week!</div>`;
     return;
   }
 
+  // Render project milestone cards
   const projIds=Object.keys(byProject);
-  content.innerHTML=projIds.map(pid=>{
+  const projHtml=projIds.map(pid=>{
     const proj=projects.find(p=>p.id===pid);
     if(!proj)return'';
-    const rows=byProject[pid].map(m=>{
-      const ci=checkins[m.id]||{};
-      const d=daysDiff(m.date);
-      const dateCls=d<0?'overdue':d===0?'today':d<=3?'soon':'';
-      const dateLabel=d<0?`${Math.abs(d)}d overdue`:d===0?'Today':d===1?'Tomorrow':`${fmt(m.date)}`;
-      const isChecked=ci.checked||false;
-      const stoplight=ci.stoplight||'';
-      return`<div class="ci-row">
-        <div class="ci-info">
-          <div class="ci-label">${dept.labels[m.key]||m.label}</div>
-          <div class="ci-date ${dateCls}">${dateLabel}</div>
-        </div>
-        <div class="stoplight">
-          <div class="sl-btn sl-green${stoplight==='green'?' active':''}" title="On track" onclick="setStoplight('${m.id}','green',this)"></div>
-          <div class="sl-btn sl-yellow${stoplight==='yellow'?' active':''}" title="In trouble" onclick="setStoplight('${m.id}','yellow',this)"></div>
-          <div class="sl-btn sl-red${stoplight==='red'?' active':''}" title="Escalation needed" onclick="setStoplight('${m.id}','red',this)"></div>
-        </div>
-        <div class="ci-done${isChecked?' checked':''}" onclick="toggleCheck('${m.id}',this)" title="${isChecked?'Uncheck':'Mark done'}">
-          ${isChecked?'✓':''}
-        </div>
-      </div>`;
-    }).join('');
+    const rows=byProject[pid].map(m=>ciRow(m.id,m,dept)).join('');
     return`<div class="proj-card">
       <div class="proj-card-head">
         <div class="proj-name">${proj.name}</div>
@@ -285,6 +287,42 @@ function render(){
       ${rows}
     </div>`;
   }).join('');
+
+  // Render ad hoc cards
+  const adHocHtml=adHocItems.length?`
+    <div class="proj-card">
+      <div class="proj-card-head">
+        <div class="proj-name" style="display:flex;align-items:center;gap:6px">Ad hoc entries <span style="font-size:10px;background:var(--blue);color:white;padding:1px 6px;border-radius:8px">Standalone</span></div>
+        <div class="proj-so">${adHocItems.length} item${adHocItems.length>1?'s':''}</div>
+      </div>
+      ${adHocItems.map(m=>ciRow(m._id,m,dept)).join('')}
+    </div>`:'';
+
+  ciContent.innerHTML=projHtml+adHocHtml;
+}
+
+function ciRow(id,m,dept){
+  const ci=checkins[id]||{};
+  const d=daysDiff(m.date);
+  const dateCls=d<0?'overdue':d===0?'today':d<=3?'soon':'';
+  const dateLabel=d<0?`${Math.abs(d)}d overdue`:d===0?'Today':d===1?'Tomorrow':`${fmt(m.date)}`;
+  const isChecked=ci.checked||false;
+  const stoplight=ci.stoplight||'';
+  const lbl=m._adhoc?m.label:(dept.labels[m.key]||m.label);
+  return`<div class="ci-row">
+    <div class="ci-info">
+      <div class="ci-label">${lbl}${m._adhoc?` <span style="font-size:9px;color:var(--gray-400)">${m.client||m.so||''}</span>`:''}</div>
+      <div class="ci-date ${dateCls}">${dateLabel}</div>
+    </div>
+    <div class="stoplight">
+      <div class="sl-btn sl-green${stoplight==='green'?' active':''}" title="On track" onclick="setStoplight('${id}','green',this)"></div>
+      <div class="sl-btn sl-yellow${stoplight==='yellow'?' active':''}" title="In trouble" onclick="setStoplight('${id}','yellow',this)"></div>
+      <div class="sl-btn sl-red${stoplight==='red'?' active':''}" title="Escalation needed" onclick="setStoplight('${id}','red',this)"></div>
+    </div>
+    <div class="ci-done${isChecked?' checked':''}" onclick="toggleCheck('${id}',this)" title="${isChecked?'Uncheck':'Mark done'}">
+      ${isChecked?'✓':''}
+    </div>
+  </div>`;
 }
 
 // ── ACTIONS ────────────────────────────────────────────────
