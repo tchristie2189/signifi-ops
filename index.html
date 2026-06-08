@@ -744,7 +744,10 @@ function renderGlance(){
   const allActive=projects.filter(p=>p.status!=='complete');
   const allArchived=projects.filter(p=>p.status==='complete');
   const overdue=milestones.filter(m=>m.date&&daysDiff(m.date)<0).length;
+  const adHocMs=getAdHocAsMilestones();
+  const adHocOverdue=adHocMs.filter(m=>daysDiff(m.date)<0&&m._status!=='Complete').length;
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
+  const adHocThisWeek=adHocMs.filter(m=>daysDiff(m.date)>=0&&daysDiff(m.date)<=6&&m._status!=='Complete').length;
   const active=allActive.length;
   const inProd=allActive.filter(p=>{const s=getMsDate(p.id,'production-start');const e=getMsDate(p.id,'production-end');if(!s||!e)return false;const t=today();return t>=new Date(s+'T00:00:00')&&t<=new Date(e+'T00:00:00');}).length;
   const inQa=allActive.filter(p=>{const s=getMsDate(p.id,'quality-start');const e=getMsDate(p.id,'quality-end');if(!s||!e)return false;const t=today();return t>=new Date(s+'T00:00:00')&&t<=new Date(e+'T00:00:00');}).length;
@@ -823,8 +826,8 @@ function renderGlance(){
       <div class="metric"><div class="metric-label">Active projects</div><div class="metric-val">${active}</div><div class="metric-sub">in hub</div></div>
       <div class="metric"><div class="metric-label">In production</div><div class="metric-val ${inProd>0?'green':''}">${inProd}</div><div class="metric-sub">being built now</div></div>
       <div class="metric"><div class="metric-label">In QA</div><div class="metric-val ${inQa>0?'amber':''}">${inQa}</div><div class="metric-sub">being tested</div></div>
-      <div class="metric"><div class="metric-label">This week</div><div class="metric-val">${thisWeek}</div><div class="metric-sub">milestones due</div></div>
-      <div class="metric"><div class="metric-label">Needs attention</div><div class="metric-val ${overdue>0?'red':''}">${overdue}</div><div class="metric-sub">overdue items</div></div>
+      <div class="metric"><div class="metric-label">This week</div><div class="metric-val">${thisWeek+adHocThisWeek}</div><div class="metric-sub">milestones due${adHocThisWeek?' <span style="font-size:10px;color:var(--blue)">(+'+adHocThisWeek+' ad hoc)</span>':''}</div></div>
+      <div class="metric"><div class="metric-label">Needs attention</div><div class="metric-val ${(overdue+adHocOverdue)>0?'red':''}">${overdue+adHocOverdue}</div><div class="metric-sub">overdue items${adHocOverdue?' <span style="font-size:10px;color:var(--blue)">(+'+adHocOverdue+' ad hoc)</span>':''}</div></div>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -913,15 +916,19 @@ function selProj(id){selectedProjId=id;renderOverview();}
 function renderWeek(){
   const el=document.getElementById('tab-week');
   const we=addD(weekStart,6);
-  const ap=filterByPM(activeProjects('week'));const allMs=milestones.filter(m=>ap.some(p=>p.id===m.project_id)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
-  const overdueMs=allMs.filter(m=>m.date&&daysDiff(m.date)<0&&daysDiff(m.date)>=-14);
-  const overdueHtml=overdueMs.length?`<div class="overdue-bar"><div><div class="overdue-title">⚠ Overdue</div>${overdueMs.map(m=>`<div class="overdue-item">${m.label} — ${m.projectName} (was ${fmt(m.date)})</div>`).join('')}</div></div>`:'';
+  const ap=filterByPM(activeProjects('week'));
+  const allMs=milestones.filter(m=>ap.some(p=>p.id===m.project_id)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
+  // Include ad hoc shipping/installation in week view
+  const adHocMs=getAdHocAsMilestones().filter(m=>m.status!=='Complete');
+  const allMsWithAdhoc=[...allMs,...adHocMs];
+  const overdueMs=allMsWithAdhoc.filter(m=>m.date&&daysDiff(m.date)<0&&daysDiff(m.date)>=-14);
+  const overdueHtml=overdueMs.length?`<div class="overdue-bar"><div><div class="overdue-title">⚠ Overdue</div>${overdueMs.map(m=>`<div class="overdue-item">${m.label}${m._adhoc?' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 4px;border-radius:6px">Ad hoc</span>':''} — ${m.projectName} (was ${fmt(m.date)})</div>`).join('')}</div></div>`:'';
   const DAY=['Monday','Tuesday','Wednesday','Thursday','Friday'];
   const t=today();
   const daysHtml=[0,1,2,3,4].map(i=>{
     const d=addD(weekStart,i);const isT=sameDay(d,t);
-    const evs=allMs.filter(m=>m.date&&sameDay(new Date(m.date+'T00:00:00'),d));
-    return`<div class="day-col${isT?' today-col':''}"><div class="day-hdr"><div class="day-name">${DAY[i]}${isT?'<span class="today-pip"></span>':''}</div><div class="day-num">${d.getDate()}</div></div><div class="day-events">${evs.length?evs.map(e=>`<div class="ev ${TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${e.projectName}</div></div>`).join(''):'<div class="empty-day">—</div>'}</div></div>`;
+    const evs=allMsWithAdhoc.filter(m=>m.date&&sameDay(new Date(m.date+'T00:00:00'),d));
+    return`<div class="day-col${isT?' today-col':''}"><div class="day-hdr"><div class="day-name">${DAY[i]}${isT?'<span class="today-pip"></span>':''}</div><div class="day-num">${d.getDate()}</div></div><div class="day-events">${evs.length?evs.map(e=>`<div class="ev ${TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${e.projectName}${e._adhoc?' 📦':''}</div></div>`).join(''):'<div class="empty-day">—</div>'}</div></div>`;
   }).join('');
   el.innerHTML=`
     <div class="week-nav-row">
@@ -948,6 +955,26 @@ function renderWeek(){
 function shiftW(n){weekStart=addD(weekStart,n*7);renderWeek();}
 function goToday(){weekStart=monday(today());renderWeek();}
 
+
+// ── AD HOC AS PSEUDO-MILESTONES ────────────────────────────
+// Converts ad hoc rows into milestone-like objects so they surface in all views
+function getAdHocAsMilestones(){
+  const ship=(adHocRows.shipping||[]).map(r=>({
+    id:'adhoc-ship-'+r.id,project_id:null,key:'shipping',
+    label:r.name,date:r.shipDate||r.ship_date||'',
+    _adhoc:true,_dept:'shipping',_status:r.status,
+    projectName:r.name,so:r.so||'',client:r.client||'',
+    _raw:r
+  }));
+  const inst=(adHocRows.installation||[]).map(r=>({
+    id:'adhoc-inst-'+r.id,project_id:null,key:'installation',
+    label:r.name,date:r.installDate||r.install_date||'',
+    _adhoc:true,_dept:'installation',_status:r.status,
+    projectName:r.name,so:r.so||'',client:r.client||'',
+    _raw:r
+  }));
+  return[...ship,...inst].filter(m=>m.date);
+}
 // ── DEPT / GANTT ───────────────────────────────────────────
 function buildGantt(startKeys,endKeys,segsFn,title,legend){
   const starts=milestones.filter(m=>startKeys.includes(m.key)&&m.date).map(m=>new Date(m.date+'T00:00:00'));
@@ -1387,7 +1414,8 @@ function renderCheckinOverview(){
     const wEnd=addD(wStart,6);
     const keys=DEPT_KEYS[dept]||[];
     const lbls=DEPT_LABEL_MATCH[dept]||[];
-    return milestones.filter(m=>{if(!apci.some(p=>p.id===m.project_id))return false;
+    const projectMs=milestones.filter(m=>{
+      if(!apci.some(p=>p.id===m.project_id))return false;
       if(!m.date)return false;
       const d=new Date(m.date+'T00:00:00');
       if(d<wStart||d>wEnd)return false;
@@ -1397,6 +1425,25 @@ function renderCheckinOverview(){
       }
       return false;
     });
+    // Add ad hoc items for shipping/deployment depts
+    const adHocForDept=[];
+    if(dept==='Shipping'){
+      (adHocRows.shipping||[]).forEach(r=>{
+        const d=r.shipDate||r.ship_date||'';
+        if(!d)return;
+        const dt=new Date(d+'T00:00:00');
+        if(dt>=wStart&&dt<=wEnd)adHocForDept.push({id:'adhoc-ship-'+r.id,label:r.name,date:d,key:'shipping',project_id:null,_adhoc:true,_raw:r});
+      });
+    }
+    if(dept==='Deployment'){
+      (adHocRows.installation||[]).forEach(r=>{
+        const d=r.installDate||r.install_date||'';
+        if(!d)return;
+        const dt=new Date(d+'T00:00:00');
+        if(dt>=wStart&&dt<=wEnd)adHocForDept.push({id:'adhoc-inst-'+r.id,label:r.name,date:d,key:'installation',project_id:null,_adhoc:true,_raw:r});
+      });
+    }
+    return[...projectMs,...adHocForDept];
   }
 
   function slDots(mId){
@@ -1425,10 +1472,13 @@ function renderCheckinOverview(){
         const d=daysDiff(m.date);
         const dcss=d<0?'color:var(--red)':d===0?'color:var(--success);font-weight:600':d<=3?'color:var(--blue)':'color:var(--gray-500)';
         const dlbl=d<0?Math.abs(d)+'d overdue':d===0?'Today':fmt(m.date);
-        return'<tr style="border-bottom:1px solid var(--gray-50)">'+
+        const projName=proj?proj.name:(m._adhoc?m.label:'—');
+        const projSO=proj?proj.so_number:(m._adhoc?m._raw?.so||'':'');
+        const adHocBadge=m._adhoc?'<span style="font-size:9px;background:var(--blue);color:white;padding:1px 4px;border-radius:6px;margin-left:4px">Ad hoc</span>':'';
+        return'<tr style="border-bottom:1px solid var(--gray-50)'+(m._adhoc?';background:var(--blue-bg)':'')+'">'+
           (i===0?'<td style="padding:7px 12px;font-size:12px;font-weight:600;color:'+DEPT_COLORS[dept]+';white-space:nowrap;vertical-align:top" rowspan="'+dms.length+'">'+dept+'</td>':'')+
-          '<td style="padding:6px 12px;font-size:12px;font-weight:500">'+(proj?proj.name:'—')+'</td>'+
-          '<td style="padding:6px 12px;font-size:11px;color:var(--gray-500);font-family:var(--mono)">'+(proj?.so_number||'')+'</td>'+
+          '<td style="padding:6px 12px;font-size:12px;font-weight:500">'+projName+adHocBadge+'</td>'+
+          '<td style="padding:6px 12px;font-size:11px;color:var(--gray-500);font-family:var(--mono)">'+projSO+'</td>'+
           '<td style="padding:6px 12px;font-size:11px">'+m.label+'</td>'+
           '<td style="padding:6px 12px;font-size:11px;'+dcss+'">'+dlbl+'</td>'+
           '<td style="padding:6px 12px">'+slDots(m.id)+'</td>'+
@@ -1465,9 +1515,12 @@ function renderBriefing(){
   const ap2=filterByPM(activeProjects('briefing'));const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
   const timeStr=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
   const allMs=milestones.map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:'',so:p?p.so_number:'',client:p?p.client:''};});
-  const thisWeekMs=allMs.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).sort((a,b)=>a.date.localeCompare(b.date));
-  const overdueMs=allMs.filter(m=>m.date&&daysDiff(m.date)<0).sort((a,b)=>b.date.localeCompare(a.date));
-  const upcomingMs=allMs.filter(m=>m.date&&daysDiff(m.date)>6&&daysDiff(m.date)<=14).sort((a,b)=>a.date.localeCompare(b.date));
+  // Merge ad hoc items into briefing milestones
+  const adHocBriefMs=getAdHocAsMilestones().filter(m=>m._status!=='Complete').map(m=>({...m,so:m.so||'',client:m.client||''}));
+  const allMsBriefing=[...allMs,...adHocBriefMs];
+  const thisWeekMs=allMsBriefing.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).sort((a,b)=>a.date.localeCompare(b.date));
+  const overdueMs=allMsBriefing.filter(m=>m.date&&daysDiff(m.date)<0).sort((a,b)=>b.date.localeCompare(a.date));
+  const upcomingMs=allMsBriefing.filter(m=>m.date&&daysDiff(m.date)>6&&daysDiff(m.date)<=14).sort((a,b)=>a.date.localeCompare(b.date));
   const STAGES=[{label:'Readiness',startKey:'po-release',endKey:'arrival'},{label:'Production',startKey:'production-start',endKey:'production-end'},{label:'Quality / QA',startKey:'quality-start',endKey:'quality-end'},{label:'UAT',startKey:'uat',endKey:'uat'},{label:'Shipping',startKey:'shipping',endKey:'shipping'},{label:'Installation',startKey:'installation',endKey:'installation'}];
   const projSummary=filterByPM(activeProjects('briefing')).map(p=>{
     const currentStage=STAGES.find(s=>{const sd=getMsDate(p.id,s.startKey);const ed=getMsDate(p.id,s.endKey);if(!sd)return false;const t=today();const start=new Date(sd+'T00:00:00');const end=ed?new Date(ed+'T00:00:00'):start;return t>=start&&t<=end;});
@@ -1476,7 +1529,7 @@ function renderBriefing(){
     return{...p,currentStage:currentStage?currentStage.label:'—',nextMs,health:h};
   });
   const DAY=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const msRow=m=>`<tr style="border-bottom:1px solid var(--gray-50)"><td style="padding:6px 12px;font-weight:500;white-space:nowrap;font-size:12px">${DAY[new Date(m.date+'T00:00:00').getDay()]} ${fmt(m.date)}</td><td style="padding:6px 12px;font-size:12px">${m.projectName}</td><td style="padding:6px 12px;font-family:var(--mono);font-size:10px;color:var(--gray-500)">${m.so||''}</td><td style="padding:6px 12px;font-size:12px">${m.label}</td><td style="padding:6px 12px;font-size:10px;color:var(--gray-500)">${TYPE_LBL[m.key]||m.key}</td></tr>`;
+  const msRow=m=>`<tr style="border-bottom:1px solid var(--gray-50)${m._adhoc?';background:var(--blue-bg)':''}"><td style="padding:6px 12px;font-weight:500;white-space:nowrap;font-size:12px">${DAY[new Date(m.date+'T00:00:00').getDay()]} ${fmt(m.date)}</td><td style="padding:6px 12px;font-size:12px">${m.projectName}${m._adhoc?' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 4px;border-radius:6px">Ad hoc</span>':''}</td><td style="padding:6px 12px;font-family:var(--mono);font-size:10px;color:var(--gray-500)">${m.so||''}</td><td style="padding:6px 12px;font-size:12px">${m.label}</td><td style="padding:6px 12px;font-size:10px;color:var(--gray-500)">${m._adhoc?'Ad hoc':TYPE_LBL[m.key]||m.key}</td></tr>`;
   const thS='font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:7px 12px;text-align:left;border-bottom:1px solid var(--gray-100);background:var(--gray-50)';
   el.innerHTML=`<div>
     <div style="background:var(--black);color:white;padding:18px 24px;border-radius:var(--radius-lg);margin-bottom:14px;display:flex;align-items:center;justify-content:space-between" class="briefing-header">
@@ -1839,6 +1892,12 @@ function exportToExcel(){
   });
   const ws6=XLSX.utils.aoa_to_sheet(r6);ws6['!cols']=[{wch:24},{wch:12},{wch:26},{wch:14},{wch:14},{wch:14},{wch:14},{wch:18},{wch:40}];
   XLSX.utils.book_append_sheet(wb,ws6,'Date Change History');
+  // Sheet 7: Ad hoc shipping & installation
+  const r7=[['Type','Name','SO','Client','Ship Date','Delivery Date','Training Date','Install Date','Status','Notes','Created By']];
+  (adHocRows.shipping||[]).forEach(r=>r7.push(['Shipping',r.name,r.so||'',r.client||'',r.shipDate||r.ship_date||'',r.deliveryDate||r.delivery_date||'','','',r.status||'',r.notes||'',r.created_by||'']));
+  (adHocRows.installation||[]).forEach(r=>r7.push(['Installation',r.name,r.so||'',r.client||'','','',r.trainingDate||r.training_date||'',r.installDate||r.install_date||'',r.status||'',r.notes||'',r.created_by||'']));
+  const ws7=XLSX.utils.aoa_to_sheet(r7);ws7['!cols']=[{wch:14},{wch:28},{wch:12},{wch:22},{wch:12},{wch:12},{wch:14},{wch:14},{wch:14},{wch:30},{wch:16}];
+  XLSX.utils.book_append_sheet(wb,ws7,'Ad Hoc Schedule');
   XLSX.writeFile(wb,'Signifi_Ops_'+new Date().toISOString().split('T')[0]+'.xlsx');showToast('Excel downloaded ✓');
 }
 
