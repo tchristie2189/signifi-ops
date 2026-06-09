@@ -698,11 +698,11 @@ let hideCompleted={glance:false,overview:false,week:false,production:false,quali
 
 // Helper — filters out completed projects based on per-page toggle
 function pmDropdown(renderFn){
-  const pms=[...new Set(projects.map(p=>p.pm).filter(Boolean))].sort();
+  const PM_LIST=['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'];
   const onChange=renderFn.includes('(')?renderFn:renderFn+'()';
   return`<select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pmFilter=this.value;${onChange}">
     <option value="">All PMs</option>
-    ${pms.map(pm=>`<option value="${pm}"${pmFilter===pm?' selected':''}>${pm}</option>`).join('')}
+    ${PM_LIST.map(pm=>`<option value="${pm}"${pmFilter===pm?' selected':''}>${pm}</option>`).join('')}
   </select>`;
 }
 function filterByPM(list){return pmFilter?list.filter(p=>p.pm===pmFilter):list;}
@@ -754,6 +754,7 @@ function renderGlance(){
   const STAGES=[
     {label:'Readiness',startKey:'po-release',endKey:'arrival',color:'#6b6b6b'},
     {label:'Production',startKey:'production-start',endKey:'production-end',color:'#7c3aed'},
+    {label:'Planogram',startKey:'other',endKey:'other',color:'#0891b2',labelMatch:'planogram'},
     {label:'Quality / QA',startKey:'quality-start',endKey:'quality-end',color:'#d97706'},
     {label:'UAT',startKey:'uat',endKey:'uat',color:'#16a34a'},
     {label:'Shipping',startKey:'shipping',endKey:'shipping',color:'#059669'},
@@ -772,17 +773,28 @@ function renderGlance(){
       overallPct=Math.min(100,Math.round((t-overallStart)/(overallEnd-overallStart)*100));
     }
     const stagesHtml=STAGES.map(stage=>{
-      const sd=getMsDate(p.id,stage.startKey);const ed=getMsDate(p.id,stage.endKey);
+      let sd,ed,stageMs;
+      if(stage.labelMatch){
+        // Planogram — find by label
+        const planMs=milestones.filter(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes(stage.labelMatch));
+        const ps=planMs.find(m=>(m.label||'').toLowerCase().includes('start'));
+        const pe=planMs.find(m=>(m.label||'').toLowerCase().includes('end'));
+        sd=ps?.date||planMs[0]?.date||null;
+        ed=pe?.date||planMs[planMs.length-1]?.date||null;
+        stageMs=planMs;
+      } else {
+        sd=getMsDate(p.id,stage.startKey);ed=getMsDate(p.id,stage.endKey);
+        const stageMsKeys=[stage.startKey,stage.endKey].filter((v,i,a)=>a.indexOf(v)===i);
+        stageMs=milestones.filter(m=>m.project_id===p.id&&stageMsKeys.includes(m.key)&&m.date);
+      }
       const st=stageStatus(sd,ed);
-      // Find actual milestone records for this stage to check done status
-      const stageMsKeys=[stage.startKey,stage.endKey].filter((v,i,a)=>a.indexOf(v)===i);
-      const stageMs=milestones.filter(m=>m.project_id===p.id&&stageMsKeys.includes(m.key)&&m.date);
       const allDone=stageMs.length>0&&stageMs.every(m=>isMilestoneDone(m));
       const hasOverdue=!allDone&&stageMs.some(m=>isMilestoneOverdue(m));
       const hasEscalation=!allDone&&stageMs.some(m=>isMilestoneEscalation(m));
       const hasRisk=!allDone&&stageMs.some(m=>isMilestoneAtRisk(m));
-      const chipCls=allDone?'chip-done':hasEscalation?'chip-overdue':hasOverdue?'chip-overdue':hasRisk?'chip-atrisk':st.chip;
-      const chipLbl=allDone?'Done ✓':hasEscalation?'Escalation':hasOverdue?'Overdue':hasRisk?'At risk':st.label;
+      const noMs=stageMs.length===0;
+      const chipCls=noMs?'chip-future':allDone?'chip-done':hasEscalation?'chip-overdue':hasOverdue?'chip-overdue':hasRisk?'chip-atrisk':st.chip;
+      const chipLbl=noMs?'Not set':allDone?'Done ✓':hasEscalation?'Escalation':hasOverdue?'Overdue':hasRisk?'At risk':st.label;
       let pct=0;
       if(allDone){pct=100;}
       else if(sd){const s=new Date(sd+'T00:00:00');const e=ed?new Date(ed+'T00:00:00'):s;const t=today();if(t>e)pct=100;else if(t>=s){const total=(e-s)||86400000;pct=Math.min(100,Math.round((t-s)/total*100));}}
@@ -922,7 +934,13 @@ function renderWeek(){
   const adHocMs=getAdHocAsMilestones().filter(m=>m.status!=='Complete');
   const allMsWithAdhoc=[...allMs,...adHocMs];
   const overdueMs=allMsWithAdhoc.filter(m=>m.date&&daysDiff(m.date)<0&&daysDiff(m.date)>=-14);
-  const overdueHtml=overdueMs.length?`<div class="overdue-bar"><div><div class="overdue-title">⚠ Overdue</div>${overdueMs.map(m=>`<div class="overdue-item">${m.label}${m._adhoc?' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 4px;border-radius:6px">Ad hoc</span>':''} — ${m.projectName} (was ${fmt(m.date)})</div>`).join('')}</div></div>`:'';
+  const overdueHtml=overdueMs.length?`<details style="margin-bottom:1rem;background:var(--red-light);border:1px solid var(--red-mid);border-radius:var(--radius);padding:0">
+    <summary style="padding:8px 13px;cursor:pointer;font-size:11px;font-weight:600;color:var(--red);list-style:none;display:flex;align-items:center;justify-content:space-between">
+      <span>⚠ ${overdueMs.length} overdue milestone${overdueMs.length>1?'s':''} (last 14 days)</span>
+      <span style="font-size:10px;font-weight:400">click to expand ▾</span>
+    </summary>
+    <div style="padding:4px 13px 10px">${overdueMs.map(m=>`<div style="font-size:11px;color:var(--red);padding:2px 0">${m.label}${m._adhoc?' <span style="font-size:9px;background:var(--blue);color:white;padding:1px 4px;border-radius:6px">Ad hoc</span>':''} — ${m.projectName} (was ${fmt(m.date)})</div>`).join('')}</div>
+  </details>`:'';
   const DAY=['Monday','Tuesday','Wednesday','Thursday','Friday'];
   const t=today();
   const daysHtml=[0,1,2,3,4].map(i=>{
@@ -1653,16 +1671,33 @@ function renderIntake(){
       <div class="field"><label>Sales order (SO) number *</label><input id="i-so" placeholder="e.g. SO-2026-0142" style="font-family:var(--mono)"></div>
       <div class="field"><label>End Client *</label><input id="i-client" placeholder="End client name"></div>
       <div class="field"><label>Channel Partner (CP)</label><input id="i-cp" placeholder="e.g. Direct, TD Synnex..."></div>
-      <div class="field"><label>Product type</label><input id="i-type" placeholder="e.g. Smart Control Drawer, Custom Locker..."></div>
+      <div class="field full"><label>Product type / Form factor <span style="font-size:10px;color:var(--gray-400);font-weight:400">— select all that apply</span></label>
+        <select id="i-type" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:120px">
+          <option>SparkXL V8</option><option>SparkXL V7</option>
+          <option>18" Control Locker</option><option>18" Add-on Locker</option>
+          <option>Companion</option><option>10" Smart Companion</option><option>15" Smart Companion</option>
+          <option>Stand-up TED</option><option>Sit-down TED</option><option>TVM</option>
+          <option>Smart Drawer</option><option>Mini Drawer</option>
+          <option>Stuff Station Lite</option><option>Stuff Station Standard</option><option>Stuff Station Plus</option>
+          <option>GrabnGo</option><option>SKD 2-Hopper</option><option>SKD 4-Hopper</option>
+          <option>SparkXL w/ Ted Side Panel</option>
+        </select>
+        <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
+      </div>
       <div class="field"><label>Quantity</label><input id="i-qty" type="number" min="1" placeholder="e.g. 2"></div>
       <div class="field"><label>Delivery location</label><input id="i-loc" placeholder="City, Province, Country"></div>
-      <div class="field"><label>Project Manager</label><input id="i-pm" placeholder="PM name"></div>
+      <div class="field"><label>Project Manager</label>
+        <select id="i-pm" style="font-family:var(--font);font-size:13px;padding:9px 12px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);width:100%">
+          <option value="">Select PM...</option>
+          <option>Itoro</option><option>Summer</option><option>Emma</option>
+          <option>Jennifer</option><option>Ashima</option><option>Kylie</option><option>Tristen</option>
+        </select>
+      </div>
       <div class="field"><label>SDM (Service Delivery Manager)</label><input id="i-sdm" placeholder="SDM name"></div>
       <div class="field"><label>Solutions</label><input id="i-solutions" placeholder="Solutions contact"></div>
       <div class="field"><label>Sales</label><input id="i-sales" placeholder="Sales contact"></div>
       <div class="field"><label>Account Manager</label><input id="i-am" placeholder="Account Manager name"></div>
       <div class="field"><label>Vinyl type</label><select id="i-vinyl-type"><option value="">Select...</option><option>Decal</option><option>Partial Vinyl</option><option>Full Vinyl</option></select></div>
-      <div class="field"><label>Form factor</label><input id="i-form-factor" placeholder="e.g. Freestanding, Wall mount..."></div>
 
       <div class="intake-section-lbl">Key milestone dates</div>
       ${selectedTemplate&&selectedTemplate!=='blank'?`<div style="grid-column:1/-1;background:var(--blue-bg);border:1px solid var(--blue);border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;font-size:12px"><span>📐 Template: <strong>${TEMPLATES.find(t=>t.id===selectedTemplate)?.name}</strong> — enter PO release date then click Apply</span><button class="btn btn-primary" style="font-size:11px;padding:4px 12px" onclick="applyTemplateToIntake()">Apply template dates</button></div>`:`<div style="grid-column:1/-1;font-size:11px;color:var(--gray-500)">💡 Tip: pick a template first from the <button onclick="setTab('templates')" style="background:none;border:none;cursor:pointer;color:var(--blue);font-size:11px;text-decoration:underline;font-family:var(--font)">Templates tab</button> to auto-fill dates.</div>`}
@@ -1740,8 +1775,9 @@ async function saveIntake(){
   const accountManager=document.getElementById('i-am')?.value.trim()||'';
   const channelPartner=document.getElementById('i-cp')?.value.trim()||'';
   const vinylType=document.getElementById('i-vinyl-type').value;
-  const formFactor=document.getElementById('i-form-factor').value.trim();
-  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,channel_partner:channelPartner,product_type:document.getElementById('i-type').value,quantity:parseInt(document.getElementById('i-qty').value)||null,location:document.getElementById('i-loc').value,notes:sectionNotes,status:'active',changed_by:currentUserName,pm,sdm,solutions,sales,account_manager:accountManager,vinyl_type:vinylType,form_factor:formFactor}).select().single();
+  const formFactor='';
+  const productType=[...document.getElementById('i-type').selectedOptions].map(o=>o.value).join(', ');
+  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,channel_partner:channelPartner,product_type:productType,quantity:parseInt(document.getElementById('i-qty').value)||null,location:document.getElementById('i-loc').value,notes:sectionNotes,status:'active',changed_by:currentUserName,pm,sdm,solutions,sales,account_manager:accountManager,vinyl_type:vinylType,form_factor:formFactor}).select().single();
   if(error){alert('Error: '+error.message);return;}
   const msFields=[
     {id:'i-po',key:'po-release',label:'PO Release'},
@@ -1786,7 +1822,12 @@ function openEditProj(id){
         <div class="field"><label>SO number</label><input id="ep-so" value="${proj.so_number||''}" style="font-family:var(--mono)"></div>
         <div class="field"><label>End Client</label><input id="ep-client" value="${proj.client||''}""></div>
         <div class="field"><label>Channel Partner (CP)</label><input id="ep-cp" value="${proj.channel_partner||''}" placeholder="e.g. Direct, TD Synnex..."></div>
-        <div class="field"><label>Project Manager</label><input id="ep-pm" value="${proj.pm||''}" placeholder="PM name"></div>
+        <div class="field"><label>Project Manager</label>
+          <select id="ep-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%">
+            <option value="">Select PM...</option>
+            ${['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'].map(pm=>`<option${proj.pm===pm?' selected':''}>${pm}</option>`).join('')}
+          </select>
+        </div>
         <div class="field"><label>SDM</label><input id="ep-sdm" value="${proj.sdm||''}" placeholder="SDM name"></div>
         <div class="field"><label>Solutions</label><input id="ep-solutions" value="${proj.solutions||''}" placeholder="Solutions contact"></div>
         <div class="field"><label>Sales</label><input id="ep-sales" value="${proj.sales||''}" placeholder="Sales contact"></div>
