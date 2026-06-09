@@ -776,7 +776,7 @@ function renderGlance(){
   });
   const allActive=projects.filter(p=>p.status!=='complete');
   const allArchived=projects.filter(p=>p.status==='complete');
-  const overdue=milestones.filter(m=>m.date&&daysDiff(m.date)<0).length;
+  const overdue=milestones.filter(m=>isMilestoneOverdue(m)).length;
   const adHocMs=getAdHocAsMilestones();
   const adHocOverdue=adHocMs.filter(m=>daysDiff(m.date)<0&&m._status!=='Complete').length;
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
@@ -895,7 +895,7 @@ ${pmDropdown('renderGlance')}
 function renderOverview(){
   const el=document.getElementById('tab-overview');
   const upcoming=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=14).length;
-  const overdue=milestones.filter(m=>m.date&&daysDiff(m.date)<0).length;
+  const overdue=milestones.filter(m=>isMilestoneOverdue(m)).length;
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
   const proj=activeProjects('overview').find(p=>p.id===selectedProjId)||projects.find(p=>p.id===selectedProjId);
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
@@ -968,7 +968,7 @@ function renderWeek(){
   // Include ad hoc shipping/installation in week view
   const adHocMs=getAdHocAsMilestones().filter(m=>m.status!=='Complete');
   const allMsWithAdhoc=[...allMs,...adHocMs];
-  const overdueMs=allMsWithAdhoc.filter(m=>m.date&&daysDiff(m.date)<0&&daysDiff(m.date)>=-14);
+  const overdueMs=allMsWithAdhoc.filter(m=>m.date&&daysDiff(m.date)<0&&daysDiff(m.date)>=-14&&isMilestoneOverdue(m));
   const overdueHtml=overdueMs.length?`<details style="margin-bottom:1rem;background:var(--red-light);border:1px solid var(--red-mid);border-radius:var(--radius);padding:0">
     <summary style="padding:8px 13px;cursor:pointer;font-size:11px;font-weight:600;color:var(--red);list-style:none;display:flex;align-items:center;justify-content:space-between">
       <span>⚠ ${overdueMs.length} overdue milestone${overdueMs.length>1?'s':''} (last 14 days)</span>
@@ -1644,7 +1644,7 @@ function renderBriefing(){
   const adHocBriefMs=getAdHocAsMilestones().filter(m=>m._status!=='Complete').map(m=>({...m,so:m.so||'',client:m.client||''}));
   const allMsBriefing=[...allMs,...adHocBriefMs];
   const thisWeekMs=allMsBriefing.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).sort((a,b)=>a.date.localeCompare(b.date));
-  const overdueMs=allMsBriefing.filter(m=>m.date&&daysDiff(m.date)<0).sort((a,b)=>b.date.localeCompare(a.date));
+  const overdueMs=allMsBriefing.filter(m=>m.date&&daysDiff(m.date)<0&&isMilestoneOverdue(m)).sort((a,b)=>b.date.localeCompare(a.date));
   const upcomingMs=allMsBriefing.filter(m=>m.date&&daysDiff(m.date)>6&&daysDiff(m.date)<=14).sort((a,b)=>a.date.localeCompare(b.date));
   const STAGES=[{label:'Readiness',startKey:'po-release',endKey:'arrival'},{label:'Production',startKey:'production-start',endKey:'production-end'},{label:'Quality / QA',startKey:'quality-start',endKey:'quality-end'},{label:'UAT',startKey:'uat',endKey:'uat'},{label:'Shipping',startKey:'shipping',endKey:'shipping'},{label:'Installation',startKey:'installation',endKey:'installation'}];
   const projSummary=filterByPM(activeProjects('briefing')).map(p=>{
@@ -1871,6 +1871,8 @@ function openEditProj(id){
         <div class="field full"><label>Product template URL</label><input id="ep-product" value="${proj.product_template_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..."></div>
         <div class="field full"><label>Badge reader URL</label><input id="ep-badge" value="${proj.badge_reader_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..."></div>
         <div class="field full"><label>Employee list URL</label><input id="ep-employee" value="${proj.employee_list_url||''}" placeholder="SharePoint or Jira link..."></div>
+        <div class="field full"><label>Facility Site Survey Review URL</label><input id="ep-facility-survey" value="${proj.facility_survey_url||''}" placeholder="https://..."></div>
+        <div class="field full"><label>IT Site Survey Review URL</label><input id="ep-it-survey" value="${proj.it_survey_url||''}" placeholder="https://..."></div>
         <div class="field full"><label>Vinyl render Odoo URL</label><input id="ep-vinyl-odoo" value="${proj.vinyl_odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..."></div>
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">Milestone dates</div>
@@ -1899,6 +1901,8 @@ async function saveEditProj(id){
     product_template_url:document.getElementById('ep-product').value.trim(),
     badge_reader_url:document.getElementById('ep-badge').value.trim(),
     employee_list_url:document.getElementById('ep-employee').value.trim(),
+    facility_survey_url:document.getElementById('ep-facility-survey')?.value.trim()||null,
+    it_survey_url:document.getElementById('ep-it-survey')?.value.trim()||null,
     vinyl_odoo_url:document.getElementById('ep-vinyl-odoo')?.value.trim()||null,
     changed_by:currentUserName,changed_at:new Date().toISOString()
   }).eq('id',id);
@@ -2132,7 +2136,7 @@ function renderProjPageBody(){
   const LINK_CATS=[
     {cat:'Meetings',items:[{label:'Kickoff recording',key:'kickoff_rec'},{label:'Meeting minutes',key:'meeting_min'},{label:'Project calendar',key:'proj_cal'}]},
     {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Project Charter',key:'charter'},{label:'Requirements',key:'requirements'},{label:'Site Survey',key:'site_survey'},{label:'Deployment Plan',key:'deploy_plan'}]},
-    {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira / UI Task',key:'jira'},{label:'QA Task',key:'qa_task'},{label:'Product Template',key:'product_template'},{label:'Badge Reader',key:'badge_reader'},{label:'Employee List',key:'employee_list'},{label:'Odoo Task',key:'odoo'},{label:'Vinyl Render Odoo',key:'vinyl_odoo'},{label:'Client Portal',key:'client_portal'}]},
+    {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira / UI Task',key:'jira'},{label:'QA Task',key:'qa_task'},{label:'Product Template',key:'product_template'},{label:'Badge Reader',key:'badge_reader'},{label:'Employee List',key:'employee_list'},{label:'Facility Site Survey',key:'facility_survey'},{label:'IT Site Survey',key:'it_survey'},{label:'Odoo Task',key:'odoo'},{label:'Vinyl Render Odoo',key:'vinyl_odoo'},{label:'Client Portal',key:'client_portal'}]},
   ];
   // Start with anything saved in project_links table
   const linkVals=Object.fromEntries(ppData.links.map(l=>[l.label,l.url]));
@@ -2143,6 +2147,8 @@ function renderProjPageBody(){
   if(proj.product_template_url)linkVals['Product Template']=proj.product_template_url;
   if(proj.badge_reader_url)linkVals['Badge Reader']=proj.badge_reader_url;
   if(proj.employee_list_url)linkVals['Employee List']=proj.employee_list_url;
+  if(proj.facility_survey_url)linkVals['Facility Site Survey']=proj.facility_survey_url;
+  if(proj.it_survey_url)linkVals['IT Site Survey']=proj.it_survey_url;
   if(proj.vinyl_odoo_url)linkVals['Vinyl Render Odoo']=proj.vinyl_odoo_url;
 
   const linksHtml=LINK_CATS.map(cat=>`
@@ -2406,6 +2412,8 @@ async function savePPLink(label,url){
     'Product Template':'product_template_url',
     'Badge Reader':'badge_reader_url',
     'Employee List':'employee_list_url',
+    'Facility Site Survey':'facility_survey_url',
+    'IT Site Survey':'it_survey_url',
     'Vinyl Render Odoo':'vinyl_odoo_url',
   };
   // If this label maps to a hub field, write back to the projects table too
@@ -2592,7 +2600,7 @@ function getDocDate(key){if(!selectedDocProjId)return'';const m=milestones.find(
 function getDocLink(label){
   const p=getDocProj();
   // Check direct project record fields first
-  const DIRECT={'Odoo Task':p.odoo_url,'Jira / UI Task':p.ui_task_url,'QA Task':p.qa_task_url,'Product Template':p.product_template_url,'Badge Reader':p.badge_reader_url,'Employee List':p.employee_list_url};
+  const DIRECT={'Odoo Task':p.odoo_url,'Jira / UI Task':p.ui_task_url,'QA Task':p.qa_task_url,'Product Template':p.product_template_url,'Badge Reader':p.badge_reader_url,'Employee List':p.employee_list_url,'Facility Site Survey':p.facility_survey_url,'IT Site Survey':p.it_survey_url};
   if(DIRECT[label])return DIRECT[label]||'';
   // Fall back to project_links table (set via project page)
   // ppData may have the right project loaded — check if it matches
@@ -3204,7 +3212,28 @@ function exportProjPageExcel(){
     ...ppData.links.filter(l=>!['Odoo Task','Jira / UI Task','QA Task','Product Template','Badge Reader','Employee List'].includes(l.label)).map(l=>[l.label,l.url||'']),
     ['',''],['INTERNAL NOTES',''],[(getSection('notes')||''),''],
   ];
-  const ws1=XLSX.utils.aoa_to_sheet(r1);ws1['!cols']=[{wch:22},{wch:55}];
+  const ws1=XLSX.utils.aoa_to_sheet(r1);
+  ws1['!cols']=[{wch:26},{wch:60}];
+  // Make all link cells actual hyperlinks
+  const linkRows=[
+    ['Odoo Task',proj.odoo_url],['Jira / UI Task',proj.ui_task_url],
+    ['QA Task',proj.qa_task_url],['Product Template',proj.product_template_url],
+    ['Badge Reader',proj.badge_reader_url],['Employee List',proj.employee_list_url],
+    ['Facility Site Survey',proj.facility_survey_url],['IT Site Survey',proj.it_survey_url],
+    ['Vinyl Render Odoo',proj.vinyl_odoo_url],
+    ...ppData.links.filter(l=>l.url).map(l=>[l.label,l.url]),
+  ];
+  // Find the row index of KEY LINKS header in r1 and apply hyperlinks from there
+  const keyLinksIdx=r1.findIndex(row=>row[0]==='KEY LINKS');
+  linkRows.forEach((lr,i)=>{
+    const url=lr[1];
+    if(!url||!url.startsWith('http'))return;
+    const rowIdx=keyLinksIdx+1+i;
+    const cellRef='B'+(rowIdx+1);
+    if(ws1[cellRef]){
+      ws1[cellRef].l={Target:url,Tooltip:lr[0]};
+    }
+  });
   XLSX.utils.book_append_sheet(wb,ws1,'Overview');
   // Sheet 2: Milestones
   const r2=[['MILESTONE TRACKER','','',''],['Milestone','Date','Days from today','Status']];
