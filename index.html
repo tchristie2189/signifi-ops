@@ -945,11 +945,42 @@ function renderOverview(){
           ${healthRing(proj.id)}
           <button class="btn btn-primary" style="font-size:10px;padding:4px 10px" onclick="openEditProj('${proj.id}')">✏ Edit</button>
           <button class="btn" style="font-size:10px;padding:4px 10px" onclick="markAllMsDone('${proj.id}')" title="Mark all past milestones as done">✓ Mark all done</button>
+          <button class="btn" style="font-size:10px;padding:4px 10px;color:var(--blue);border-color:var(--blue)" onclick="openAddMsForProj('${proj.id}')">+ Add milestone</button>
           <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
         </div>
       </div>
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
     </div>`:'<div class="empty-state">No projects yet.</div>'}`;
+}
+async function quickUpdateMs(msId,newDate){
+  const m=milestones.find(x=>x.id===msId);
+  if(!m)return;
+  if(!m.original_date)await sb.from('milestones').update({original_date:newDate}).eq('id',msId);
+  await sb.from('milestones').update({date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',msId);
+  showToast('Date updated ✓');
+  await loadAll();
+}
+function openAddMsForProj(projId){
+  const typeOpts=Object.entries(TYPE_LBL).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
+  const proj=projects.find(p=>p.id===projId);
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-head"><span class="modal-title">Add milestone — ${proj?.name||''}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body"><div class="form-grid">
+      <div class="field"><label>Type</label><select id="em-type">${typeOpts}</select></div>
+      <div class="field full"><label>Label</label><input id="em-label" placeholder="e.g. Installation, Delivery, Training..."></div>
+      <div class="field"><label>Date</label><input id="em-date" type="date" value="${isoD(today())}"></div>
+    </div></div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEvForProj('${projId}')">Add</button></div>
+  </div></div>`;
+}
+async function saveEvForProj(projId){
+  const label=document.getElementById('em-label').value.trim();
+  const date=document.getElementById('em-date').value;
+  if(!label||!date){alert('Please fill in label and date.');return;}
+  const{error}=await sb.from('milestones').insert({project_id:projId,key:document.getElementById('em-type').value,label,date,original_date:date,changed_by:currentUserName});
+  if(error){alert('Error: '+error.message);return;}
+  await logActivity('added milestone',label,label,projId,null,date);
+  closeModal();showToast('Milestone added ✓');await loadAll();
 }
 function goToProjPage(id){
   selectedProjId=id;
@@ -1124,7 +1155,13 @@ function renderDeptView(dept){
     if(dept==='production'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td>';}
     else if(dept==='quality'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'vinyl'))+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'uat'))+'</td>';}
     else if(dept==='shipping'){extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'delivery'))+'</td>';}
-    else if(dept==='installation'){extra='<td class="date-cell">'+fmt(getMsDate(p.id,'training'))+'</td><td class="date-cell">'+fmt(sd)+'</td>';}
+    else if(dept==='installation'){
+      const trainMs=milestones.find(m=>m.project_id===p.id&&m.key==='training');
+      const instMs=milestones.find(m=>m.project_id===p.id&&m.key==='installation');
+      const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)" title="Click to change date">`:`<button onclick="openAddMsForProj('${p.id}')" style="font-size:10px;color:var(--blue);background:none;border:1px dashed var(--blue);border-radius:4px;padding:1px 6px;cursor:pointer">+ Add</button>`;
+      const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)" title="Click to change date">`:`<button onclick="openAddMsForProj('${p.id}')" style="font-size:10px;color:var(--blue);background:none;border:1px dashed var(--blue);border-radius:4px;padding:1px 6px;cursor:pointer">+ Add</button>`;
+      extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td>';
+    }
     const html='<tr><td style="font-weight:500">'+p.name+'</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+(hasFilter?'<td></td>':'')+'</tr>';
     return{_d:sd||'',html};
   };
