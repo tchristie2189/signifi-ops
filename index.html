@@ -378,6 +378,12 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
         </div>
       </div>
       <div class="header-right">
+        <div style="position:relative">
+          <input id="global-search" placeholder="🔍 Search projects..." autocomplete="off"
+            style="font-family:var(--font);font-size:12px;padding:5px 14px;border:1px solid #2a2a2a;border-radius:20px;background:#1a1a1a;color:#ccc;width:190px;outline:none"
+            oninput="globalSearch(this.value)" onkeydown="if(event.key==='Escape'){this.value='';document.getElementById('gs-results').style.display='none';}">
+          <div id="gs-results" style="display:none;position:absolute;top:calc(100% + 6px);right:0;width:320px;background:#1a1a1a;border:1px solid #333;border-radius:var(--radius);z-index:999;max-height:320px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,0.4)"></div>
+        </div>
         <span class="hdate" id="hdate"></span>
         <div class="user-chip" id="user-chip">
           <div class="user-avatar" id="user-avatar">?</div>
@@ -946,6 +952,7 @@ function renderOverview(){
           <button class="btn btn-primary" style="font-size:10px;padding:4px 10px" onclick="openEditProj('${proj.id}')">✏ Edit</button>
           <button class="btn" style="font-size:10px;padding:4px 10px" onclick="markAllMsDone('${proj.id}')" title="Mark all past milestones as done">✓ Mark all done</button>
           <button class="btn" style="font-size:10px;padding:4px 10px;color:var(--blue);border-color:var(--blue)" onclick="openAddMsForProj('${proj.id}')">+ Add milestone</button>
+          <button class="btn" style="font-size:10px;padding:4px 10px" onclick="cloneProject('${proj.id}')" title="Clone this project">⎘ Clone</button>
           <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
         </div>
       </div>
@@ -1325,6 +1332,10 @@ function renderPlanogram(){
       <td><input type="date" class="sched-input" style="width:120px" value="${item.planEnd||''}" onchange="ps2(${origIdx},'planEnd',this.value)" title="Planogram end"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${origIdx},'date',this.value,'planogram')"></td>
       <td><select class="sched-select" onchange="ps2(${origIdx},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
+      <td><select class="sched-select" style="min-width:100px" onchange="ps2(${origIdx},'revision_status',this.value)" title="Revision status">
+        ${['','In Progress','Approved','Revision Requested','Re-approved'].map(s=>`<option value="${s}"${(item.revision_status||'')===(s)?' selected':''}>${s||'— status —'}</option>`).join('')}
+      </select></td>
+      <td><input class="sched-input" value="${(item.notes||'').replace(/"/g,'&quot;')}" placeholder="Notes / revision details..." style="min-width:180px" onchange="ps2(${origIdx},'notes',this.value)" title="${item.notes||''}"></td>
       <td style="white-space:nowrap">
         ${item.project_id?`<button onclick="syncPlanToProject(${origIdx})" style="font-size:10px;padding:2px 8px;border-radius:8px;border:1px solid var(--blue);color:var(--blue);background:transparent;cursor:pointer;font-family:var(--font)" title="Push dates to Project Overview milestones">↑ Sync</button> `:''}
         <button onclick="removeSchedRow('planogram',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button>
@@ -1356,8 +1367,10 @@ function renderPlanogram(){
       <th onclick="sortPlan('planEnd')" style="cursor:pointer">Plan End ↕</th>
       <th onclick="sortPlan('date')" style="cursor:pointer">Sign-off Date ↕</th>
       <th onclick="sortPlan('status')" style="cursor:pointer">Status ↕</th>
+      <th>Revision</th>
+      <th>Notes</th>
       <th style="width:28px"></th>
-    </tr></thead><tbody>${rows||'<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
+    </tr></thead><tbody>${rows||'<tr><td colspan="12" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
     <div class="actions-row"><button class="btn-add" onclick="addSchedRow('planogram')">+ Add planogram</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
   </div>`;
 }
@@ -1780,6 +1793,7 @@ function renderIntake(){
       </div>
       <div class="field"><label>Quantity</label><input id="i-qty" type="number" min="1" placeholder="e.g. 2"></div>
       <div class="field"><label>Delivery location</label><input id="i-loc" placeholder="City, Province, Country"></div>
+      <div class="field full"><label>Naming convention</label><input id="i-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono)"></div>
       <div class="field"><label>Project Manager</label>
         <select id="i-pm" style="font-family:var(--font);font-size:13px;padding:9px 12px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);width:100%">
           <option value="">Select PM...</option>
@@ -1871,7 +1885,7 @@ async function saveIntake(){
   const vinylType=document.getElementById('i-vinyl-type').value;
   const formFactor='';
   const productType=[...document.getElementById('i-type').selectedOptions].map(o=>o.value).join(', ');
-  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,channel_partner:channelPartner,product_type:productType,quantity:parseInt(document.getElementById('i-qty').value)||null,location:document.getElementById('i-loc').value,notes:sectionNotes,status:'active',changed_by:currentUserName,pm,sdm,solutions,sales,account_manager:accountManager,vinyl_type:vinylType,form_factor:formFactor}).select().single();
+  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,channel_partner:channelPartner,product_type:productType,quantity:parseInt(document.getElementById('i-qty').value)||null,location:document.getElementById('i-loc').value,notes:sectionNotes,naming_convention:document.getElementById('i-naming')?.value.trim()||null,status:'active',changed_by:currentUserName,pm,sdm,solutions,sales,account_manager:accountManager,vinyl_type:vinylType,form_factor:formFactor}).select().single();
   if(error){alert('Error: '+error.message);return;}
   const msFields=[
     {id:'i-po',key:'po-release',label:'PO Release'},
@@ -1899,6 +1913,15 @@ async function saveIntake(){
   const ins=msFields.map(f=>{const v=document.getElementById(f.id).value;return v?{project_id:proj.id,key:f.key,label:f.label,date:v,changed_by:currentUserName}:null;}).filter(Boolean);
   if(ins.length)await sb.from('milestones').insert(ins);
   await logActivity('created project',name,so,proj.id,null,client);
+  // Auto-create vinyl_schedule row
+  const vinylDate=document.getElementById('i-vinyl')?.value;
+  if(vinylDate||vinylType){
+    await sb.from('vinyl_schedule').insert({
+      project_id:proj.id,name,so,client,
+      date:vinylDate||null,vinyl_type:vinylType||null,
+      pm:pm||null,status:'Scheduled',priority:0,is_standalone:false
+    });
+  }
   // Auto-create planogram_schedule row if planogram dates were entered
   const planStartDate=document.getElementById('i-plan-start')?.value;
   const planEndDate=document.getElementById('i-plan-end')?.value;
@@ -2715,7 +2738,8 @@ function renderInstallForm(){
     <div class="doc-section-lbl">Project identifiers (auto-filled from hub)</div>
     ${fld('if-so','Sales Order (SO)','SO-XXXXX','','text',p.so_number||'')}
     ${fld('if-client','End Client (CX)','e.g. Google','','text',p.client||'')}
-    ${fld('if-naming','Naming convention & address','e.g. GPIX-B2B-SUN-CA-ENC 440 N Wolfe Rd...','full')}
+    ${fld('if-naming','Naming convention','e.g. GPIX-B2B-SUN-CA-ENC','full')}
+    ${fld('if-address','Installation address','e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085','full')}
     <div class="doc-section-lbl">Dates (auto-filled)</div>
     ${fld('if-ship','Shipping date','','','text',shipDate)}
     ${fld('if-del','Delivery date','','','text',delivDate)}
@@ -2860,7 +2884,8 @@ Solutions: ${getDocProj()?.solutions||''}
 Sales: ${getDocProj()?.sales||''}
 Account Manager: ${getDocProj()?.account_manager||''}
 
-1. Naming Convention and Address: ${g('if-naming')}
+1. Naming Convention: ${g('if-naming')}
+2. Installation Address: ${g('if-address')}
 2. Channel Partner (CP): ${g('if-cp')}
 3. End Client (CX): ${g('if-client')}
 4. Shipping Date: ${g('if-ship')}
@@ -3204,6 +3229,58 @@ async function ptSave(){
   showToast('Product types saved ✓');
 }
 
+function globalSearch(q){
+  const el=document.getElementById('gs-results');
+  if(!q||q.length<2){el.style.display='none';return;}
+  const ql=q.toLowerCase();
+  const matches=projects.filter(p=>
+    (p.name||'').toLowerCase().includes(ql)||
+    (p.so_number||'').toLowerCase().includes(ql)||
+    (p.client||'').toLowerCase().includes(ql)||
+    (p.pm||'').toLowerCase().includes(ql)
+  ).slice(0,8);
+  if(!matches.length){el.style.display='none';return;}
+  el.style.display='block';
+  el.innerHTML=matches.map(p=>{
+    const ms=milestones.filter(m=>m.project_id===p.id);
+    const next=ms.filter(m=>m.date&&daysDiff(m.date)>=0).sort((a,b)=>a.date.localeCompare(b.date))[0];
+    return`<div onclick="document.getElementById('global-search').value='';document.getElementById('gs-results').style.display='none';selectedProjId='${p.id}';ppProjId='${p.id}';setTab('projpage')"
+      style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;justify-content:space-between"
+      onmouseover="this.style.background='#252525'" onmouseout="this.style.background='transparent'">
+      <div>
+        <div style="font-size:12px;font-weight:600;color:#e5e7eb">${p.name}</div>
+        <div style="font-size:10px;color:#6b7280;margin-top:2px">${p.so_number||''} · ${p.client||''} · ${p.pm||'No PM'}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;margin-left:10px">
+        ${next?`<div style="font-size:10px;color:#60a5fa">${next.label}</div><div style="font-size:9px;color:#6b7280">${fmt(next.date)}</div>`:'<div style="font-size:10px;color:#4b5563">No upcoming</div>'}
+      </div>
+    </div>`;
+  }).join('');
+}
+async function cloneProject(id){
+  const orig=projects.find(p=>p.id===id);
+  if(!orig)return;
+  const newName=prompt('Name for cloned project:',orig.name+' (Copy)');
+  if(!newName)return;
+  const newSO=prompt('New SO number (leave blank to fill in later):','');
+  const{data:newProj,error}=await sb.from('projects').insert({
+    ...orig,id:undefined,created_at:undefined,
+    name:newName,so_number:newSO||null,
+    status:'active',changed_by:currentUserName,changed_at:new Date().toISOString()
+  }).select().single();
+  if(error){alert('Error cloning: '+error.message);return;}
+  // Clone milestones
+  const origMs=milestones.filter(m=>m.project_id===id);
+  if(origMs.length){
+    const newMs=origMs.map(m=>({...m,id:undefined,project_id:newProj.id,changed_by:currentUserName,changed_at:new Date().toISOString()}));
+    await sb.from('milestones').insert(newMs);
+  }
+  await loadAll();
+  showToast('"'+newName+'" cloned ✓');
+  selectedProjId=newProj.id;
+  ppProjId=newProj.id;
+  setTab('projpage');
+}
 function toggleNotes(id){
   const el=document.getElementById(id);
   if(el)el.classList.toggle('open');
@@ -3285,7 +3362,6 @@ function applyTemplateToIntake(){
 
 // ── EXPORT PROJECT PAGE ────────────────────────────────────
 function openClientExport(){
-  alert('ppProjId='+ppProjId+' proj='+JSON.stringify(projects.find(p=>p.id===ppProjId)?.name));
   try {
   const proj=projects.find(p=>p.id===ppProjId);
   if(!proj){showToast('No project selected');return;}
@@ -3416,7 +3492,7 @@ table{width:100%;border-collapse:collapse}
     <button onclick="document.getElementById('client-export-overlay').remove()" style="font-family:DM Sans,sans-serif;font-size:13px;font-weight:600;padding:10px 20px;background:#e2e8f0;color:#0f172a;border:none;border-radius:8px;cursor:pointer">✕ Close</button>
   </div>`;
   document.body.appendChild(overlay);
-  } catch(e){alert('Export error: '+e.message);}
+  } catch(e){alert('Export error: '+e.message+'\n'+e.stack?.split('\n')[1]);}
 }
 function exportProjPageExcel(){
   const proj=projects.find(p=>p.id===ppProjId);
