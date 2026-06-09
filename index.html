@@ -2397,6 +2397,7 @@ function renderProjPageBody(){
         <button onclick="openLinksPopout()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #3b82f6;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🔗 Quick links</button>
         <button onclick="exportProjPageExcel()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #2d6a4f;background:#1a4a35;color:#4ade80;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">⬇ Excel</button>
         <button onclick="openClientExport()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #1d4ed8;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📤 Client export</button>
+        <button onclick="openClientDeliverables()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #d97706;background:#3f2200;color:#fbbf24;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📋 Edit deliverables</button>
         <button onclick="window.print()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #555;background:#1a1a1a;color:#aaa;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🖨 Print / PDF</button>
       </div>
     </div>
@@ -3537,6 +3538,97 @@ function openLinksPopout(){
   </div>`;
 }
 
+function openClientDeliverables(){
+  const proj=projects.find(p=>p.id===ppProjId);
+  if(!proj){showToast('No project selected');return;}
+  const pMs=milestones.filter(m=>m.project_id===ppProjId);
+  const msKeyMap={};pMs.forEach(m=>{msKeyMap[m.key]=m;});
+  const DEFAULT_DELIVS=[
+    {label:'Training',key:'training'},{label:'IT Site Survey',key:'it_survey'},
+    {label:'Facility Site Survey',key:'facility_survey'},{label:'Branding / Vinyl',key:'vinyl'},
+    {label:'Products / Hardware',key:'arrival'},{label:'Badge Reader Setup',key:'badge'},
+    {label:'Employee List',key:'employee'},{label:'UAT Sign-off',key:'uat'},
+    {label:'Installation',key:'installation'},
+  ];
+  const getDelivDate=(key)=>{const km={training:'training',vinyl:'vinyl',arrival:'arrival',uat:'uat',installation:'installation'};const mk=km[key];return mk&&msKeyMap[mk]?msKeyMap[mk].date:'';};
+  const saved=proj.client_deliverables||[];
+  const rows=DEFAULT_DELIVS.map(d=>{const s=saved.find(x=>x.key===d.key)||{};return{...d,date:s.date||getDelivDate(d.key)||'',status:s.status||'Pending',notes:s.notes||''};});
+  saved.filter(s=>!DEFAULT_DELIVS.find(d=>d.key===s.key)).forEach(s=>rows.push(s));
+
+  const rowsHtml=rows.map((d,i)=>`
+    <tr style="border-bottom:1px solid var(--gray-50)">
+      <td style="padding:6px 8px;font-size:12px;white-space:nowrap">${d.label}</td>
+      <td style="padding:4px 8px"><input type="date" value="${d.date||''}" id="cd-date-${i}" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:120px"></td>
+      <td style="padding:4px 8px">
+        <select id="cd-status-${i}" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px">
+          ${['Pending','In Progress','Complete','N/A'].map(s=>`<option${s===d.status?' selected':''}>${s}</option>`).join('')}
+        </select>
+      </td>
+      <td style="padding:4px 8px"><input type="text" value="${(d.notes||'').replace(/"/g,'&quot;')}" id="cd-notes-${i}" placeholder="Notes..." style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:100%"></td>
+    </tr>`).join('');
+
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:700px;max-height:85vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
+      <div class="modal-head"><span class="modal-title">📋 Client Deliverables — ${proj.name}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div style="overflow-y:auto;flex:1;padding:12px 16px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="border-bottom:2px solid var(--gray-200)">
+            <th style="padding:6px 8px;font-size:10px;font-weight:700;color:var(--gray-500);text-align:left;text-transform:uppercase">Deliverable</th>
+            <th style="padding:6px 8px;font-size:10px;font-weight:700;color:var(--gray-500);text-align:left;text-transform:uppercase">Due Date</th>
+            <th style="padding:6px 8px;font-size:10px;font-weight:700;color:var(--gray-500);text-align:left;text-transform:uppercase">Status</th>
+            <th style="padding:6px 8px;font-size:10px;font-weight:700;color:var(--gray-500);text-align:left;text-transform:uppercase">Notes</th>
+          </tr></thead>
+          <tbody id="cd-rows">${rowsHtml}</tbody>
+        </table>
+        <div style="margin-top:10px;display:flex;gap:8px">
+          <input id="cd-new-label" placeholder="Add custom deliverable..." style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);flex:1">
+          <button class="btn btn-primary" onclick="cdAddRow()" style="font-size:12px">+ Add</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveClientDeliverables('${proj.id}',${rows.length})">💾 Save</button>
+      </div>
+    </div>
+  </div>`;
+  window._cdRowCount=rows.length;
+}
+
+function cdAddRow(){
+  const label=document.getElementById('cd-new-label')?.value.trim();
+  if(!label)return;
+  const i=window._cdRowCount++;
+  const tbody=document.getElementById('cd-rows');
+  if(!tbody)return;
+  const tr=document.createElement('tr');
+  tr.style.borderBottom='1px solid var(--gray-50)';
+  tr.innerHTML=`<td style="padding:6px 8px;font-size:12px">${label}<input type="hidden" id="cd-key-${i}" value="${label.toLowerCase().replace(/\s+/g,'-')}"></td>
+    <td style="padding:4px 8px"><input type="date" id="cd-date-${i}" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:120px"></td>
+    <td style="padding:4px 8px"><select id="cd-status-${i}" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px"><option>Pending</option><option>In Progress</option><option>Complete</option><option>N/A</option></select></td>
+    <td style="padding:4px 8px"><input type="text" id="cd-notes-${i}" placeholder="Notes..." style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:100%"></td>`;
+  tbody.appendChild(tr);
+  document.getElementById('cd-new-label').value='';
+}
+
+async function saveClientDeliverables(projId,count){
+  const rows=[];
+  const DEFAULT_KEYS=['training','it_survey','facility_survey','vinyl','arrival','badge','employee','uat','installation'];
+  const DEFAULT_LABELS=['Training','IT Site Survey','Facility Site Survey','Branding / Vinyl','Products / Hardware','Badge Reader Setup','Employee List','UAT Sign-off','Installation'];
+  for(let i=0;i<window._cdRowCount;i++){
+    const dateEl=document.getElementById('cd-date-'+i);
+    const statusEl=document.getElementById('cd-status-'+i);
+    const notesEl=document.getElementById('cd-notes-'+i);
+    const keyEl=document.getElementById('cd-key-'+i);
+    if(!dateEl&&!statusEl)continue;
+    const key=keyEl?keyEl.value:(i<DEFAULT_KEYS.length?DEFAULT_KEYS[i]:('custom-'+i));
+    const label=i<DEFAULT_LABELS.length?DEFAULT_LABELS[i]:(keyEl?.value||'Custom');
+    rows.push({key,label,date:dateEl?.value||'',status:statusEl?.value||'Pending',notes:notesEl?.value||''});
+  }
+  await sb.from('projects').update({client_deliverables:rows}).eq('id',projId);
+  const p=projects.find(x=>x.id===projId);if(p)p.client_deliverables=rows;
+  closeModal();showToast('Deliverables saved ✓');
+}
 function openClientExport(){
   try{
   const proj=projects.find(p=>p.id===ppProjId);
@@ -3705,11 +3797,11 @@ body{font-family:'DM Sans',sans-serif;background:#f1f5f9;color:#0f172a;-webkit-p
         lastMonth=d.getMonth();monthSpan=1;monthStart=i;
       } else monthSpan++;
     });
-    if(lastMonth>=0)monthCells.push({label:new Date(2026,lastMonth,1).toLocaleDateString('en-US',{month:'short'}),span:monthSpan,start:monthStart});
+    if(lastMonth>=0)monthCells.push({label:new Date(cols[cols.length-1].getFullYear(),lastMonth,1).toLocaleDateString('en-US',{month:'short'}),span:monthSpan,start:monthStart});
     // Colour per milestone key
     const COL={'po-release':'#8b5cf6','arrival':'#8b5cf6','production-start':'#7c3aed','production-end':'#7c3aed','other':'#0891b2','quality-start':'#d97706','quality-end':'#d97706','vinyl':'#db2777','uat':'#16a34a','shipping':'#059669','delivery':'#059669','training':'#f59e0b','installation':'#e11d48'};
-    const monthRow='<tr><td class="label-col" style="font-size:9px;color:#94a3b8;padding-bottom:2px"></td><td class="date-col"></td><td class="status-col"></td>'+monthCells.map(mc=>`<th colspan="${mc.span}" style="text-align:left;font-size:9px;font-weight:700;color:#64748b;padding:2px 0 4px 3px;letter-spacing:0.06em;text-transform:uppercase">${mc.label}</th>`).join('')+'</tr>';
-    const dayRow='<tr style="border-bottom:1px solid #f1f5f9"><td class="label-col"></td><td class="date-col"></td><td class="status-col"></td>'+cols.map(d=>{const isT=d.getTime()===t.getTime();return`<th style="${isT?'color:#C8102E;font-weight:700':''}">${d.getDate()}</th>`;}).join('')+'</tr>';
+    const monthRow='<tr><td class="label-col"></td><td class="date-col"></td><td class="status-col"></td>'+monthCells.map(mc=>`<th colspan="${mc.span}" style="text-align:left;font-size:9px;font-weight:700;color:#64748b;padding:2px 0 4px 3px;letter-spacing:0.06em;text-transform:uppercase">${mc.label}</th>`).join('')+'</tr>';
+    const dayRow='<tr style="border-bottom:1px solid #f1f5f9"><td class="label-col"></td><td class="date-col"></td><td class="status-col"></td>'+cols.map(d=>{const isT=sameDay(d,t);return`<th style="${isT?'color:#C8102E;font-weight:700':''}">${d.getDate()}</th>`;}).join('')+'</tr>';
     const msGanttRows=msDated.map(m=>{
       const isDone=isMilestoneEffectivelyDone(m);
       const d=daysDiff(m.date);
@@ -3737,27 +3829,35 @@ body{font-family:'DM Sans',sans-serif;background:#f1f5f9;color:#0f172a;-webkit-p
 
   <!-- BOTTOM ROW -->
   <div class="bottom-row">
-
-    <!-- CLIENT DELIVERABLES -->
-    <div class="card">
-      <div class="card-label" style="margin-bottom:10px">Client Deliverables</div>
-      <table class="deliv-table">
-        <thead><tr><th>Client Deliverables</th><th>Due Date</th><th>Status</th><th>Notes</th></tr></thead>
-        <tbody>
-          ${pMs.filter(m=>['uat','training','installation','delivery'].includes(m.key)).map(m=>{
-            const isDone=isMilestoneEffectivelyDone(m);
-            return`<tr><td>${m.label}</td><td style="font-family:'DM Mono',monospace">${fmt(m.date)}</td><td><span class="chip" style="background:${isDone?'#dcfce7':'#f1f5f9'};color:${isDone?'#166534':'#64748b'}">${isDone?'Complete':'Pending'}</span></td><td></td></tr>`;
-          }).join('')||`<tr><td colspan="4" style="text-align:center;color:#94a3b8;padding:1rem">No client deliverables set</td></tr>`}
-        </tbody>
-      </table>
-    </div>
+    ${(()=>{
+    const DEFAULT_DELIVS=[
+      {label:'Training',key:'training'},{label:'IT Site Survey',key:'it_survey'},
+      {label:'Facility Site Survey',key:'facility_survey'},{label:'Branding / Vinyl',key:'vinyl'},
+      {label:'Products / Hardware',key:'arrival'},{label:'Badge Reader Setup',key:'badge'},
+      {label:'Employee List',key:'employee'},{label:'UAT Sign-off',key:'uat'},
+      {label:'Installation',key:'installation'},
+    ];
+    const msKeyMap2={};pMs.forEach(m=>{msKeyMap2[m.key]=m;});
+    const getDD=(key)=>{const km={training:'training',vinyl:'vinyl',arrival:'arrival',uat:'uat',installation:'installation'};const mk=km[key];return mk&&msKeyMap2[mk]?msKeyMap2[mk].date:'';};
+    const savedDelivs=proj.client_deliverables||[];
+    const delivRows=DEFAULT_DELIVS.map(d=>{const s=savedDelivs.find(x=>x.key===d.key)||{};return{...d,date:s.date||getDD(d.key)||'',status:s.status||'Pending',notes:s.notes||''};});
+    savedDelivs.filter(s=>!DEFAULT_DELIVS.find(d=>d.key===s.key)).forEach(s=>delivRows.push(s));
+    const delivHtml=delivRows.map(function(d){
+      const isDone=d.status==='Complete';
+      const bg=isDone?'#dcfce7':d.status==='In Progress'?'#eff6ff':'#f1f5f9';
+      const fc=isDone?'#166534':d.status==='In Progress'?'#1d4ed8':'#64748b';
+      return'<tr><td>'+d.label+'</td><td style="font-family:monospace;white-space:nowrap">'+(d.date?fmt(d.date):'')+'</td><td><span class="chip" style="background:'+bg+';color:'+fc+'">'+d.status+'</span></td><td style="color:#94a3b8">'+(d.notes||'')+'</td></tr>';
+    }).join('');
+    return'<div class="card"><div class="card-label" style="margin-bottom:10px">Client Deliverables</div><table class="deliv-table"><thead><tr><th>Deliverable</th><th>Due Date</th><th>Status</th><th>Notes</th></tr></thead><tbody>'+delivHtml+'</tbody></table></div>';
+    })()}
 
     <!-- TEAM + LINKS -->
     <div>
-      ${teamRows.length?`<div class="card" style="margin-bottom:1.25rem"><div class="card-label" style="margin-bottom:10px">Project Team</div>${teamRows.map(t=>`<div class="team-row"><div class="team-avatar">${(t.name||'?')[0].toUpperCase()}</div><div><div class="team-role">${t.role||''}</div><div class="team-name">${t.name}</div></div></div>`).join('')}</div>`:''}
-      ${clientLinks.length?`<div class="card"><div class="card-label" style="margin-bottom:10px">Key Resources</div>${clientLinks.map(l=>`<div class="link-row"><span style="font-size:12px;font-weight:500">${l.label}</span><a href="${l.url}" target="_blank" style="font-size:11px;color:#3b82f6;font-weight:600;text-decoration:none">Open ↗</a></div>`).join('')}</div>`:''}
+      ${teamRows.length?'<div class="card" style="margin-bottom:1.25rem"><div class="card-label" style="margin-bottom:10px">Project Team</div>'+teamRows.map(t=>'<div class="team-row"><div class="team-avatar">'+(t.name||'?')[0].toUpperCase()+'</div><div><div class="team-role">'+(t.role||'')+'</div><div class="team-name">'+t.name+'</div></div></div>').join('')+'</div>':''}
+      ${clientLinks.length?'<div class="card"><div class="card-label" style="margin-bottom:10px">Key Resources</div>'+clientLinks.map(l=>'<div class="link-row"><span style="font-size:12px;font-weight:500">'+l.label+'</span><a href="'+l.url+'" target="_blank" style="font-size:11px;color:#3b82f6;font-weight:600;text-decoration:none">Open ↗</a></div>').join('')+'</div>':''}
     </div>
   </div>
+
 
   <div class="footer">Signifi Solutions · Confidential · ${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})}</div>
 </div>
