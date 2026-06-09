@@ -985,23 +985,59 @@ function buildGantt(startKeys,endKeys,segsFn,title,legend){
   const t=today();
   const hdr=days.map(d=>{
     const isT=sameDay(d,t);
-    const bg=isT?'style="background:#fff0f0"':'';
     const monthLabel=d.getDate()===1||days.indexOf(d)===0?'<span style="font-size:8px;display:block">'+d.toLocaleDateString('en-US',{month:'short'})+'</span>':'';
-    return`<th ${bg} style="min-width:28px${isT?';background:#fff0f0':''}">${monthLabel}${d.getDate()}</th>`;
+    return`<th style="min-width:28px${isT?';background:#fff0f0':''}">${monthLabel}${d.getDate()}</th>`;
   }).join('');
-  const gRows=filterByPM(activeProjects(title.toLowerCase().includes('prod')?'production':'quality')).map(p=>{
+
+  // Sort: active now → upcoming → past (no dates last)
+  const deptKey=title.toLowerCase().includes('prod')?'production':'quality';
+  const allGanttProjs=filterByPM(activeProjects(deptKey));
+  const sortedGanttProjs=[...allGanttProjs].sort((a,b)=>{
+    const getRange=(p)=>{
+      const pMs=milestones.filter(m=>m.project_id===p.id);
+      const s=startKeys.map(k=>pMs.find(m=>m.key===k)?.date).find(Boolean);
+      const e=endKeys.map(k=>pMs.find(m=>m.key===k)?.date).find(Boolean);
+      return{s,e};
+    };
+    const ra=getRange(a),rb=getRange(b);
+    const activeA=ra.s&&ra.e&&t>=new Date(ra.s+'T00:00:00')&&t<=new Date(ra.e+'T00:00:00');
+    const activeB=rb.s&&rb.e&&t>=new Date(rb.s+'T00:00:00')&&t<=new Date(rb.e+'T00:00:00');
+    if(activeA&&!activeB)return-1;
+    if(!activeA&&activeB)return 1;
+    // Both upcoming or both past — sort by start date
+    if(!ra.s&&rb.s)return 1;if(ra.s&&!rb.s)return-1;
+    return(ra.s||'').localeCompare(rb.s||'');
+  });
+
+  const ganttId='gantt-'+title.replace(/\s+/g,'-').toLowerCase();
+  const gRows=sortedGanttProjs.map(p=>{
     const pMs=milestones.filter(m=>m.project_id===p.id);const getD=k=>pMs.find(m=>m.key===k)?.date;
     const segs=segsFn(getD).filter(x=>x.s);
+    // Is this project active right now?
+    const startD=startKeys.map(k=>getD(k)).find(Boolean);
+    const endD=endKeys.map(k=>getD(k)).find(Boolean);
+    const isActive=startD&&endD&&t>=new Date(startD+'T00:00:00')&&t<=new Date(endD+'T00:00:00');
     const cells=days.map(d=>{
       const isT=sameDay(d,t);let fill='';
       segs.forEach(sg=>{const sd=new Date(sg.s+'T00:00:00');const ed=sg.e?new Date(sg.e+'T00:00:00'):sd;if(d>=sd&&d<=ed)fill=`<div class="gantt-fill" style="background:${sg.bg};opacity:0.85" title="${sg.lbl}"></div>`;});
       const tl=isT?'<div style="position:absolute;left:50%;top:0;width:2px;height:100%;background:rgba(200,16,46,0.35);transform:translateX(-50%)"></div>':'';
       return`<td class="gantt-cell" style="${isT?'background:#fff0f0;':''}">${tl}${fill}</td>`;
     }).join('');
-    return`<tr><td class="proj-name">${p.name}<br><span style="font-family:var(--mono);font-size:9px;color:var(--gray-500)" title="${p.so_number||''}">${truncateSO(p.so_number,2)}</span></td>${cells}</tr>`;
+    const activePip=isActive?'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#22c55e;margin-left:4px;vertical-align:middle" title="Active now"></span>':'';
+    return`<tr${isActive?' style="background:#f8fff8"':''}><td class="proj-name">${p.name}${activePip}<br><span style="font-family:var(--mono);font-size:9px;color:var(--gray-500)" title="${p.so_number||''}">${truncateSO(p.so_number,2)}</span></td>${cells}</tr>`;
   }).join('');
+
   const legHtml=legend.map(l=>`<div class="leg"><div class="leg-dot" style="background:${l.c}"></div>${l.l}</div>`).join('');
-  return`<div class="section" style="margin-bottom:10px"><div class="section-head"><div class="section-title">${title} — Gantt</div><div class="legend-row" style="margin:0;gap:8px">${legHtml}</div></div><div class="prod-gantt"><div class="gantt-wrap"><table class="gantt-table"><thead><tr><th class="proj-col">Project</th>${hdr}</tr></thead><tbody>${gRows}</tbody></table></div></div></div>`;
+  // Queue scroll to today after DOM renders
+  setTimeout(function(){
+    const w=document.getElementById(ganttId);
+    if(!w)return;
+    const ths=w.querySelectorAll('th');
+    let todayIdx=-1;
+    ths.forEach(function(th,i){if(th.style.background&&th.style.background.includes('fff0f0'))todayIdx=i;});
+    if(todayIdx>0)w.scrollLeft=Math.max(0,(todayIdx-3)*28);
+  },150);
+  return`<div class="section" style="margin-bottom:10px"><div class="section-head"><div class="section-title">${title} — Gantt</div><div style="display:flex;align-items:center;gap:8px"><div class="legend-row" style="margin:0;gap:8px">${legHtml}</div>${hideCompletedBtn(deptKey)}</div></div><div class="prod-gantt"><div class="gantt-wrap" id="${ganttId}"><table class="gantt-table"><thead><tr><th class="proj-col">Project</th>${hdr}</tr></thead><tbody>${gRows}</tbody></table></div></div></div>`;
 }
 function renderDeptView(dept){
   const el=document.getElementById('tab-'+dept);
