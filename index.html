@@ -3285,11 +3285,13 @@ function applyTemplateToIntake(){
 
 // ── EXPORT PROJECT PAGE ────────────────────────────────────
 function openClientExport(){
+  alert('ppProjId='+ppProjId+' proj='+JSON.stringify(projects.find(p=>p.id===ppProjId)?.name));
+  try {
   const proj=projects.find(p=>p.id===ppProjId);
   if(!proj){showToast('No project selected');return;}
   const pMs=[...milestones.filter(m=>m.project_id===ppProjId)].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-  const teamRows=ppData.team.filter(t=>t.name&&t.name!=='Name'&&t.name.trim());
-  const summary=ppData.sections?.summary||getSection('summary')||'';
+  const teamRows=(ppData.team||[]).filter(t=>t.name&&t.name!=='Name'&&t.name.trim());
+  const summary=getSection('summary')||'';
   const statusVal=getSection('status')||'on-track';
   const statusLbl=statusVal==='on-track'?'On Track':statusVal==='at-risk'?'At Risk':'Off Track';
   const statusColor=statusVal==='on-track'?'#166534':statusVal==='at-risk'?'#854d0e':'#991b1b';
@@ -3300,11 +3302,12 @@ function openClientExport(){
   const pct=total?Math.round((done/total)*100):0;
 
   // Key links to show client
+  const lv=Object.fromEntries((ppData.links||[]).map(l=>[l.label,l.url]));
   const clientLinks=[
-    {label:'Vision Training',url:linkVals['Vision Training']||proj.vision_training_url},
-    {label:'Facility Site Survey',url:linkVals['Facility Site Survey']||proj.facility_survey_url},
-    {label:'IT Site Survey',url:linkVals['IT Site Survey']||proj.it_survey_url},
-    {label:'Deployment Plan',url:linkVals['Deployment Plan']},
+    {label:'Vision Training',url:lv['Vision Training']||proj.vision_training_url},
+    {label:'Facility Site Survey',url:lv['Facility Site Survey']||proj.facility_survey_url},
+    {label:'IT Site Survey',url:lv['IT Site Survey']||proj.it_survey_url},
+    {label:'Deployment Plan',url:lv['Deployment Plan']},
   ].filter(l=>l.url);
 
   const msRows=pMs.filter(m=>m.date).map(m=>{
@@ -3413,6 +3416,7 @@ table{width:100%;border-collapse:collapse}
     <button onclick="document.getElementById('client-export-overlay').remove()" style="font-family:DM Sans,sans-serif;font-size:13px;font-weight:600;padding:10px 20px;background:#e2e8f0;color:#0f172a;border:none;border-radius:8px;cursor:pointer">✕ Close</button>
   </div>`;
   document.body.appendChild(overlay);
+  } catch(e){alert('Export error: '+e.message);}
 }
 function exportProjPageExcel(){
   const proj=projects.find(p=>p.id===ppProjId);
