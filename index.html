@@ -3317,13 +3317,13 @@ async function doCloneProject(id, origAnchorDate){
 
   const orig=projects.find(p=>p.id===id);
   const{data:newProj,error}=await sb.from('projects').insert({
-    ...orig,id:undefined,created_at:undefined,
+    ...orig,id:undefined,created_at:undefined,updated_at:undefined,
     name:newName,so_number:newSO||null,
     status:'active',changed_by:currentUserName,changed_at:new Date().toISOString()
   }).select().single();
   if(error){alert('Error cloning: '+error.message);return;}
 
-  // Clone milestones with shifted dates
+  // Clone milestones with shifted dates — explicit fields only to avoid DB errors
   const origMs=milestones.filter(m=>m.project_id===id);
   if(origMs.length){
     const newMs=origMs.map(m=>{
@@ -3333,15 +3333,26 @@ async function doCloneProject(id, origAnchorDate){
         d.setDate(d.getDate()+shiftDays);
         newDate=isoD(d);
       }
-      return{...m,id:undefined,project_id:newProj.id,date:newDate,original_date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()};
+      return{
+        project_id:newProj.id,
+        key:m.key,
+        label:m.label,
+        date:newDate||null,
+        original_date:newDate||null,
+        changed_by:currentUserName,
+        changed_at:new Date().toISOString()
+      };
     });
-    await sb.from('milestones').insert(newMs);
+    const{error:msErr}=await sb.from('milestones').insert(newMs);
+    if(msErr){alert('Milestones error: '+msErr.message);return;}
   }
+
+  // Set IDs BEFORE loadAll so renderProjPage doesn't lose them
+  selectedProjId=newProj.id;
+  ppProjId=newProj.id;
   closeModal();
   await loadAll();
   showToast('"'+newName+'" cloned — '+Math.abs(shiftDays)+'d '+(shiftDays>=0?'forward':'back')+' ✓');
-  selectedProjId=newProj.id;
-  ppProjId=newProj.id;
   setTab('projpage');
 }
 function toggleNotes(id){
