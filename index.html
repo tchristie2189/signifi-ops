@@ -1235,7 +1235,10 @@ function renderPlanogram(){
       <td><input type="date" class="sched-input" style="width:120px" value="${item.planEnd||''}" onchange="ps2(${origIdx},'planEnd',this.value)" title="Planogram end"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${origIdx},'date',this.value,'planogram')"></td>
       <td><select class="sched-select" onchange="ps2(${origIdx},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
-      <td><button onclick="removeSchedRow('planogram',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></td>
+      <td style="white-space:nowrap">
+        ${item.project_id?`<button onclick="syncPlanToProject(${origIdx})" style="font-size:10px;padding:2px 8px;border-radius:8px;border:1px solid var(--blue);color:var(--blue);background:transparent;cursor:pointer;font-family:var(--font)" title="Push dates to Project Overview milestones">↑ Sync</button> `:''}
+        <button onclick="removeSchedRow('planogram',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button>
+      </td>
     </tr>`;
   }).join('');
   el.innerHTML=`<div class="section">
@@ -1314,14 +1317,47 @@ async function vinylDateSync(i,val,type){
   showToast('Date saved ✓');
 }
 function vsDate(i,field,val,type){
-  const data=type==='vinyl'?vinylSchedule:planogramSchedule;data[i][field]=val;
-  const proj=projects.find(p=>p.id===data[i].id);
+  const data=type==='vinyl'?vinylSchedule:planogramSchedule;
+  data[i][field]=val;
+  // Use project_id (not id which is the schedule row UUID)
+  const proj=projects.find(p=>p.id===data[i].project_id);
   if(proj&&val){
-    const key=type==='vinyl'?'vinyl':'other';const label=type==='vinyl'?'Vinyl / branding':'Planogram sign-off';
-    const existing=milestones.find(m=>m.project_id===proj.id&&m.key===key);
-    if(existing){sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id).then(()=>{logActivity('updated date',type,label,proj.id,existing.date,val);showToast('Date saved ✓');});}
-    else{sb.from('milestones').insert({project_id:proj.id,key,label,date:val}).then(()=>{logActivity('added',type,label,proj.id,null,val);loadAll();showToast('Date saved ✓');});}
+    const key=type==='vinyl'?'vinyl':'other';
+    const label=type==='vinyl'?'Vinyl / branding':'Planogram sign-off';
+    const existing=milestones.find(m=>m.project_id===proj.id&&m.key===key&&(m.label||'').toLowerCase().includes('planogram')||m.key===key&&type==='vinyl');
+    if(existing){sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id).then(()=>{logActivity('updated date',type,label,proj.id,existing.date,val);showToast('Date synced to project ✓');});}
+    else{sb.from('milestones').insert({project_id:proj.id,key,label,date:val,changed_by:currentUserName}).then(()=>{logActivity('added milestone',type,label,proj.id,null,val);loadAll();showToast('Date synced to project ✓');});}
+  } else if(val){
+    showToast('Date saved ✓');
   }
+}
+
+async function syncPlanToProject(idx){
+  const item=planogramSchedule[idx];
+  if(!item||!item.project_id){showToast('No project linked — use standalone entry');return;}
+  const proj=projects.find(p=>p.id===item.project_id);
+  if(!proj){showToast('Project not found');return;}
+
+  const toSync=[
+    {field:'planStart',label:'Planogram start',key:'other'},
+    {field:'planEnd',label:'Planogram end',key:'other'},
+    {field:'date',label:'Planogram sign-off',key:'other'},
+  ];
+
+  let synced=0;
+  for(const s of toSync){
+    const val=item[s.field];
+    if(!val)continue;
+    const existing=milestones.find(m=>m.project_id===proj.id&&(m.label||'').toLowerCase()===s.label.toLowerCase());
+    if(existing){
+      await sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id);
+    } else {
+      await sb.from('milestones').insert({project_id:proj.id,key:s.key,label:s.label,date:val,changed_by:currentUserName,original_date:val});
+    }
+    synced++;
+  }
+  await loadAll();
+  showToast(`Synced ${synced} date${synced!==1?'s':''} to ${proj.name} ✓`);
 }
 function addSchedRow(type){
   // Open a modal to fill in all fields for a standalone entry
