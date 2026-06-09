@@ -1136,7 +1136,7 @@ function renderDeptView(dept){
     production:{title:'Production schedule',startKey:'production-start',endKey:'production-end',color:'#7c3aed',cols:['Project','SO','Client','PM','Prod start','Prod end','Duration','Status']},
     quality:{title:'Quality / QA schedule',startKey:'quality-start',endKey:'quality-end',color:'#d97706',cols:['Project','SO','Client','PM','QA start','QA end','Duration','Vinyl','UAT','Status']},
     shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO','Client','PM','Pack & ship','Delivery','Status','']},
-    installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO','Client','PM','Training','Installation','Status','']},
+    installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO','Client','PM','Training','Installation','Confirmed','Status','']},
   };
   const c=cfg[dept];
   let ganttHtml='';
@@ -1167,7 +1167,8 @@ function renderDeptView(dept){
       const instMs=milestones.find(m=>m.project_id===p.id&&m.key==='installation');
       const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)" title="Click to change date">`:`<button onclick="openAddMsForProj('${p.id}')" style="font-size:10px;color:var(--blue);background:none;border:1px dashed var(--blue);border-radius:4px;padding:1px 6px;cursor:pointer">+ Add</button>`;
       const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)" title="Click to change date">`:`<button onclick="openAddMsForProj('${p.id}')" style="font-size:10px;color:var(--blue);background:none;border:1px dashed var(--blue);border-radius:4px;padding:1px 6px;cursor:pointer">+ Add</button>`;
-      extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td>';
+      const confirmed=p.install_date_confirmed?`<span style="font-size:11px;color:var(--success);font-weight:600">✓ ${fmt(p.install_date_confirmed)}</span>`:`<span style="font-size:10px;color:var(--gray-400)">Pending</span>`;
+      extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td>';
     }
     const html='<tr><td style="font-weight:500">'+p.name+'</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+(hasFilter?'<td></td>':'')+'</tr>';
     return{_d:sd||'',html};
@@ -1974,6 +1975,7 @@ function openEditProj(id){
         <div class="field full"><label>Facility Site Survey Review URL</label><input id="ep-facility-survey" value="${proj.facility_survey_url||''}" placeholder="https://..."></div>
         <div class="field full"><label>IT Site Survey Review URL</label><input id="ep-it-survey" value="${proj.it_survey_url||''}" placeholder="https://..."></div>
         <div class="field full"><label>Vision Training URL</label><input id="ep-vision-training" value="${proj.vision_training_url||''}" placeholder="https://..."></div>
+        <div class="field full"><label>Vinyl Render Odoo URL</label><input id="ep-vinyl-odoo" value="${proj.vinyl_odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..."></div>
 
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">Milestone dates</div>
@@ -2186,12 +2188,16 @@ function renderProjPage(){
   sortedProjs.forEach(p=>{projNameMap[p.name+(p.so_number?' — '+p.so_number:'')]=p.id;});
   // Datalist uses display text as value so browser shows names not UUIDs
   const projOpts=sortedProjs.map(p=>`<option value="${p.name+(p.so_number?' — '+p.so_number:'')}">`).join('');
+  const selectOpts=sortedProjs.map(p=>`<option value="${p.id}"${p.id===ppProjId?' selected':''}>${p.name+(p.so_number?' — '+p.so_number:'')}</option>`).join('');
   el.innerHTML=`
     <div class="proj-sel-bar">
       <label>Project</label>
-      <div style="flex:1;position:relative">
-        <input id="pp-proj-search" list="pp-proj-list" placeholder="Search or select project..." style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);width:100%" onchange="onProjPageSearch(this.value)" oninput="onProjPageSearch(this.value)">
+      <div style="flex:1;display:flex;gap:6px">
+        <input id="pp-proj-search" list="pp-proj-list" placeholder="Type to search..." style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);flex:1;min-width:0" onchange="onProjPageSearch(this.value)" oninput="onProjPageSearch(this.value)">
         <datalist id="pp-proj-list">${projOpts}</datalist>
+        <select style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);max-width:260px" onchange="switchProjPage(this.value)">
+          ${selectOpts}
+        </select>
       </div>
       <span id="pp-saved" class="pp-saved">Saved ✓</span>
     </div>
@@ -2207,10 +2213,18 @@ function renderProjPage(){
 }
 
 function onProjPageSearch(val){
-  // Find project by display name match
+  if(!val||val.length<2)return;
+  // Match by full display string or partial name — handles projects with dashes in names
+  const vl=val.toLowerCase();
   const match=projects.find(p=>{
     const display=p.name+(p.so_number?' — '+p.so_number:'');
-    return display===val||p.name===val;
+    if(display.toLowerCase()===vl)return true;
+    if(p.name.toLowerCase()===vl)return true;
+    if(p.so_number&&val.includes(p.so_number))return true;
+    return false;
+  })||projects.find(p=>{ // fallback: starts-with match
+    const display=p.name+(p.so_number?' — '+p.so_number:'');
+    return display.toLowerCase().startsWith(vl)||p.name.toLowerCase().startsWith(vl);
   });
   if(match&&match.id!==ppProjId){
     switchProjPage(match.id);
@@ -2417,6 +2431,19 @@ function renderProjPageBody(){
             <thead><tr><th>Milestone</th><th>Date</th><th>Status</th><th style="width:80px"></th></tr></thead>
             <tbody>${msHtml||'<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--gray-300)">No milestones — add them in Project Overview</td></tr>'}</tbody>
           </table>
+        </div>
+        <div style="padding:12px 16px;border-top:1px solid var(--gray-100);background:var(--gray-50)">
+          <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Installation dates</div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;align-items:end">
+            <div><div style="font-size:10px;color:var(--gray-500);margin-bottom:3px">Option 1</div>
+              <input type="date" id="pp-inst-opt1" value="${proj.install_date_opt1||''}" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%;background:var(--white)" onchange="saveProjInstDates('${proj.id}')"></div>
+            <div><div style="font-size:10px;color:var(--gray-500);margin-bottom:3px">Option 2</div>
+              <input type="date" id="pp-inst-opt2" value="${proj.install_date_opt2||''}" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%;background:var(--white)" onchange="saveProjInstDates('${proj.id}')"></div>
+            <div><div style="font-size:10px;color:var(--gray-500);margin-bottom:3px">Option 3</div>
+              <input type="date" id="pp-inst-opt3" value="${proj.install_date_opt3||''}" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%;background:var(--white)" onchange="saveProjInstDates('${proj.id}')"></div>
+            <div><div style="font-size:10px;color:var(--success);font-weight:600;margin-bottom:3px">✓ Confirmed</div>
+              <input type="date" id="pp-inst-confirmed" value="${proj.install_date_confirmed||''}" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:2px solid var(--success);border-radius:var(--radius);width:100%;background:#f0fdf4" onchange="saveProjInstDates('${proj.id}')"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -2744,14 +2771,7 @@ function renderInstallForm(){
     <div class="doc-section-lbl">Dates (auto-filled)</div>
     ${fld('if-ship','Shipping date','','','text',shipDate)}
     ${fld('if-del','Delivery date','','','text',delivDate)}
-    <div class="field full"><label>Installation date options <span style="font-size:10px;color:var(--gray-400);font-weight:400">— provide range or multiple options</span></label>
-      <input id="if-inst-opt1" type="date" value="${instDate?new Date(instDate).toISOString().split('T')[0]:''}" style="font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);margin-bottom:4px;width:100%" placeholder="Option 1">
-      <input id="if-inst-opt2" type="date" style="font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);margin-bottom:4px;width:100%" placeholder="Option 2 (optional)">
-      <input id="if-inst-opt3" type="date" style="font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%" placeholder="Option 3 (optional)">
-    </div>
-    <div class="field"><label>Confirmed installation date</label>
-      <input id="if-inst-confirmed" type="date" style="font-size:12px;padding:6px 8px;border:1px solid var(--success);border-radius:var(--radius);width:100%;background:#f0fdf4" placeholder="Confirmed date">
-    </div>
+    ${fld('if-inst','Requested installation date','','','text',instDate)}
     ${fld('if-vinyl','Vinyl date','','','text',vinylDate)}
     <div class="doc-section-lbl">Unit configuration</div>
     ${fld('if-cp','Channel Partner (CP)','e.g. Direct, TD Synnex...','')}
@@ -2908,10 +2928,9 @@ Account Manager: ${getDocProj()?.account_manager||''}
 3. End Client (CX): ${g('if-client')}
 4. Shipping Date: ${g('if-ship')}
 5. Delivery Date: ${g('if-del')}
-6. Installation Date Options: ${['if-inst-opt1','if-inst-opt2','if-inst-opt3'].map(id=>safeDate(id)).filter(Boolean).join(' / ')||'TBD'}
-7. Confirmed Installation Date: ${safeDate('if-inst-confirmed')||'Pending confirmation'}
-8. Vinyl Date: ${g('if-vinyl')}
-8. Kiosk Type: ${g('if-kiosk')}
+6. Requested Installation Date: ${g('if-inst')}
+7. Vinyl Date: ${g('if-vinyl')}
+7. Kiosk Type: ${g('if-kiosk')}
 9. Vending Unit Elevator: ${g('if-elevator')}
 10. Screen Size: ${g('if-screen')}
 11. Workflow: ${g('if-workflow')}
@@ -3460,7 +3479,19 @@ function applyTemplateToIntake(){
 
 // ── EXPORT PROJECT PAGE ────────────────────────────────────
 // ── LINKS POPOUT ───────────────────────────────────────────
-// ── LINKS POPOUT ───────────────────────────────────────────
+async function saveProjInstDates(projId){
+  const updates={
+    install_date_opt1:document.getElementById('pp-inst-opt1')?.value||null,
+    install_date_opt2:document.getElementById('pp-inst-opt2')?.value||null,
+    install_date_opt3:document.getElementById('pp-inst-opt3')?.value||null,
+    install_date_confirmed:document.getElementById('pp-inst-confirmed')?.value||null,
+  };
+  await sb.from('projects').update(updates).eq('id',projId);
+  // Update local projects array
+  const p=projects.find(x=>x.id===projId);
+  if(p)Object.assign(p,updates);
+  showToast('Installation dates saved ✓');
+}
 function openLinksPopout(){
   const proj=projects.find(p=>p.id===ppProjId)||{};
   const ALL_LINKS=[
