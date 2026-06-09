@@ -374,6 +374,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
           <button class="nav-item" id="ni-gendocs" onclick="setTab('gendocs')">📄 Generate docs</button>
           <button class="nav-item" id="ni-templates" onclick="setTab('templates')">📐 Templates</button>
           <button class="nav-item" id="ni-intake" onclick="setTab('intake')">➕ New project</button>
+          <button class="nav-item" id="ni-settings" onclick="setTab('settings')">⚙️ Settings</button>
         </div>
       </div>
       <div class="header-right">
@@ -404,6 +405,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
     <div id="tab-gendocs" style="display:none"></div>
     <div id="tab-templates" style="display:none"></div>
     <div id="tab-intake" style="display:none"></div>
+    <div id="tab-settings" style="display:none"></div>
   </div>
 </div>
 
@@ -420,7 +422,7 @@ const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod'
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
 const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date'];
 
-let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={};
+let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={};
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
 let currentUser=null,currentUserName='';
 let vinylFilter={status:'',search:'',dateFrom:'',dateTo:'',pm:''};
@@ -470,9 +472,27 @@ function isMilestoneDone(m){
   if(ci?.checked&&ci?.stoplight==='green')return true;
   return false;
 }
+function isMilestoneEffectivelyDone(m){
+  // For overdue/display purposes — includes past dates as done
+  if(isMilestoneDone(m))return true;
+  // Past date with no red/yellow flag = treat as done
+  if(m.date&&daysDiff(m.date)<0){
+    const ci=checkinStatus[m.id];
+    // Only treat as overdue if dept lead flagged it red/yellow
+    if(!ci?.stoplight||ci.stoplight==='green')return true;
+  }
+  return false;
+}
 function isMilestoneOverdue(m){
-  if(isMilestoneDone(m))return false;
-  return m.date&&daysDiff(m.date)<0;
+  if(isMilestoneEffectivelyDone(m))return false;
+  // Only overdue if past date AND dept flagged it as a problem
+  if(!m.date||daysDiff(m.date)>=0)return false;
+  const ci=checkinStatus[m.id];
+  // Past date + red/yellow stoplight = definitely overdue
+  if(ci?.stoplight==='red'||ci?.stoplight==='yellow')return true;
+  // Past date + manually NOT marked done + no stoplight = overdue
+  if(!milestoneDone[m.id]&&!ci?.checked)return true;
+  return false;
 }
 function isMilestoneAtRisk(m){
   if(isMilestoneDone(m))return false;
@@ -586,18 +606,18 @@ function setTab(tab){
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','overview','projpage','week','production','quality','shipping','installation','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake'];
+  const ALL=['glance','overview','projpage','week','production','quality','shipping','installation','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
 function renderTab(){
-  const m={glance:renderGlance,overview:renderOverview,projpage:renderProjPage,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake};
+  const m={glance:renderGlance,overview:renderOverview,projpage:renderProjPage,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings};
   if(m[currentTab])m[currentTab]();
 }
 
 // ── DATA ───────────────────────────────────────────────────
 async function loadAll(){
-  const[pr,ms,lg,ci,md,mh,ah]=await Promise.all([
+  const[pr,ms,lg,ci,md,mh,ah,as_]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
@@ -605,6 +625,7 @@ async function loadAll(){
     sb.from('milestone_done').select('*'),
     sb.from('milestone_history').select('*').order('changed_at',{ascending:true}),
     sb.from('adhoc_schedule').select('*').order('created_at'),
+    sb.from('app_settings').select('*'),
   ]);
   projects=pr.data||[];milestones=ms.data||[];activityLog=lg.data||[];
   checkinStatus={};(ci.data||[]).forEach(c=>{checkinStatus[c.milestone_id]=c;});
@@ -628,6 +649,7 @@ async function loadAll(){
   });
   sortByDate(adHocRows.shipping,'shipDate');
   sortByDate(adHocRows.installation,'installDate');
+  appSettings={};(as_.data||[]).forEach(s=>{appSettings[s.key]=s.value;});
   if(projects.length&&!selectedProjId)selectedProjId=projects[0].id;
 
   // Load vinyl schedule from Supabase, then merge with project data
@@ -788,7 +810,7 @@ function renderGlance(){
         stageMs=milestones.filter(m=>m.project_id===p.id&&stageMsKeys.includes(m.key)&&m.date);
       }
       const st=stageStatus(sd,ed);
-      const allDone=stageMs.length>0&&stageMs.every(m=>isMilestoneDone(m));
+      const allDone=stageMs.length>0&&stageMs.every(m=>isMilestoneEffectivelyDone(m));
       const hasOverdue=!allDone&&stageMs.some(m=>isMilestoneOverdue(m));
       const hasEscalation=!allDone&&stageMs.some(m=>isMilestoneEscalation(m));
       const hasRisk=!allDone&&stageMs.some(m=>isMilestoneAtRisk(m));
@@ -867,7 +889,8 @@ function renderOverview(){
   const proj=activeProjects('overview').find(p=>p.id===selectedProjId)||projects.find(p=>p.id===selectedProjId);
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
   const msHtml=projMs.map(m=>{
-    const isDone=isMilestoneDone(m);
+    const isDone=isMilestoneEffectivelyDone(m);
+    const isManualDone=isMilestoneDone(m);
     const isOverdue=isMilestoneOverdue(m);
     const st=isDone?{cls:'done',dcls:'done',txt:'Done ✓'}:isOverdue?{cls:'overdue',dcls:'overdue',txt:Math.abs(daysDiff(m.date))+'d overdue'}:msStatus(m.date);
     const ci=checkinStatus[m.id];
@@ -879,7 +902,7 @@ function renderOverview(){
     return`<div class="ms-item ${st.cls}" style="${isDone?'opacity:0.75':''}">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:4px">
         <div class="ms-type">${TYPE_LBL[m.key]||m.key}</div>
-        <button onclick="toggleMilestoneDone('${m.id}','${m.project_id}',event)" style="background:${isDone?'var(--success)':'transparent'};border:1px solid ${isDone?'var(--success)':'var(--gray-300)'};border-radius:10px;padding:1px 7px;font-size:10px;cursor:pointer;color:${isDone?'white':'var(--gray-500)'};font-family:var(--font);flex-shrink:0">${isDone?'✓ Done':'Mark done'}</button>
+        <button onclick="toggleMilestoneDone('${m.id}','${m.project_id}',event)" style="background:${isManualDone?'var(--success)':'transparent'};border:1px solid ${isManualDone?'var(--success)':'var(--gray-300)'};border-radius:10px;padding:1px 7px;font-size:10px;cursor:pointer;color:${isManualDone?'white':'var(--gray-500)'};font-family:var(--font);flex-shrink:0">${isManualDone?'✓ Done':'Mark done'}</button>
       </div>
       <div class="ms-label" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')" style="cursor:pointer">${m.label}${slDot}${slippageTag}</div>
       <div class="ms-date" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')" style="cursor:pointer">${fmtFull(m.date)}</div>
@@ -1060,10 +1083,10 @@ function buildGantt(startKeys,endKeys,segsFn,title,legend){
 function renderDeptView(dept){
   const el=document.getElementById('tab-'+dept);
   const cfg={
-    production:{title:'Production schedule',startKey:'production-start',endKey:'production-end',color:'#7c3aed',cols:['Project','SO','Client','Prod start','Prod end','Duration','Status']},
-    quality:{title:'Quality / QA schedule',startKey:'quality-start',endKey:'quality-end',color:'#d97706',cols:['Project','SO','Client','QA start','QA end','Duration','Vinyl','UAT','Status']},
-    shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO','Client','Pack & ship','Delivery','Status','']},
-    installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO','Client','Training','Installation','Status','']},
+    production:{title:'Production schedule',startKey:'production-start',endKey:'production-end',color:'#7c3aed',cols:['Project','SO','Client','PM','Prod start','Prod end','Duration','Status']},
+    quality:{title:'Quality / QA schedule',startKey:'quality-start',endKey:'quality-end',color:'#d97706',cols:['Project','SO','Client','PM','QA start','QA end','Duration','Vinyl','UAT','Status']},
+    shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO','Client','PM','Pack & ship','Delivery','Status','']},
+    installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO','Client','PM','Training','Installation','Status','']},
   };
   const c=cfg[dept];
   let ganttHtml='';
@@ -1090,7 +1113,7 @@ function renderDeptView(dept){
     else if(dept==='quality'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'vinyl'))+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'uat'))+'</td>';}
     else if(dept==='shipping'){extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'delivery'))+'</td>';}
     else if(dept==='installation'){extra='<td class="date-cell">'+fmt(getMsDate(p.id,'training'))+'</td><td class="date-cell">'+fmt(sd)+'</td>';}
-    const html='<tr><td style="font-weight:500">'+p.name+'</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+(hasFilter?'<td></td>':'')+'</tr>';
+    const html='<tr><td style="font-weight:500">'+p.name+'</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+(hasFilter?'<td></td>':'')+'</tr>';
     return{_d:sd||'',html};
   };
 
@@ -1673,14 +1696,7 @@ function renderIntake(){
       <div class="field"><label>Channel Partner (CP)</label><input id="i-cp" placeholder="e.g. Direct, TD Synnex..."></div>
       <div class="field full"><label>Product type / Form factor <span style="font-size:10px;color:var(--gray-400);font-weight:400">— select all that apply</span></label>
         <select id="i-type" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:120px">
-          <option>SparkXL V8</option><option>SparkXL V7</option>
-          <option>18" Control Locker</option><option>18" Add-on Locker</option>
-          <option>Companion</option><option>10" Smart Companion</option><option>15" Smart Companion</option>
-          <option>Stand-up TED</option><option>Sit-down TED</option><option>TVM</option>
-          <option>Smart Drawer</option><option>Mini Drawer</option>
-          <option>Stuff Station Lite</option><option>Stuff Station Standard</option><option>Stuff Station Plus</option>
-          <option>GrabnGo</option><option>SKD 2-Hopper</option><option>SKD 4-Hopper</option>
-          <option>SparkXL w/ Ted Side Panel</option>
+          ${getProductTypes().map(t=>`<option>${t}</option>`).join('')}
         </select>
         <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
       </div>
@@ -2143,7 +2159,8 @@ function renderProjPageBody(){
 
   // Milestones from hub — show ALL milestones not just preset keys
   const msHtml=pMs.sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(m=>{
-    const isDone=isMilestoneDone(m);
+    const isDone=isMilestoneEffectivelyDone(m);
+    const isManualDone=isMilestoneDone(m);
     const isOverdue=isMilestoneOverdue(m);
     const isEscalation=isMilestoneEscalation(m);
     const isAtRisk=isMilestoneAtRisk(m);
@@ -2164,7 +2181,7 @@ function renderProjPageBody(){
       <td><span class="status-chip ${chip}">${lbl}</span></td>
       <td style="display:flex;gap:4px;align-items:center">
         <button class="pp-del" style="color:var(--blue);font-size:11px" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')">edit</button>
-        <button onclick="toggleMilestoneDone('${m.id}','${ppProjId}',event)" style="background:${isDone?'var(--success)':'transparent'};border:1px solid ${isDone?'var(--success)':'var(--gray-300)'};border-radius:10px;padding:1px 6px;font-size:10px;cursor:pointer;color:${isDone?'white':'var(--gray-500)'};font-family:var(--font)">${isDone?'✓':'done'}</button>
+        <button onclick="toggleMilestoneDone('${m.id}','${ppProjId}',event)" style="background:${isManualDone?'var(--success)':'transparent'};border:1px solid ${isManualDone?'var(--success)':'var(--gray-300)'};border-radius:10px;padding:1px 6px;font-size:10px;cursor:pointer;color:${isManualDone?'white':'var(--gray-500)'};font-family:var(--font)">${isManualDone?'✓':'done'}</button>
       </td>
     </tr>`;
   }).join('');
@@ -3004,6 +3021,73 @@ async function removeAdHoc(dept,idx){
   }
   adHocRows[dept].splice(idx,1);
   renderDeptView(dept);showToast('Removed');
+}
+
+// ── SETTINGS ──────────────────────────────────────────────
+const DEFAULT_PRODUCT_TYPES=['SparkXL V8','SparkXL V7','18" Control Locker','18" Add-on Locker','Companion','10" Smart Companion','15" Smart Companion','Stand-up TED','Sit-down TED','TVM','Smart Drawer','Mini Drawer','Stuff Station Lite','Stuff Station Standard','Stuff Station Plus','GrabnGo','SKD 2-Hopper','SKD 4-Hopper','SparkXL w/ Ted Side Panel'];
+function getProductTypes(){return appSettings['product_types']||DEFAULT_PRODUCT_TYPES;}
+
+function renderSettings(){
+  const el=document.getElementById('tab-settings');
+  const types=getProductTypes();
+  el.innerHTML=`
+    <div class="section" style="max-width:700px">
+      <div class="section-head">
+        <div class="section-title">⚙️ Settings</div>
+        <div style="font-size:12px;color:var(--gray-500)">Manage lists used across the hub</div>
+      </div>
+      <div style="padding:1.5rem">
+        <div style="font-size:14px;font-weight:600;margin-bottom:4px">Product types / Form factors</div>
+        <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">These appear in the New Project form.</div>
+        <div id="pt-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+          ${types.map((t,i)=>`
+            <div style="display:flex;align-items:center;gap:8px">
+              <input value="${t.replace(/"/g,'&quot;')}" id="pt-val-${i}" style="flex:1;font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" oninput="ptUpdate(${i},this.value)">
+              <button onclick="ptRemove(${i})" style="background:none;border:1px solid var(--gray-200);border-radius:var(--radius);padding:5px 10px;cursor:pointer;color:var(--gray-400)">✕</button>
+            </div>`).join('')}
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:14px">
+          <input id="pt-new" placeholder="Add new product type..." style="flex:1;font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onkeydown="if(event.key==='Enter')ptAdd()">
+          <button class="btn btn-primary" onclick="ptAdd()">+ Add</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-primary" onclick="ptSave()">💾 Save changes</button>
+          <span id="pt-saved" style="font-size:11px;color:var(--success);display:none">✓ Saved</span>
+        </div>
+      </div>
+    </div>`;
+}
+
+let _ptList=null;
+function getPtList(){if(!_ptList)_ptList=[...getProductTypes()];return _ptList;}
+function ptUpdate(i,val){getPtList()[i]=val;}
+function ptRemove(i){
+  // Read all current input values first
+  const cur=getPtList().map((t,j)=>{const inp=document.getElementById('pt-val-'+j);return inp?inp.value.trim():t;}).filter(Boolean);
+  cur.splice(i,1);
+  _ptList=cur;
+  appSettings['product_types']=cur;
+  renderSettings();
+}
+function ptAdd(){
+  const inp=document.getElementById('pt-new');
+  const val=(inp?.value||'').trim();
+  if(!val)return;
+  const cur=getPtList().map((t,j)=>{const el=document.getElementById('pt-val-'+j);return el?el.value.trim():t;}).filter(Boolean);
+  cur.push(val);
+  _ptList=cur;
+  appSettings['product_types']=cur;
+  if(inp)inp.value='';
+  renderSettings();
+}
+async function ptSave(){
+  const list=getPtList().map((t,i)=>{const inp=document.getElementById('pt-val-'+i);return inp?inp.value.trim():t;}).filter(Boolean);
+  _ptList=list;
+  appSettings['product_types']=list;
+  await sb.from('app_settings').upsert({key:'product_types',value:list,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
+  const saved=document.getElementById('pt-saved');
+  if(saved){saved.style.display='block';setTimeout(()=>{saved.style.display='none';},2500);}
+  showToast('Product types saved ✓');
 }
 
 function toggleNotes(id){
