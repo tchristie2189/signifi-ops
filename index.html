@@ -1220,7 +1220,7 @@ function renderDeptView(dept){
     '<div class="section">'+
     '<div class="section-head">'+
     '<div class="section-title" style="border-left:3px solid '+c.color+';padding-left:8px">'+c.title+'</div>'+
-    '<div style="display:flex;gap:7px;align-items:center">'+pmDropdown('renderDeptView(\"'+dept+'\")') + hideCompletedBtn(dept)+'<button class="btn-export" onclick="exportToExcel()">&#8675; Excel</button></div>'+
+    '<div style="display:flex;gap:7px;align-items:center">'+pmDropdown("renderDeptView('"+dept+"')") + hideCompletedBtn(dept)+'<button class="btn-export" onclick="exportToExcel()">&#8675; Excel</button></div>'+
     '</div>'+filterBar+
     '<div class="dept-table-wrap"><table class="dept-table"><thead><tr>'+
     c.cols.map(col=>'<th>'+col+'</th>').join('')+
@@ -2183,12 +2183,14 @@ function renderProjPage(){
   if(!projects.length){el.innerHTML='<div class="empty-state">No projects yet.</div>';return;}
   if(!ppProjId)ppProjId=selectedProjId||projects[0].id;
   const sortedProjs=[...projects].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const filteredProjList=pmFilter?sortedProjs.filter(p=>p.pm===pmFilter):sortedProjs;
+  if(pmFilter&&ppProjId&&!filteredProjList.find(p=>p.id===ppProjId)&&filteredProjList.length){ppProjId=filteredProjList[0].id;selectedProjId=ppProjId;}
   // Build a name->id map for the search
   const projNameMap={};
   sortedProjs.forEach(p=>{projNameMap[p.name+(p.so_number?' — '+p.so_number:'')]=p.id;});
   // Datalist uses display text as value so browser shows names not UUIDs
-  const projOpts=sortedProjs.map(p=>`<option value="${p.name+(p.so_number?' — '+p.so_number:'')}">`).join('');
-  const selectOpts=sortedProjs.map(p=>`<option value="${p.id}"${p.id===ppProjId?' selected':''}>${p.name+(p.so_number?' — '+p.so_number:'')}</option>`).join('');
+  const projOpts=filteredProjList.map(p=>`<option value="${p.name+(p.so_number?' — '+p.so_number:'')}">`).join('');
+  const selectOpts=filteredProjList.map(p=>`<option value="${p.id}"${p.id===ppProjId?' selected':''}>${p.name+(p.so_number?' — '+p.so_number:'')}</option>`).join('');
   el.innerHTML=`
     <div class="proj-sel-bar">
       <label>Project</label>
@@ -2199,6 +2201,7 @@ function renderProjPage(){
           ${selectOpts}
         </select>
       </div>
+      ${pmDropdown('renderProjPage')}
       <span id="pp-saved" class="pp-saved">Saved ✓</span>
     </div>
     <div id="pp-body"><div style="text-align:center;padding:3rem;color:var(--gray-500)"><div style="font-size:20px;margin-bottom:8px">⏳</div>Loading project page...</div></div>`;
