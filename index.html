@@ -3597,49 +3597,69 @@ function openClientExport(){
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>${proj.name} — Project Status</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'DM Sans',sans-serif;background:#f1f5f9;color:#0f172a;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.page{max-width:1100px;margin:0 auto;padding:2rem 1.5rem}
-.header{background:#0f172a;border-radius:12px;padding:1.75rem 2rem;margin-bottom:1.25rem;color:white;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
-.header-left{flex:1;min-width:0}
-.logo{font-size:10px;font-weight:700;letter-spacing:0.18em;color:#64748b;text-transform:uppercase;margin-bottom:8px}
-.proj-name{font-size:22px;font-weight:700;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.meta{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:#94a3b8}
-.status-pill{padding:5px 14px;border-radius:20px;font-size:12px;font-weight:700;white-space:nowrap;flex-shrink:0}
-.two-col{display:grid;grid-template-columns:1fr 340px;gap:1.25rem;align-items:start}
-.card{background:white;border:1px solid #e2e8f0;border-radius:10px;padding:1.25rem;margin-bottom:1.25rem}
-.card:last-child{margin-bottom:0}
-.card-title{font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #f1f5f9}
-.progress-bar{height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;margin-top:5px}
-.progress-fill{height:100%;background:#22c55e;border-radius:4px}
-.ms-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #f8fafc}
-.ms-row:last-child{border-bottom:none}
-.ms-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
-.ms-name{flex:1;font-size:12px;font-weight:500;color:#334155}
-.ms-date{font-size:11px;color:#94a3b8;font-family:monospace;white-space:nowrap}
-.ms-chip{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;white-space:nowrap}
-.team-row{padding:8px 0;border-bottom:1px solid #f8fafc}
+body{font-family:'DM Sans',sans-serif;background:#f1f5f9;color:#0f172a;-webkit-print-color-adjust:exact;print-color-adjust:exact;font-size:13px}
+.page{max-width:1160px;margin:0 auto;padding:1.5rem}
+/* HEADER */
+.header{background:#0c1120;border-radius:12px;padding:1.5rem 2rem;margin-bottom:1.25rem;color:white;display:flex;align-items:center;justify-content:space-between;gap:1rem}
+.logo{font-size:9px;font-weight:700;letter-spacing:0.18em;color:#475569;text-transform:uppercase;margin-bottom:6px}
+.proj-name{font-size:22px;font-weight:700;margin-bottom:5px}
+.meta{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:#64748b;align-items:center}
+.meta span{display:flex;align-items:center;gap:4px}
+.status-pill{padding:5px 16px;border-radius:20px;font-size:12px;font-weight:700;white-space:nowrap;flex-shrink:0}
+/* SUMMARY */
+.summary-card{background:white;border:1px solid #e2e8f0;border-radius:10px;padding:1.25rem 1.5rem;margin-bottom:1.25rem}
+.card-label{font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px}
+/* PROGRESS */
+.progress-section{background:white;border:1px solid #e2e8f0;border-radius:10px;padding:1.25rem 1.5rem;margin-bottom:1.25rem}
+.progress-nums{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.progress-big{font-size:24px;font-weight:700;color:#0f172a}
+.progress-sub{font-size:12px;color:#94a3b8}
+.progress-pct{font-size:24px;font-weight:700;color:#0f172a}
+.bar{height:10px;background:#f1f5f9;border-radius:5px;overflow:hidden}
+.bar-fill{height:100%;background:#22c55e;border-radius:5px}
+/* GANTT */
+.gantt-section{background:white;border:1px solid #e2e8f0;border-radius:10px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;overflow:hidden}
+.gantt-wrap{overflow-x:auto}
+.gantt-table{border-collapse:collapse;min-width:700px;width:100%}
+.gantt-table th{font-size:9px;font-weight:600;color:#94a3b8;text-align:center;padding:4px 2px;border-bottom:1px solid #f1f5f9;min-width:28px}
+.gantt-table td.label-col{font-size:11px;font-weight:500;color:#334155;padding:5px 12px 5px 0;white-space:nowrap;min-width:160px}
+.gantt-table td.date-col{font-size:10px;color:#94a3b8;padding:5px 8px 5px 0;white-space:nowrap;font-family:'DM Mono',monospace;min-width:65px}
+.gantt-table td.status-col{padding:5px 10px 5px 0;min-width:70px}
+.gantt-table td.cell{padding:4px 1px;position:relative}
+.chip{font-size:9px;padding:2px 8px;border-radius:10px;font-weight:600;white-space:nowrap;display:inline-block}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;margin-right:7px;vertical-align:middle}
+/* BOTTOM */
+.bottom-row{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem}
+.card{background:white;border:1px solid #e2e8f0;border-radius:10px;padding:1.25rem 1.5rem}
+.deliv-table{width:100%;border-collapse:collapse}
+.deliv-table th{background:#0c1120;color:white;font-size:10px;font-weight:600;text-align:left;padding:8px 12px;letter-spacing:0.04em}
+.deliv-table td{font-size:11px;padding:8px 12px;border-bottom:1px solid #f1f5f9;color:#334155}
+.deliv-table tr:last-child td{border-bottom:none}
+.team-row{padding:8px 0;border-bottom:1px solid #f8fafc;display:flex;align-items:center;gap:10px}
 .team-row:last-child{border-bottom:none}
-.team-role{font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:1px}
-.team-name{font-size:12px;font-weight:600}
-.team-org{font-size:11px;color:#64748b}
+.team-avatar{width:32px;height:32px;border-radius:50%;background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:#475569;flex-shrink:0}
+.team-role{font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em}
+.team-name{font-size:12px;font-weight:600;color:#0f172a}
 .link-row{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f8fafc}
 .link-row:last-child{border-bottom:none}
-.footer{text-align:center;font-size:10px;color:#cbd5e1;padding:1.25rem 0;margin-top:0.5rem}
+.footer{text-align:center;font-size:10px;color:#cbd5e1;padding:1rem 0}
 @media print{
   body{background:white}
-  .page{padding:0.5rem}
-  .two-col{grid-template-columns:1fr 300px}
+  .page{padding:0.5rem;max-width:100%}
+  .bottom-row{grid-template-columns:1fr 1fr}
 }
 </style>
 </head>
 <body>
 <div class="page">
+
+  <!-- HEADER -->
   <div class="header">
-    <div class="header-left">
-      <div class="logo">Signifi Solutions — Project Status</div>
+    <div>
+      <div class="logo">Signifi Solutions — Project Status Report</div>
       <div class="proj-name">${proj.name}</div>
       <div class="meta">
         ${proj.so_number?`<span>📋 SO: ${proj.so_number}</span>`:''}
@@ -3652,34 +3672,90 @@ body{font-family:'DM Sans',sans-serif;background:#f1f5f9;color:#0f172a;-webkit-p
     <span class="status-pill" style="background:${statusBg};color:${statusColor}">${statusLbl}</span>
   </div>
 
-  ${summary?`<div class="card" style="margin-bottom:1.25rem"><div class="card-title">Project Summary</div><p style="font-size:13px;line-height:1.65;color:#475569">${summary}</p></div>`:''}
+  <!-- SUMMARY -->
+  ${summary?`<div class="summary-card"><div class="card-label">Project Summary</div><p style="line-height:1.65;color:#475569">${summary.replace(/\n/g,'<br>')}</p></div>`:''}
 
-  <div class="two-col">
-    <!-- LEFT: Progress + Timeline -->
-    <div>
-      <div class="card">
-        <div class="card-title">Overall Progress</div>
-        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
-          <span style="color:#64748b">${done} of ${total} milestones complete</span>
-          <span style="font-weight:700">${pct}%</span>
-        </div>
-        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
-      </div>
-      ${pMs.filter(m=>m.date).length?`<div class="card"><div class="card-title">Project Timeline</div>${pMs.filter(m=>m.date).map(m=>{
-        const isDone=isMilestoneEffectivelyDone(m);
-        const d=daysDiff(m.date);
-        const dotColor=isDone?'#22c55e':d===0?'#C8102E':d<0?'#f59e0b':'#cbd5e1';
-        const chipBg=isDone?'#dcfce7':d===0?'#fee2e2':d<=7&&d>0?'#eff6ff':'#f1f5f9';
-        const chipColor=isDone?'#166534':d===0?'#991b1b':d<=7&&d>0?'#1d4ed8':'#64748b';
-        const chipLbl=isDone?'Done':d===0?'Today':d<0?Math.abs(d)+'d ago':fmt(m.date);
-        return`<div class="ms-row"><div class="ms-dot" style="background:${dotColor}"></div><div class="ms-name">${m.label}</div><div class="ms-date">${fmt(m.date)}</div><span class="ms-chip" style="background:${chipBg};color:${chipColor}">${chipLbl}</span></div>`;
-      }).join('')}</div>`:''}
+  <!-- PROGRESS -->
+  <div class="progress-section">
+    <div class="card-label">Overall Progress</div>
+    <div class="progress-nums">
+      <div><span class="progress-big">${done}</span> <span class="progress-sub">of ${total} milestones complete</span></div>
+      <span class="progress-pct">${pct}%</span>
+    </div>
+    <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
+  </div>
+
+  <!-- GANTT TIMELINE -->
+  ${(()=>{
+    const msDated=pMs.filter(m=>m.date);
+    if(!msDated.length)return'';
+    // Build date range
+    const allDates=msDated.map(m=>new Date(m.date+'T00:00:00'));
+    const minD=new Date(Math.min(...allDates));const maxD=new Date(Math.max(...allDates));
+    minD.setDate(minD.getDate()-3);maxD.setDate(maxD.getDate()+7);
+    // Build weekday columns
+    const cols=[];let cur=new Date(minD);
+    while(cur<=maxD){if(cur.getDay()!==0&&cur.getDay()!==6)cols.push(new Date(cur));cur.setDate(cur.getDate()+1);}
+    const t=today();
+    // Month headers
+    const monthCells=[];let lastMonth=-1,monthSpan=0,monthStart=0;
+    cols.forEach((d,i)=>{
+      if(d.getMonth()!==lastMonth){
+        if(lastMonth>=0)monthCells.push({label:new Date(2026,lastMonth,1).toLocaleDateString('en-US',{month:'short'}),span:monthSpan,start:monthStart});
+        lastMonth=d.getMonth();monthSpan=1;monthStart=i;
+      } else monthSpan++;
+    });
+    if(lastMonth>=0)monthCells.push({label:new Date(2026,lastMonth,1).toLocaleDateString('en-US',{month:'short'}),span:monthSpan,start:monthStart});
+    // Colour per milestone key
+    const COL={'po-release':'#8b5cf6','arrival':'#8b5cf6','production-start':'#7c3aed','production-end':'#7c3aed','other':'#0891b2','quality-start':'#d97706','quality-end':'#d97706','vinyl':'#db2777','uat':'#16a34a','shipping':'#059669','delivery':'#059669','training':'#f59e0b','installation':'#e11d48'};
+    const monthRow='<tr><td class="label-col" style="font-size:9px;color:#94a3b8;padding-bottom:2px"></td><td class="date-col"></td><td class="status-col"></td>'+monthCells.map(mc=>`<th colspan="${mc.span}" style="text-align:left;font-size:9px;font-weight:700;color:#64748b;padding:2px 0 4px 3px;letter-spacing:0.06em;text-transform:uppercase">${mc.label}</th>`).join('')+'</tr>';
+    const dayRow='<tr style="border-bottom:1px solid #f1f5f9"><td class="label-col"></td><td class="date-col"></td><td class="status-col"></td>'+cols.map(d=>{const isT=d.getTime()===t.getTime();return`<th style="${isT?'color:#C8102E;font-weight:700':''}">${d.getDate()}</th>`;}).join('')+'</tr>';
+    const msGanttRows=msDated.map(m=>{
+      const isDone=isMilestoneEffectivelyDone(m);
+      const d=daysDiff(m.date);
+      const chipBg=isDone?'#dcfce7':d<0?'#fef3c7':d===0?'#fee2e2':d<=7?'#eff6ff':'#f1f5f9';
+      const chipColor=isDone?'#166534':d<0?'#92400e':d===0?'#991b1b':d<=7?'#1d4ed8':'#64748b';
+      const chipLbl=isDone?'Done':d<0?Math.abs(d)+'d ago':d===0?'Today':d+'d';
+      const barColor=COL[m.key]||'#8b5cf6';
+      const mDate=new Date(m.date+'T00:00:00');
+      const cells=cols.map(cd=>{
+        const isT=sameDay(cd,t);
+        const onMs=sameDay(cd,mDate);
+        const bg=onMs?barColor:isT?'#fff0f0':'transparent';
+        const border=isT?'border-left:1.5px solid rgba(200,16,46,0.3)':'';
+        return`<td class="cell" style="background:${bg};${border};border-radius:${onMs?'3px':'0'}">${onMs?`<div style="height:16px;width:100%;border-radius:3px"></div>`:isT?`<div style="height:16px;border-left:1.5px solid rgba(200,16,46,0.25)"></div>`:''}</td>`;
+      }).join('');
+      return`<tr style="border-bottom:1px solid #f8fafc">
+        <td class="label-col"><span class="dot" style="background:${isDone?'#22c55e':d<0?'#f59e0b':barColor}"></span>${m.label}</td>
+        <td class="date-col">${fmt(m.date)}</td>
+        <td class="status-col"><span class="chip" style="background:${chipBg};color:${chipColor}">${chipLbl}</span></td>
+        ${cells}
+      </tr>`;
+    }).join('');
+    return`<div class="gantt-section"><div class="card-label">Project Timeline</div><div class="gantt-wrap"><table class="gantt-table"><thead>${monthRow}${dayRow}</thead><tbody>${msGanttRows}</tbody></table></div></div>`;
+  })()}
+
+  <!-- BOTTOM ROW -->
+  <div class="bottom-row">
+
+    <!-- CLIENT DELIVERABLES -->
+    <div class="card">
+      <div class="card-label" style="margin-bottom:10px">Client Deliverables</div>
+      <table class="deliv-table">
+        <thead><tr><th>Client Deliverables</th><th>Due Date</th><th>Status</th><th>Notes</th></tr></thead>
+        <tbody>
+          ${pMs.filter(m=>['uat','training','installation','delivery'].includes(m.key)).map(m=>{
+            const isDone=isMilestoneEffectivelyDone(m);
+            return`<tr><td>${m.label}</td><td style="font-family:'DM Mono',monospace">${fmt(m.date)}</td><td><span class="chip" style="background:${isDone?'#dcfce7':'#f1f5f9'};color:${isDone?'#166534':'#64748b'}">${isDone?'Complete':'Pending'}</span></td><td></td></tr>`;
+          }).join('')||`<tr><td colspan="4" style="text-align:center;color:#94a3b8;padding:1rem">No client deliverables set</td></tr>`}
+        </tbody>
+      </table>
     </div>
 
-    <!-- RIGHT: Team + Links -->
+    <!-- TEAM + LINKS -->
     <div>
-      ${teamRows.length?`<div class="card"><div class="card-title">Project Team</div>${teamRows.map(t=>`<div class="team-row"><div class="team-role">${t.role||''}</div><div class="team-name">${t.name}</div>${t.organization?`<div class="team-org">${t.organization}</div>`:''}</div>`).join('')}</div>`:''}
-      ${clientLinks.length?`<div class="card"><div class="card-title">Key Resources</div>${clientLinks.map(l=>`<div class="link-row"><span style="font-size:12px;font-weight:500">${l.label}</span><a href="${l.url}" target="_blank" style="font-size:11px;color:#3b82f6;text-decoration:none;font-weight:600">Open ↗</a></div>`).join('')}</div>`:''}
+      ${teamRows.length?`<div class="card" style="margin-bottom:1.25rem"><div class="card-label" style="margin-bottom:10px">Project Team</div>${teamRows.map(t=>`<div class="team-row"><div class="team-avatar">${(t.name||'?')[0].toUpperCase()}</div><div><div class="team-role">${t.role||''}</div><div class="team-name">${t.name}</div></div></div>`).join('')}</div>`:''}
+      ${clientLinks.length?`<div class="card"><div class="card-label" style="margin-bottom:10px">Key Resources</div>${clientLinks.map(l=>`<div class="link-row"><span style="font-size:12px;font-weight:500">${l.label}</span><a href="${l.url}" target="_blank" style="font-size:11px;color:#3b82f6;font-weight:600;text-decoration:none">Open ↗</a></div>`).join('')}</div>`:''}
     </div>
   </div>
 
