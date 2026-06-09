@@ -1136,12 +1136,12 @@ function renderDeptView(dept){
     else{extra='<td class="date-cell">'+fmt(r.trainingDate||r.training_date)+'</td><td class="date-cell">'+fmt(r.installDate||r.install_date)+'</td>';}
     const editOC='openEditAdHoc(&quot;'+dept+'&quot;,'+origIdx+')';
     const delOC='removeAdHoc(&quot;'+dept+'&quot;,'+origIdx+')';
-    const html='<tr style="background:var(--blue-bg)"><td style="font-weight:500">'+r.name+' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px">Ad hoc</span></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+(r.so||'—')+'</td><td>'+(r.client||'—')+'</td>'+extra+'<td><span class="status-chip chip-future">'+(r.status||'Scheduled')+'</span></td><td><button onclick="'+editOC+'" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer">Edit</button> <button onclick="'+delOC+'" style="background:none;border:none;cursor:pointer;color:var(--gray-400)">✕</button></td></tr>';
+    const html='<tr style="background:var(--blue-bg)"><td style="font-weight:500">'+r.name+' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px">Ad hoc</span></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+(r.so||'—')+'</td><td>'+(r.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(r.pm||'—')+'</td>'+extra+'<td><span class="status-chip chip-future">'+(r.status||'Scheduled')+'</span></td><td><button onclick="'+editOC+'" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer">Edit</button> <button onclick="'+delOC+'" style="background:none;border:none;cursor:pointer;color:var(--gray-400)">✕</button></td></tr>';
     return{_d:sd,html};
   };
 
   const projRows=filteredProjects.map(makeRow);
-  const adHoc=hasFilter?(adHocRows[dept]||[]):[];
+  const adHoc=hasFilter?(adHocRows[dept]||[]).filter(r=>!pmFilter||r.pm===pmFilter):[];
   const ahRows=adHoc.map((r,i)=>makeAdHocRow(r,adHocRows[dept].indexOf(r)));
 
   const allItems=hasFilter?[...projRows,...ahRows].sort((a,b)=>{
@@ -2134,8 +2134,8 @@ function renderProjPageBody(){
 
   // Quick links — merge saved project_links table + project record fields (source of truth)
   const LINK_CATS=[
-    {cat:'Meetings',items:[{label:'Kickoff recording',key:'kickoff_rec'},{label:'Meeting minutes',key:'meeting_min'},{label:'Project calendar',key:'proj_cal'}]},
-    {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Project Charter',key:'charter'},{label:'Requirements',key:'requirements'},{label:'Site Survey',key:'site_survey'},{label:'Deployment Plan',key:'deploy_plan'}]},
+    {cat:'Meetings',items:[{label:'Kickoff recording',key:'kickoff_rec'},{label:'Meeting minutes',key:'meeting_min'}]},
+    {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Deployment Plan',key:'deploy_plan'},{label:'Installation Ticket',key:'install_ticket'}]},
     {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira / UI Task',key:'jira'},{label:'QA Task',key:'qa_task'},{label:'Product Template',key:'product_template'},{label:'Badge Reader',key:'badge_reader'},{label:'Employee List',key:'employee_list'},{label:'Facility Site Survey',key:'facility_survey'},{label:'IT Site Survey',key:'it_survey'},{label:'Odoo Task',key:'odoo'},{label:'Vinyl Render Odoo',key:'vinyl_odoo'},{label:'Client Portal',key:'client_portal'}]},
   ];
   // Start with anything saved in project_links table
@@ -2931,6 +2931,7 @@ function openAdHocModal(dept){
           <div class="field"><label>Training date</label><input type="date" id="ah-training"></div>
           <div class="field"><label>Installation date</label><input type="date" id="ah-install"></div>
           `}
+          <div class="field"><label>Project Manager</label><select id="ah-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">Select PM...</option>${['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'].map(pm=>`<option>${pm}</option>`).join('')}</select></div>
           <div class="field full"><label>Notes</label><input id="ah-notes" placeholder="Any special notes..."></div>
         </div>
       </div>
@@ -2951,6 +2952,7 @@ async function saveAdHoc(dept){
     client:document.getElementById('ah-client')?.value.trim()||null,
     status:document.getElementById('ah-status')?.value||'Scheduled',
     notes:document.getElementById('ah-notes')?.value.trim()||null,
+    pm:document.getElementById('ah-pm')?.value||null,
     created_by:currentUserName,
   };
   if(isShip){
@@ -2992,6 +2994,7 @@ function openEditAdHoc(dept,idx){
           <div class="field"><label>Training date</label><input type="date" id="eh-training" value="${trainDate}"></div>
           <div class="field"><label>Installation date</label><input type="date" id="eh-install" value="${instDate}"></div>
           `}
+          <div class="field"><label>Project Manager</label><select id="eh-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">Select PM...</option>${['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'].map(pm=>`<option${pm===(r.pm||'')?' selected':''}>${pm}</option>`).join('')}</select></div>
           <div class="field full"><label>Notes</label><input id="eh-notes" value="${r.notes||''}" placeholder="Any special notes..."></div>
         </div>
       </div>
@@ -3013,6 +3016,7 @@ async function saveEditAdHoc(dept,idx){
     so:document.getElementById('eh-so')?.value.trim()||null,
     client:document.getElementById('eh-client')?.value.trim()||null,
     status:document.getElementById('eh-status')?.value||'Scheduled',
+    pm:document.getElementById('eh-pm')?.value||null,
     notes:document.getElementById('eh-notes')?.value.trim()||null,
   };
   if(isShip){
