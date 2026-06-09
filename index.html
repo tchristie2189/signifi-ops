@@ -3404,14 +3404,14 @@ table{width:100%;border-collapse:collapse}
 </body>
 </html>`;
 
-  // Download as HTML file instead of popup (avoids popup blocker)
-  const blob=new Blob([html],{type:'text/html'});
-  const url=URL.createObjectURL(blob);
+  // Use data URI to avoid popup blocker and blob restrictions
+  const encoded='data:text/html;charset=utf-8,'+encodeURIComponent(html);
   const a=document.createElement('a');
-  a.href=url;
-  a.download=proj.name.replace(/[^a-z0-9]/gi,'-')+'-status.html';
+  a.href=encoded;
+  a.download=(proj.name.replace(/[^a-z0-9]/gi,'-')+'-status.html').toLowerCase();
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(a);
   showToast('Client export downloaded ✓');
 }
 function exportProjPageExcel(){
