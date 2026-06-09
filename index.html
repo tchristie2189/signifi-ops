@@ -2873,6 +2873,15 @@ function g(id){
 }
 function generateDoc(type){
   try{
+  // Make sure the right form is rendered before generating
+  if(activeDocTab!==type){
+    saveDocFormState();
+    activeDocTab=type;
+    renderGenDocs();
+  }
+  const proj=getDocProj();
+  const safeGet=id=>{const el=document.getElementById(id);return el?el.value.trim():'';};
+  const safeDate=id=>{const el=document.getElementById(id);if(!el||!el.value)return'';try{return fmt(el.value);}catch(e){return el.value;}};
   let text='';
   if(type==='install'){
     const scope=g('if-scope')||`1. Deliver and install ${g('if-kiosk')} at ${g('if-client')} location.
@@ -2899,8 +2908,8 @@ Account Manager: ${getDocProj()?.account_manager||''}
 3. End Client (CX): ${g('if-client')}
 4. Shipping Date: ${g('if-ship')}
 5. Delivery Date: ${g('if-del')}
-6. Installation Date Options: ${[document.getElementById('if-inst-opt1')?.value,document.getElementById('if-inst-opt2')?.value,document.getElementById('if-inst-opt3')?.value].filter(Boolean).map(d=>fmt(d)).join(' / ')||'TBD'}
-7. Confirmed Installation Date: ${document.getElementById('if-inst-confirmed')?.value?fmt(document.getElementById('if-inst-confirmed').value):'Pending confirmation'}
+6. Installation Date Options: ${['if-inst-opt1','if-inst-opt2','if-inst-opt3'].map(id=>safeDate(id)).filter(Boolean).join(' / ')||'TBD'}
+7. Confirmed Installation Date: ${safeDate('if-inst-confirmed')||'Pending confirmation'}
 8. Vinyl Date: ${g('if-vinyl')}
 8. Kiosk Type: ${g('if-kiosk')}
 9. Vending Unit Elevator: ${g('if-elevator')}
@@ -2989,10 +2998,14 @@ ${g('qf-special')?`\nSpecial Requirements:\n${g('qf-special')}`:''}`;
 }
 
 function generateAllDocs(){
-  // Generate all three docs and show them all on screen at once
+  const originalTab=activeDocTab;
   generateDoc('install');
   generateDoc('ui');
   generateDoc('qa');
+  // Restore the original tab view
+  saveDocFormState();
+  activeDocTab=originalTab;
+  renderGenDocs();
   // Switch to a combined view showing all three
   const el=document.getElementById('tab-gendocs');
   const instText=getDocState()['install']?.__output||'';
@@ -3447,10 +3460,15 @@ function applyTemplateToIntake(){
 
 // ── EXPORT PROJECT PAGE ────────────────────────────────────
 // ── LINKS POPOUT ───────────────────────────────────────────
+// ── LINKS POPOUT ───────────────────────────────────────────
 function openLinksPopout(){
-  const lv=Object.fromEntries((ppData.links||[]).map(l=>[l.label,l.url]));
   const proj=projects.find(p=>p.id===ppProjId)||{};
-  // Merge direct project fields
+  const ALL_LINKS=[
+    {cat:'Meetings',items:['Kickoff recording','Meeting minutes']},
+    {cat:'Project Documents',items:['Statement of Work','Installation Ticket','Vision Training']},
+    {cat:'Systems & Tools',items:['Teams Channel','SharePoint Site','Jira / UI Task','QA Task','Product Template','Badge Reader','Employee List','Facility Site Survey','IT Site Survey','Odoo Task','Vinyl Render Odoo','Client Portal']},
+  ];
+  const lv=Object.fromEntries((ppData.links||[]).map(l=>[l.label,l.url||'']));
   if(proj.odoo_url)lv['Odoo Task']=proj.odoo_url;
   if(proj.ui_task_url)lv['Jira / UI Task']=proj.ui_task_url;
   if(proj.qa_task_url)lv['QA Task']=proj.qa_task_url;
@@ -3461,24 +3479,26 @@ function openLinksPopout(){
   if(proj.it_survey_url)lv['IT Site Survey']=proj.it_survey_url;
   if(proj.vision_training_url)lv['Vision Training']=proj.vision_training_url;
   if(proj.vinyl_odoo_url)lv['Vinyl Render Odoo']=proj.vinyl_odoo_url;
-
-  const filledLinks=Object.entries(lv).filter(([,url])=>url&&url.startsWith('http'));
-  if(!filledLinks.length){showToast('No links saved for this project yet');return;}
-
+  const catsHtml=ALL_LINKS.map(cat=>`
+    <div style="margin-bottom:10px">
+      <div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.07em;padding:0 20px;margin-bottom:4px">${cat.cat}</div>
+      ${cat.items.map(label=>{
+        const url=lv[label]||'';
+        return`<div style="display:flex;align-items:center;gap:8px;padding:5px 20px;border-bottom:1px solid var(--gray-50)">
+          <span style="font-size:12px;color:var(--gray-600);min-width:150px;flex-shrink:0">${label}</span>
+          <input value="${url.replace(/"/g,'&quot;')}" placeholder="https://..." data-label="${label}"
+            style="flex:1;font-family:var(--mono);font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)"
+            onchange="savePPLink('${label}',this.value)">
+          ${url?`<a href="${url}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;flex-shrink:0">↗</a>`:'<span style="width:16px"></span>'}
+        </div>`;
+      }).join('')}
+    </div>`).join('');
   document.getElementById('modal-root').innerHTML=`
   <div class="modal-backdrop" onclick="closeModal()">
-    <div class="modal" style="width:440px;max-height:80vh;overflow-y:auto" onclick="event.stopPropagation()">
-      <div class="modal-head">
-        <span class="modal-title">🔗 Quick links — ${proj.name||''}</span>
-        <button class="modal-close" onclick="closeModal()">×</button>
-      </div>
-      <div class="modal-body" style="padding:12px 0">
-        ${filledLinks.map(([label,url])=>`
-          <a href="${url}" target="_blank" onclick="closeModal()" style="display:flex;align-items:center;justify-content:space-between;padding:10px 20px;text-decoration:none;color:var(--black);border-bottom:1px solid var(--gray-50)" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='transparent'">
-            <span style="font-size:13px;font-weight:500">${label}</span>
-            <span style="font-size:11px;color:var(--blue)">Open ↗</span>
-          </a>`).join('')}
-      </div>
+    <div class="modal" style="width:600px;max-height:85vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
+      <div class="modal-head"><span class="modal-title">🔗 Quick links — ${proj.name||''}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div style="overflow-y:auto;flex:1;padding:12px 0">${catsHtml}</div>
+      <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>
     </div>
   </div>`;
 }
