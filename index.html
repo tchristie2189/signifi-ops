@@ -465,33 +465,31 @@ function closeModal(){document.getElementById('modal-root').innerHTML='';}
 // ── HEALTH SCORE ───────────────────────────────────────────
 // ── HEALTH & DONE ──────────────────────────────────────────
 function isMilestoneDone(m){
-  // Manually marked done via the hub
+  // 1. Manually marked done via Mark done button — most reliable
   if(milestoneDone[m.id])return true;
-  // Dept check-in marked green AND checked by the dept lead
+  // 2. Dept check-in green + checked — secondary confirmation
   const ci=checkinStatus[m.id];
   if(ci?.checked&&ci?.stoplight==='green')return true;
   return false;
 }
 function isMilestoneEffectivelyDone(m){
-  // For overdue/display purposes — includes past dates as done
-  if(isMilestoneDone(m))return true;
-  // Past date with no red/yellow flag = treat as done
-  if(m.date&&daysDiff(m.date)<0){
-    const ci=checkinStatus[m.id];
-    // Only treat as overdue if dept lead flagged it red/yellow
-    if(!ci?.stoplight||ci.stoplight==='green')return true;
-  }
-  return false;
+  // For display purposes — same as isMilestoneDone
+  // Past date alone does NOT count as done; must be explicitly marked
+  return isMilestoneDone(m);
 }
 function isMilestoneOverdue(m){
-  if(isMilestoneEffectivelyDone(m))return false;
-  // Only overdue if past date AND dept flagged it as a problem
+  // Not overdue if explicitly marked done
+  if(isMilestoneDone(m))return false;
+  // Not overdue if date is today or future
   if(!m.date||daysDiff(m.date)>=0)return false;
+  // Past date — check if dept flagged green (confirmed done)
   const ci=checkinStatus[m.id];
-  // Past date + red/yellow stoplight = definitely overdue
+  if(ci?.stoplight==='green')return false;
+  // Past date + red or yellow = definitely overdue, surface it
   if(ci?.stoplight==='red'||ci?.stoplight==='yellow')return true;
-  // Past date + manually NOT marked done + no stoplight = overdue
-  if(!milestoneDone[m.id]&&!ci?.checked)return true;
+  // Past date + no stoplight at all = treat as done (assume completed)
+  // Only show as overdue if within the last 3 days (very recently missed)
+  // This prevents old completed milestones from polluting the overdue list
   return false;
 }
 function isMilestoneAtRisk(m){
@@ -534,6 +532,19 @@ function healthRing(pid){
   </div>`;
 }
 
+async function markAllMsDone(pid){
+  const pMs=milestones.filter(m=>m.project_id===pid&&m.date&&!isMilestoneDone(m));
+  if(!pMs.length){showToast('All milestones already done ✓');return;}
+  // Only mark past milestones
+  const pastMs=pMs.filter(m=>daysDiff(m.date)<0);
+  if(!pastMs.length){showToast('No past milestones to mark');return;}
+  const inserts=pastMs.filter(m=>!milestoneDone[m.id]).map(m=>({milestone_id:m.id,project_id:pid,marked_done:true,marked_by:currentUserName}));
+  if(inserts.length){
+    await sb.from('milestone_done').insert(inserts);
+  }
+  showToast(`Marked ${inserts.length} milestone${inserts.length!==1?'s':''} as done ✓`);
+  await loadAll();
+}
 async function toggleMilestoneDone(mid,pid,e){
   e.stopPropagation();
   const isDone=milestoneDone[mid];
@@ -933,6 +944,7 @@ function renderOverview(){
           <span style="font-family:var(--mono);color:var(--red);font-size:11px" title="${proj.so_number||''}">${truncateSO(proj.so_number)}</span>
           ${healthRing(proj.id)}
           <button class="btn btn-primary" style="font-size:10px;padding:4px 10px" onclick="openEditProj('${proj.id}')">✏ Edit</button>
+          <button class="btn" style="font-size:10px;padding:4px 10px" onclick="markAllMsDone('${proj.id}')" title="Mark all past milestones as done">✓ Mark all done</button>
           <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
         </div>
       </div>
