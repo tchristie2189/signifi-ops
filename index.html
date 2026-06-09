@@ -1665,13 +1665,27 @@ function renderCheckinOverview(){
   el.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">'+
     '<div><div style="font-size:16px;font-weight:600">🚦 Department check-in</div>'+
     '<div style="font-size:12px;color:var(--gray-500);margin-top:2px">Dept leads update via <strong>signifi-ops.vercel.app/checkin</strong></div></div>'+
-    pmDropdown('renderCheckinOverview')+'<button class="btn-export" onclick="loadAll()">↻ Refresh</button></div>'+
+    pmDropdown('renderCheckinOverview')+pmDropdown('renderCheckinOverview')+'<button class="btn" style="font-size:11px;padding:4px 10px" onclick="snapshotCheckin()" title="Save this week\'s stoplights to history">📸 Snapshot week</button>'+'<button class="btn-export" onclick="loadAll()">↻ Refresh</button></div>'+
     '<div style="background:var(--blue-bg);border:1px solid #bfdbfe;border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;font-size:11px;color:var(--blue)">'+
     '<strong>Dept passcodes:</strong> Production: <code>prod2026</code> · UI: <code>ui2026</code> · Inventory: <code>inv2026</code> · Procurement: <code>proc2026</code> · MO: <code>mo2026</code> · QA: <code>qa2026</code> · Shipping: <code>ship2026</code> · Deployment: <code>deploy2026</code></div>'+
     weeksHtml;
 }
 
-// ── BRIEFING ───────────────────────────────────────────────
+// ── CHECKIN SNAPSHOT ──────────────────────────────────────
+async function snapshotCheckin(){
+  if(!confirm('Save this week\'s stoplights to history?'))return;
+  const wStart=isoD(monday(today()));
+  const rows=Object.entries(checkinStatus).map(([msId,ci])=>{
+    const m=milestones.find(x=>x.id===msId);
+    if(!m||!ci.stoplight)return null;
+    return{milestone_id:msId,project_id:m.project_id,dept:ci.dept||'',stoplight:ci.stoplight,checked:ci.checked||false,week_start:wStart};
+  }).filter(Boolean);
+  if(!rows.length){showToast('No stoplights set this week to snapshot');return;}
+  // Delete existing snapshot for this week first
+  await sb.from('checkin_history').delete().eq('week_start',wStart);
+  await sb.from('checkin_history').insert(rows);
+  showToast(`Saved ${rows.length} stoplights to history ✓`);
+}
 function renderBriefing(){
   const el=document.getElementById('tab-briefing');
   const ap2=filterByPM(activeProjects('briefing'));const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
@@ -1726,6 +1740,21 @@ function renderBriefing(){
       <div class="section-head"><div class="section-title">This week's milestones</div><div class="section-meta">${fmt(isoD(monday(today())))} – ${fmt(isoD(addD(monday(today()),4)))}</div></div>
       ${thisWeekMs.length?`<table style="width:100%;border-collapse:collapse"><thead><tr><th style="${thS}">Date</th><th style="${thS}">Project</th><th style="${thS}">SO</th><th style="${thS}">Milestone</th><th style="${thS}">Type</th></tr></thead><tbody>${thisWeekMs.map(msRow).join('')}</tbody></table>`:'<div class="empty-state" style="padding:1.5rem">No milestones due this week.</div>'}
     </div>
+    ${(()=>{
+      const atRiskMs=allMsBriefing.filter(m=>isMilestoneAtRisk(m)||isMilestoneEscalation(m));
+      if(!atRiskMs.length)return'';
+      const esc=atRiskMs.filter(m=>isMilestoneEscalation(m));
+      const risk=atRiskMs.filter(m=>isMilestoneAtRisk(m)&&!isMilestoneEscalation(m));
+      return`<div class="section" style="margin-bottom:12px;border-left:4px solid #eab308">
+        <div class="section-head"><div class="section-title" style="color:#92400e">🟡 Flagged by dept leads (${atRiskMs.length})</div>
+        <div style="display:flex;gap:8px">${esc.length?`<span style="font-size:11px;font-weight:600;color:#ef4444">🔴 ${esc.length} escalation${esc.length>1?'s':''}</span>`:''}${risk.length?`<span style="font-size:11px;font-weight:600;color:#eab308">🟡 ${risk.length} at risk</span>`:''}</div></div>
+        <table style="width:100%;border-collapse:collapse"><tbody>${atRiskMs.map(m=>{
+          const ci=checkinStatus[m.id];
+          const p=projects.find(x=>x.id===m.project_id);
+          const sl=ci?.stoplight==='red'?'🔴':'🟡';
+          return`<tr style="border-bottom:1px solid var(--gray-50)"><td style="padding:6px 12px;font-size:12px">${sl}</td><td style="padding:6px 12px;font-size:12px;font-weight:500">${p?.name||m.projectName||''}</td><td style="padding:6px 12px;font-size:12px">${m.label}</td><td style="padding:6px 12px;font-size:11px;font-family:var(--mono);color:var(--gray-500)">${fmt(m.date)}</td></tr>`;
+        }).join('')}</tbody></table></div>`;
+    })()}
     ${overdueMs.length?`<div class="section" style="margin-bottom:12px;border-left:4px solid var(--red)"><div class="section-head"><div class="section-title" style="color:var(--red)">Overdue / unconfirmed</div></div><table style="width:100%;border-collapse:collapse"><tbody>${overdueMs.map(msRow).join('')}</tbody></table></div>`:''}
     ${upcomingMs.length?`<div class="section" style="margin-bottom:12px"><div class="section-head"><div class="section-title">Coming up — next 14 days</div></div><table style="width:100%;border-collapse:collapse"><tbody>${upcomingMs.map(msRow).join('')}</tbody></table></div>`:''}
     <div class="section no-print" style="margin-bottom:12px"><div class="section-head"><div class="section-title">Meeting notes</div></div><div style="padding:12px 16px"><textarea id="briefing-notes" style="width:100%;font-family:var(--font);font-size:13px;padding:10px;border:1px solid var(--gray-200);border-radius:var(--radius);min-height:100px;resize:vertical" placeholder="Add notes for today's alignment meeting..."></textarea></div></div>
@@ -1870,6 +1899,17 @@ async function saveIntake(){
   const ins=msFields.map(f=>{const v=document.getElementById(f.id).value;return v?{project_id:proj.id,key:f.key,label:f.label,date:v,changed_by:currentUserName}:null;}).filter(Boolean);
   if(ins.length)await sb.from('milestones').insert(ins);
   await logActivity('created project',name,so,proj.id,null,client);
+  // Auto-create planogram_schedule row if planogram dates were entered
+  const planStartDate=document.getElementById('i-plan-start')?.value;
+  const planEndDate=document.getElementById('i-plan-end')?.value;
+  const planSignDate=document.getElementById('i-plan')?.value;
+  if(planStartDate||planEndDate||planSignDate){
+    await sb.from('planogram_schedule').insert({
+      project_id:proj.id,name,so,client,
+      date:planSignDate||null,plan_start:planStartDate||null,plan_end:planEndDate||null,
+      status:'Scheduled',priority:0,is_standalone:false
+    });
+  }
   selectedProjId=proj.id;showToast('"'+name+'" added ✓');await loadAll();setTab('glance');
 }
 function clearIntake(){document.querySelectorAll('#tab-intake input,#tab-intake select,#tab-intake textarea').forEach(e=>{e.value='';});}
@@ -1910,7 +1950,8 @@ function openEditProj(id){
         <div class="field full"><label>Employee list URL</label><input id="ep-employee" value="${proj.employee_list_url||''}" placeholder="SharePoint or Jira link..."></div>
         <div class="field full"><label>Facility Site Survey Review URL</label><input id="ep-facility-survey" value="${proj.facility_survey_url||''}" placeholder="https://..."></div>
         <div class="field full"><label>IT Site Survey Review URL</label><input id="ep-it-survey" value="${proj.it_survey_url||''}" placeholder="https://..."></div>
-        <div class="field full"><label>Vinyl render Odoo URL</label><input id="ep-vinyl-odoo" value="${proj.vinyl_odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..."></div>
+        <div class="field full"><label>Vision Training URL</label><input id="ep-vision-training" value="${proj.vision_training_url||''}" placeholder="https://..."></div>
+
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">Milestone dates</div>
       ${msRows}
@@ -1940,6 +1981,7 @@ async function saveEditProj(id){
     employee_list_url:document.getElementById('ep-employee').value.trim(),
     facility_survey_url:document.getElementById('ep-facility-survey')?.value.trim()||null,
     it_survey_url:document.getElementById('ep-it-survey')?.value.trim()||null,
+    vision_training_url:document.getElementById('ep-vision-training')?.value.trim()||null,
     vinyl_odoo_url:document.getElementById('ep-vinyl-odoo')?.value.trim()||null,
     changed_by:currentUserName,changed_at:new Date().toISOString()
   }).eq('id',id);
@@ -1953,6 +1995,9 @@ async function saveEditProj(id){
     }
   }
   await logActivity('edited project',proj?.name||'',proj?.so_number||'',id,null,null);
+  // Sync PM change to vinyl_schedule rows linked to this project
+  const newPm=document.getElementById('ep-pm')?.value;
+  if(newPm)await sb.from('vinyl_schedule').update({pm:newPm}).eq('project_id',id).eq('is_standalone',false);
   closeModal();showToast('Saved ✓');await loadAll();
 }
 function openEditMs(id,label,date){
@@ -2075,9 +2120,9 @@ function exportToExcel(){
   const ws6=XLSX.utils.aoa_to_sheet(r6);ws6['!cols']=[{wch:24},{wch:12},{wch:26},{wch:14},{wch:14},{wch:14},{wch:14},{wch:18},{wch:40}];
   XLSX.utils.book_append_sheet(wb,ws6,'Date Change History');
   // Sheet 7: Ad hoc shipping & installation
-  const r7=[['Type','Name','SO','Client','Ship Date','Delivery Date','Training Date','Install Date','Status','Notes','Created By']];
-  (adHocRows.shipping||[]).forEach(r=>r7.push(['Shipping',r.name,r.so||'',r.client||'',r.shipDate||r.ship_date||'',r.deliveryDate||r.delivery_date||'','','',r.status||'',r.notes||'',r.created_by||'']));
-  (adHocRows.installation||[]).forEach(r=>r7.push(['Installation',r.name,r.so||'',r.client||'','','',r.trainingDate||r.training_date||'',r.installDate||r.install_date||'',r.status||'',r.notes||'',r.created_by||'']));
+  const r7=[['Type','Name','SO','Client','PM','Ship Date','Delivery Date','Training Date','Install Date','Status','Notes','Created By']];
+  (adHocRows.shipping||[]).forEach(r=>r7.push(['Shipping',r.name,r.so||'',r.client||'',r.pm||'',r.shipDate||r.ship_date||'',r.deliveryDate||r.delivery_date||'','','',r.status||'',r.notes||'',r.created_by||'']));
+  (adHocRows.installation||[]).forEach(r=>r7.push(['Installation',r.name,r.so||'',r.client||'',r.pm||'','','',r.trainingDate||r.training_date||'',r.installDate||r.install_date||'',r.status||'',r.notes||'',r.created_by||'']));
   const ws7=XLSX.utils.aoa_to_sheet(r7);ws7['!cols']=[{wch:14},{wch:28},{wch:12},{wch:22},{wch:12},{wch:12},{wch:14},{wch:14},{wch:14},{wch:30},{wch:16}];
   XLSX.utils.book_append_sheet(wb,ws7,'Ad Hoc Schedule');
   XLSX.writeFile(wb,'Signifi_Ops_'+new Date().toISOString().split('T')[0]+'.xlsx');showToast('Excel downloaded ✓');
@@ -2172,7 +2217,7 @@ function renderProjPageBody(){
   // Quick links — merge saved project_links table + project record fields (source of truth)
   const LINK_CATS=[
     {cat:'Meetings',items:[{label:'Kickoff recording',key:'kickoff_rec'},{label:'Meeting minutes',key:'meeting_min'}]},
-    {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Deployment Plan',key:'deploy_plan'},{label:'Installation Ticket',key:'install_ticket'}]},
+    {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Deployment Plan',key:'deploy_plan'},{label:'Installation Ticket',key:'install_ticket'},{label:'Vision Training',key:'vision_training'}]},
     {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira / UI Task',key:'jira'},{label:'QA Task',key:'qa_task'},{label:'Product Template',key:'product_template'},{label:'Badge Reader',key:'badge_reader'},{label:'Employee List',key:'employee_list'},{label:'Facility Site Survey',key:'facility_survey'},{label:'IT Site Survey',key:'it_survey'},{label:'Odoo Task',key:'odoo'},{label:'Vinyl Render Odoo',key:'vinyl_odoo'},{label:'Client Portal',key:'client_portal'}]},
   ];
   // Start with anything saved in project_links table
@@ -2186,6 +2231,7 @@ function renderProjPageBody(){
   if(proj.employee_list_url)linkVals['Employee List']=proj.employee_list_url;
   if(proj.facility_survey_url)linkVals['Facility Site Survey']=proj.facility_survey_url;
   if(proj.it_survey_url)linkVals['IT Site Survey']=proj.it_survey_url;
+  if(proj.vision_training_url)linkVals['Vision Training']=proj.vision_training_url;
   if(proj.vinyl_odoo_url)linkVals['Vinyl Render Odoo']=proj.vinyl_odoo_url;
 
   const linksHtml=LINK_CATS.map(cat=>`
@@ -2309,6 +2355,7 @@ function renderProjPageBody(){
       </div>
       <div style="display:flex;flex-direction:column;gap:7px;align-items:flex-end;flex-shrink:0" class="no-print">
         <button onclick="exportProjPageExcel()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #2d6a4f;background:#1a4a35;color:#4ade80;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">⬇ Excel</button>
+        <button onclick="openClientExport()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #1d4ed8;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📤 Client export</button>
         <button onclick="window.print()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #555;background:#1a1a1a;color:#aaa;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🖨 Print / PDF</button>
       </div>
     </div>
@@ -2451,6 +2498,7 @@ async function savePPLink(label,url){
     'Employee List':'employee_list_url',
     'Facility Site Survey':'facility_survey_url',
     'IT Site Survey':'it_survey_url',
+    'Vision Training':'vision_training_url',
     'Vinyl Render Odoo':'vinyl_odoo_url',
   };
   // If this label maps to a hub field, write back to the projects table too
@@ -2806,6 +2854,11 @@ function generateDoc(type){
     text=`INSTALLATION TICKET
 ${'─'.repeat(50)}
 Sales Order (SO): ${g('if-so')}
+PM: ${g('if-pm')||proj?.pm||''}
+SDM: ${getDocProj()?.sdm||''}
+Solutions: ${getDocProj()?.solutions||''}
+Sales: ${getDocProj()?.sales||''}
+Account Manager: ${getDocProj()?.account_manager||''}
 
 1. Naming Convention and Address: ${g('if-naming')}
 2. Channel Partner (CP): ${g('if-cp')}
@@ -3231,6 +3284,131 @@ function applyTemplateToIntake(){
 }
 
 // ── EXPORT PROJECT PAGE ────────────────────────────────────
+function openClientExport(){
+  const proj=projects.find(p=>p.id===ppProjId);
+  if(!proj){showToast('No project selected');return;}
+  const pMs=[...milestones.filter(m=>m.project_id===ppProjId)].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const teamRows=ppData.team.filter(t=>t.name&&t.name!=='Name'&&t.name.trim());
+  const summary=ppData.sections?.summary||getSection('summary')||'';
+  const statusVal=getSection('status')||'on-track';
+  const statusLbl=statusVal==='on-track'?'On Track':statusVal==='at-risk'?'At Risk':'Off Track';
+  const statusColor=statusVal==='on-track'?'#166534':statusVal==='at-risk'?'#854d0e':'#991b1b';
+  const statusBg=statusVal==='on-track'?'#dcfce7':statusVal==='at-risk'?'#fef9c3':'#fee2e2';
+  const goLive=pMs.find(m=>m.key==='installation')?.date;
+  const done=pMs.filter(m=>isMilestoneEffectivelyDone(m)).length;
+  const total=pMs.filter(m=>m.date).length;
+  const pct=total?Math.round((done/total)*100):0;
+
+  // Key links to show client
+  const clientLinks=[
+    {label:'Vision Training',url:linkVals['Vision Training']||proj.vision_training_url},
+    {label:'Facility Site Survey',url:linkVals['Facility Site Survey']||proj.facility_survey_url},
+    {label:'IT Site Survey',url:linkVals['IT Site Survey']||proj.it_survey_url},
+    {label:'Deployment Plan',url:linkVals['Deployment Plan']},
+  ].filter(l=>l.url);
+
+  const msRows=pMs.filter(m=>m.date).map(m=>{
+    const isDone=isMilestoneEffectivelyDone(m);
+    const d=daysDiff(m.date);
+    const dotColor=isDone?'#22c55e':d===0?'#C8102E':d<0?'#f59e0b':'#cbd5e1';
+    const chipBg=isDone?'#dcfce7':d===0?'#fee2e2':d<=7&&d>0?'#eff6ff':'#f1f5f9';
+    const chipColor=isDone?'#166534':d===0?'#991b1b':d<=7&&d>0?'#1d4ed8':'#64748b';
+    const chipLbl=isDone?'Complete':d===0?'Today':d<0?`${Math.abs(d)}d ago`:`${fmt(m.date)}`;
+    return`<tr style="border-bottom:1px solid #f1f5f9">
+      <td style="padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:10px">
+        <span style="width:10px;height:10px;border-radius:50%;background:${dotColor};display:inline-block;flex-shrink:0"></span>${m.label}
+      </td>
+      <td style="padding:10px 16px;font-size:12px;color:#64748b;font-family:monospace">${fmt(m.date)}</td>
+      <td style="padding:10px 16px"><span style="font-size:11px;padding:2px 10px;border-radius:12px;background:${chipBg};color:${chipColor};font-weight:500">${chipLbl}</span></td>
+    </tr>`;
+  }).join('');
+
+  const teamHtml=teamRows.map(t=>`
+    <div style="background:#f8fafc;border-radius:8px;padding:12px 16px">
+      <div style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">${t.role||''}</div>
+      <div style="font-size:13px;font-weight:600;color:#0f172a">${t.name}</div>
+      ${t.organization?`<div style="font-size:11px;color:#64748b">${t.organization}</div>`:''}
+      ${t.email?`<div style="font-size:11px;color:#3b82f6">${t.email}</div>`:''}
+    </div>`).join('');
+
+  const linksHtml=clientLinks.map(l=>`
+    <a href="${l.url}" target="_blank" style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:#f8fafc;border-radius:8px;text-decoration:none;color:#1d4ed8;font-size:13px;font-weight:500">
+      🔗 ${l.label}
+    </a>`).join('');
+
+  const html=`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>${proj.name} — Project Status</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'DM Sans',sans-serif;background:#f8fafc;color:#0f172a;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.wrap{max-width:820px;margin:0 auto;padding:2rem 1.5rem}
+.header{background:#0f172a;border-radius:12px;padding:2rem;margin-bottom:1.5rem;color:white}
+.logo{font-size:11px;font-weight:700;letter-spacing:0.15em;color:#94a3b8;text-transform:uppercase;margin-bottom:1rem}
+.proj-name{font-size:26px;font-weight:700;margin-bottom:8px}
+.meta{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:#94a3b8}
+.card{background:white;border:1px solid #e2e8f0;border-radius:12px;padding:1.5rem;margin-bottom:1.25rem}
+.card-title{font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:1rem;border-bottom:1px solid #f1f5f9;padding-bottom:8px}
+.progress-bar{height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;margin-top:6px}
+.progress-fill{height:100%;background:#22c55e;border-radius:4px}
+.team-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.links-grid{display:flex;flex-direction:column;gap:8px}
+table{width:100%;border-collapse:collapse}
+@media print{body{background:white}.wrap{padding:1rem}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="logo">Signifi Solutions — Project Status Report</div>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+      <div>
+        <div class="proj-name">${proj.name}</div>
+        <div class="meta">
+          ${proj.so_number?`<span>SO: ${proj.so_number}</span>`:''}
+          ${proj.pm?`<span>PM: ${proj.pm}</span>`:''}
+          ${proj.sdm?`<span>SDM: ${proj.sdm}</span>`:''}
+          ${goLive?`<span>🎯 Go-live: ${fmt(goLive)}</span>`:''}
+          <span>Generated: ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</span>
+        </div>
+      </div>
+      <span style="padding:6px 16px;border-radius:20px;font-size:12px;font-weight:600;background:${statusBg};color:${statusColor}">${statusLbl}</span>
+    </div>
+  </div>
+
+  ${summary?`<div class="card"><div class="card-title">Project Summary</div><p style="font-size:13px;line-height:1.7;color:#475569">${summary}</p></div>`:''}
+
+  <div class="card">
+    <div class="card-title">Overall Progress</div>
+    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px">
+      <span style="color:#475569">${done} of ${total} milestones complete</span>
+      <span style="font-weight:700">${pct}%</span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+  </div>
+
+  ${pMs.filter(m=>m.date).length?`<div class="card"><div class="card-title">Project Timeline</div><table>${msRows}</table></div>`:''}
+
+  ${teamHtml?`<div class="card"><div class="card-title">Project Team</div><div class="team-grid">${teamHtml}</div></div>`:''}
+
+  ${clientLinks.length?`<div class="card"><div class="card-title">Key Resources</div><div class="links-grid">${linksHtml}</div></div>`:''}
+
+  <div style="text-align:center;font-size:11px;color:#cbd5e1;padding:1.5rem 0">
+    Signifi Solutions · Confidential · ${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})}
+  </div>
+</div>
+</body>
+</html>`;
+
+  // Open in new tab
+  const win=window.open('','_blank');
+  win.document.write(html);
+  win.document.close();
+}
 function exportProjPageExcel(){
   const proj=projects.find(p=>p.id===ppProjId);
   if(!proj){showToast('No project selected');return;}
