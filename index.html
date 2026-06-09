@@ -3257,26 +3257,89 @@ function globalSearch(q){
     </div>`;
   }).join('');
 }
-async function cloneProject(id){
+function cloneProject(id){
   const orig=projects.find(p=>p.id===id);
   if(!orig)return;
-  const newName=prompt('Name for cloned project:',orig.name+' (Copy)');
-  if(!newName)return;
-  const newSO=prompt('New SO number (leave blank to fill in later):','');
+  const origMs=milestones.filter(m=>m.project_id===id&&m.date).sort((a,b)=>a.date.localeCompare(b.date));
+  const anchorMs=origMs.find(m=>m.key==='po-release')||origMs[0];
+  const anchorDate=anchorMs?.date||isoD(today());
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:520px" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <span class="modal-title">Clone project — ${orig.name}</span>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field full"><label>New project name *</label>
+            <input id="clone-name" value="${orig.name} (Copy)" style="font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%">
+          </div>
+          <div class="field"><label>New SO number</label>
+            <input id="clone-so" placeholder="e.g. S18100" style="font-family:var(--mono);font-size:13px;padding:8px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%">
+          </div>
+          <div class="field"><label>New PO Release date *</label>
+            <input id="clone-anchor" type="date" value="${anchorDate}" style="font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%">
+          </div>
+        </div>
+        <div style="background:var(--gray-50);border-radius:var(--radius);padding:12px 14px;margin-top:4px">
+          <div style="font-size:11px;font-weight:600;color:var(--gray-500);margin-bottom:8px">MILESTONES TO CLONE (${origMs.length}) — dates will shift automatically</div>
+          <div style="max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:4px">
+            ${origMs.map(m=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--gray-100)">
+              <span style="color:var(--gray-700)">${m.label}</span>
+              <span style="font-family:var(--mono);color:var(--gray-400)">${fmt(m.date)}</span>
+            </div>`).join('')}
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:10px">
+          💡 All milestone dates will shift by the same number of days as the gap between the original PO Release (<strong>${fmt(anchorDate)}</strong>) and your new date.
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="doCloneProject('${id}','${anchorDate}')">⎘ Clone project</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function doCloneProject(id, origAnchorDate){
+  const newName=document.getElementById('clone-name')?.value.trim();
+  const newSO=document.getElementById('clone-so')?.value.trim();
+  const newAnchorDate=document.getElementById('clone-anchor')?.value;
+  if(!newName){alert('Please enter a project name.');return;}
+  if(!newAnchorDate){alert('Please enter a PO Release date.');return;}
+
+  // Calculate day shift
+  const origAnchor=new Date(origAnchorDate+'T00:00:00');
+  const newAnchor=new Date(newAnchorDate+'T00:00:00');
+  const shiftDays=Math.round((newAnchor-origAnchor)/86400000);
+
+  const orig=projects.find(p=>p.id===id);
   const{data:newProj,error}=await sb.from('projects').insert({
     ...orig,id:undefined,created_at:undefined,
     name:newName,so_number:newSO||null,
     status:'active',changed_by:currentUserName,changed_at:new Date().toISOString()
   }).select().single();
   if(error){alert('Error cloning: '+error.message);return;}
-  // Clone milestones
+
+  // Clone milestones with shifted dates
   const origMs=milestones.filter(m=>m.project_id===id);
   if(origMs.length){
-    const newMs=origMs.map(m=>({...m,id:undefined,project_id:newProj.id,changed_by:currentUserName,changed_at:new Date().toISOString()}));
+    const newMs=origMs.map(m=>{
+      let newDate=m.date;
+      if(m.date&&shiftDays!==0){
+        const d=new Date(m.date+'T00:00:00');
+        d.setDate(d.getDate()+shiftDays);
+        newDate=isoD(d);
+      }
+      return{...m,id:undefined,project_id:newProj.id,date:newDate,original_date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()};
+    });
     await sb.from('milestones').insert(newMs);
   }
+  closeModal();
   await loadAll();
-  showToast('"'+newName+'" cloned ✓');
+  showToast('"'+newName+'" cloned — '+Math.abs(shiftDays)+'d '+(shiftDays>=0?'forward':'back')+' ✓');
   selectedProjId=newProj.id;
   ppProjId=newProj.id;
   setTab('projpage');
