@@ -3600,61 +3600,90 @@ function openClientExport(){
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'DM Sans',sans-serif;background:#f8fafc;color:#0f172a;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.wrap{max-width:820px;margin:0 auto;padding:2rem 1.5rem}
-.header{background:#0f172a;border-radius:12px;padding:2rem;margin-bottom:1.5rem;color:white}
-.logo{font-size:11px;font-weight:700;letter-spacing:0.15em;color:#94a3b8;text-transform:uppercase;margin-bottom:1rem}
-.proj-name{font-size:26px;font-weight:700;margin-bottom:8px}
-.meta{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:#94a3b8}
-.card{background:white;border:1px solid #e2e8f0;border-radius:12px;padding:1.5rem;margin-bottom:1.25rem}
-.card-title{font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:1rem;border-bottom:1px solid #f1f5f9;padding-bottom:8px}
-.progress-bar{height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;margin-top:6px}
+body{font-family:'DM Sans',sans-serif;background:#f1f5f9;color:#0f172a;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.page{max-width:1100px;margin:0 auto;padding:2rem 1.5rem}
+.header{background:#0f172a;border-radius:12px;padding:1.75rem 2rem;margin-bottom:1.25rem;color:white;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.header-left{flex:1;min-width:0}
+.logo{font-size:10px;font-weight:700;letter-spacing:0.18em;color:#64748b;text-transform:uppercase;margin-bottom:8px}
+.proj-name{font-size:22px;font-weight:700;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:#94a3b8}
+.status-pill{padding:5px 14px;border-radius:20px;font-size:12px;font-weight:700;white-space:nowrap;flex-shrink:0}
+.two-col{display:grid;grid-template-columns:1fr 340px;gap:1.25rem;align-items:start}
+.card{background:white;border:1px solid #e2e8f0;border-radius:10px;padding:1.25rem;margin-bottom:1.25rem}
+.card:last-child{margin-bottom:0}
+.card-title{font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #f1f5f9}
+.progress-bar{height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;margin-top:5px}
 .progress-fill{height:100%;background:#22c55e;border-radius:4px}
-.team-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
-.links-grid{display:flex;flex-direction:column;gap:8px}
-table{width:100%;border-collapse:collapse}
-@media print{body{background:white}.wrap{padding:1rem}}
+.ms-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #f8fafc}
+.ms-row:last-child{border-bottom:none}
+.ms-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.ms-name{flex:1;font-size:12px;font-weight:500;color:#334155}
+.ms-date{font-size:11px;color:#94a3b8;font-family:monospace;white-space:nowrap}
+.ms-chip{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;white-space:nowrap}
+.team-row{padding:8px 0;border-bottom:1px solid #f8fafc}
+.team-row:last-child{border-bottom:none}
+.team-role{font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:1px}
+.team-name{font-size:12px;font-weight:600}
+.team-org{font-size:11px;color:#64748b}
+.link-row{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f8fafc}
+.link-row:last-child{border-bottom:none}
+.footer{text-align:center;font-size:10px;color:#cbd5e1;padding:1.25rem 0;margin-top:0.5rem}
+@media print{
+  body{background:white}
+  .page{padding:0.5rem}
+  .two-col{grid-template-columns:1fr 300px}
+}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="page">
   <div class="header">
-    <div class="logo">Signifi Solutions — Project Status Report</div>
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
-      <div>
-        <div class="proj-name">${proj.name}</div>
-        <div class="meta">
-          ${proj.so_number?`<span>SO: ${proj.so_number}</span>`:''}
-          ${proj.pm?`<span>PM: ${proj.pm}</span>`:''}
-          ${proj.sdm?`<span>SDM: ${proj.sdm}</span>`:''}
-          ${goLive?`<span>🎯 Go-live: ${fmt(goLive)}</span>`:''}
-          <span>Generated: ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</span>
-        </div>
+    <div class="header-left">
+      <div class="logo">Signifi Solutions — Project Status</div>
+      <div class="proj-name">${proj.name}</div>
+      <div class="meta">
+        ${proj.so_number?`<span>📋 SO: ${proj.so_number}</span>`:''}
+        ${proj.pm?`<span>👤 PM: ${proj.pm}</span>`:''}
+        ${proj.sdm?`<span>SDM: ${proj.sdm}</span>`:''}
+        ${goLive?`<span>🎯 Go-live: ${fmt(goLive)}</span>`:''}
+        <span>Generated: ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>
       </div>
-      <span style="padding:6px 16px;border-radius:20px;font-size:12px;font-weight:600;background:${statusBg};color:${statusColor}">${statusLbl}</span>
+    </div>
+    <span class="status-pill" style="background:${statusBg};color:${statusColor}">${statusLbl}</span>
+  </div>
+
+  ${summary?`<div class="card" style="margin-bottom:1.25rem"><div class="card-title">Project Summary</div><p style="font-size:13px;line-height:1.65;color:#475569">${summary}</p></div>`:''}
+
+  <div class="two-col">
+    <!-- LEFT: Progress + Timeline -->
+    <div>
+      <div class="card">
+        <div class="card-title">Overall Progress</div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
+          <span style="color:#64748b">${done} of ${total} milestones complete</span>
+          <span style="font-weight:700">${pct}%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+      </div>
+      ${pMs.filter(m=>m.date).length?`<div class="card"><div class="card-title">Project Timeline</div>${pMs.filter(m=>m.date).map(m=>{
+        const isDone=isMilestoneEffectivelyDone(m);
+        const d=daysDiff(m.date);
+        const dotColor=isDone?'#22c55e':d===0?'#C8102E':d<0?'#f59e0b':'#cbd5e1';
+        const chipBg=isDone?'#dcfce7':d===0?'#fee2e2':d<=7&&d>0?'#eff6ff':'#f1f5f9';
+        const chipColor=isDone?'#166534':d===0?'#991b1b':d<=7&&d>0?'#1d4ed8':'#64748b';
+        const chipLbl=isDone?'Done':d===0?'Today':d<0?Math.abs(d)+'d ago':fmt(m.date);
+        return`<div class="ms-row"><div class="ms-dot" style="background:${dotColor}"></div><div class="ms-name">${m.label}</div><div class="ms-date">${fmt(m.date)}</div><span class="ms-chip" style="background:${chipBg};color:${chipColor}">${chipLbl}</span></div>`;
+      }).join('')}</div>`:''}
+    </div>
+
+    <!-- RIGHT: Team + Links -->
+    <div>
+      ${teamRows.length?`<div class="card"><div class="card-title">Project Team</div>${teamRows.map(t=>`<div class="team-row"><div class="team-role">${t.role||''}</div><div class="team-name">${t.name}</div>${t.organization?`<div class="team-org">${t.organization}</div>`:''}</div>`).join('')}</div>`:''}
+      ${clientLinks.length?`<div class="card"><div class="card-title">Key Resources</div>${clientLinks.map(l=>`<div class="link-row"><span style="font-size:12px;font-weight:500">${l.label}</span><a href="${l.url}" target="_blank" style="font-size:11px;color:#3b82f6;text-decoration:none;font-weight:600">Open ↗</a></div>`).join('')}</div>`:''}
     </div>
   </div>
 
-  ${summary?`<div class="card"><div class="card-title">Project Summary</div><p style="font-size:13px;line-height:1.7;color:#475569">${summary}</p></div>`:''}
-
-  <div class="card">
-    <div class="card-title">Overall Progress</div>
-    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px">
-      <span style="color:#475569">${done} of ${total} milestones complete</span>
-      <span style="font-weight:700">${pct}%</span>
-    </div>
-    <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
-  </div>
-
-  ${pMs.filter(m=>m.date).length?`<div class="card"><div class="card-title">Project Timeline</div><table>${msRows}</table></div>`:''}
-
-  ${teamHtml?`<div class="card"><div class="card-title">Project Team</div><div class="team-grid">${teamHtml}</div></div>`:''}
-
-  ${clientLinks.length?`<div class="card"><div class="card-title">Key Resources</div><div class="links-grid">${linksHtml}</div></div>`:''}
-
-  <div style="text-align:center;font-size:11px;color:#cbd5e1;padding:1.5rem 0">
-    Signifi Solutions · Confidential · ${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})}
-  </div>
+  <div class="footer">Signifi Solutions · Confidential · ${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})}</div>
 </div>
 </body>
 </html>`;
