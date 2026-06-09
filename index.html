@@ -2240,7 +2240,7 @@ function renderProjPageBody(){
   // Quick links — merge saved project_links table + project record fields (source of truth)
   const LINK_CATS=[
     {cat:'Meetings',items:[{label:'Kickoff recording',key:'kickoff_rec'},{label:'Meeting minutes',key:'meeting_min'}]},
-    {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Deployment Plan',key:'deploy_plan'},{label:'Installation Ticket',key:'install_ticket'},{label:'Vision Training',key:'vision_training'}]},
+    {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Installation Ticket',key:'install_ticket'},{label:'Vision Training',key:'vision_training'}]},
     {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira / UI Task',key:'jira'},{label:'QA Task',key:'qa_task'},{label:'Product Template',key:'product_template'},{label:'Badge Reader',key:'badge_reader'},{label:'Employee List',key:'employee_list'},{label:'Facility Site Survey',key:'facility_survey'},{label:'IT Site Survey',key:'it_survey'},{label:'Odoo Task',key:'odoo'},{label:'Vinyl Render Odoo',key:'vinyl_odoo'},{label:'Client Portal',key:'client_portal'}]},
   ];
   // Start with anything saved in project_links table
@@ -2377,6 +2377,7 @@ function renderProjPageBody(){
         </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:7px;align-items:flex-end;flex-shrink:0" class="no-print">
+        <button onclick="openLinksPopout()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #3b82f6;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🔗 Quick links</button>
         <button onclick="exportProjPageExcel()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #2d6a4f;background:#1a4a35;color:#4ade80;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">⬇ Excel</button>
         <button onclick="openClientExport()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #1d4ed8;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📤 Client export</button>
         <button onclick="window.print()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #555;background:#1a1a1a;color:#aaa;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🖨 Print / PDF</button>
@@ -2743,7 +2744,14 @@ function renderInstallForm(){
     <div class="doc-section-lbl">Dates (auto-filled)</div>
     ${fld('if-ship','Shipping date','','','text',shipDate)}
     ${fld('if-del','Delivery date','','','text',delivDate)}
-    ${fld('if-inst','Requested installation date','','','text',instDate)}
+    <div class="field full"><label>Installation date options <span style="font-size:10px;color:var(--gray-400);font-weight:400">— provide range or multiple options</span></label>
+      <input id="if-inst-opt1" type="date" value="${instDate?new Date(instDate).toISOString().split('T')[0]:''}" style="font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);margin-bottom:4px;width:100%" placeholder="Option 1">
+      <input id="if-inst-opt2" type="date" style="font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);margin-bottom:4px;width:100%" placeholder="Option 2 (optional)">
+      <input id="if-inst-opt3" type="date" style="font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%" placeholder="Option 3 (optional)">
+    </div>
+    <div class="field"><label>Confirmed installation date</label>
+      <input id="if-inst-confirmed" type="date" style="font-size:12px;padding:6px 8px;border:1px solid var(--success);border-radius:var(--radius);width:100%;background:#f0fdf4" placeholder="Confirmed date">
+    </div>
     ${fld('if-vinyl','Vinyl date','','','text',vinylDate)}
     <div class="doc-section-lbl">Unit configuration</div>
     ${fld('if-cp','Channel Partner (CP)','e.g. Direct, TD Synnex...','')}
@@ -2864,6 +2872,7 @@ function g(id){
   return'';
 }
 function generateDoc(type){
+  try{
   let text='';
   if(type==='install'){
     const scope=g('if-scope')||`1. Deliver and install ${g('if-kiosk')} at ${g('if-client')} location.
@@ -2890,8 +2899,9 @@ Account Manager: ${getDocProj()?.account_manager||''}
 3. End Client (CX): ${g('if-client')}
 4. Shipping Date: ${g('if-ship')}
 5. Delivery Date: ${g('if-del')}
-6. Requested Installation Date: ${g('if-inst')}
-7. Vinyl Date: ${g('if-vinyl')}
+6. Installation Date Options: ${[document.getElementById('if-inst-opt1')?.value,document.getElementById('if-inst-opt2')?.value,document.getElementById('if-inst-opt3')?.value].filter(Boolean).map(d=>fmt(d)).join(' / ')||'TBD'}
+7. Confirmed Installation Date: ${document.getElementById('if-inst-confirmed')?.value?fmt(document.getElementById('if-inst-confirmed').value):'Pending confirmation'}
+8. Vinyl Date: ${g('if-vinyl')}
 8. Kiosk Type: ${g('if-kiosk')}
 9. Vending Unit Elevator: ${g('if-elevator')}
 10. Screen Size: ${g('if-screen')}
@@ -2974,8 +2984,8 @@ ${g('qf-special')?`\nSpecial Requirements:\n${g('qf-special')}`:''}`;
   document.getElementById(`doc-content-${type}`).textContent=text;
   document.getElementById(`doc-output-${type}`).style.display='block';
   document.getElementById(`doc-output-${type}`).scrollIntoView({behavior:'smooth',block:'nearest'});
-  // Persist the generated output so it survives tab switches
   getDocState()[type].__output=text;
+  }catch(e){alert('Generate doc error: '+e.message);}
 }
 
 function generateAllDocs(){
@@ -3275,7 +3285,7 @@ function cloneProject(id){
           <div class="field full"><label>New project name *</label>
             <input id="clone-name" value="${orig.name} (Copy)" style="font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%">
           </div>
-          <div class="field"><label>New SO number</label>
+          <div class="field"><label>New SO number *</label>
             <input id="clone-so" placeholder="e.g. S18100" style="font-family:var(--mono);font-size:13px;padding:8px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%">
           </div>
           <div class="field"><label>New PO Release date *</label>
@@ -3308,6 +3318,7 @@ async function doCloneProject(id, origAnchorDate){
   const newSO=document.getElementById('clone-so')?.value.trim();
   const newAnchorDate=document.getElementById('clone-anchor')?.value;
   if(!newName){alert('Please enter a project name.');return;}
+  if(!newSO){alert('Please enter an SO number.');return;}
   if(!newAnchorDate){alert('Please enter a PO Release date.');return;}
 
   // Calculate day shift
@@ -3435,8 +3446,45 @@ function applyTemplateToIntake(){
 }
 
 // ── EXPORT PROJECT PAGE ────────────────────────────────────
+// ── LINKS POPOUT ───────────────────────────────────────────
+function openLinksPopout(){
+  const lv=Object.fromEntries((ppData.links||[]).map(l=>[l.label,l.url]));
+  const proj=projects.find(p=>p.id===ppProjId)||{};
+  // Merge direct project fields
+  if(proj.odoo_url)lv['Odoo Task']=proj.odoo_url;
+  if(proj.ui_task_url)lv['Jira / UI Task']=proj.ui_task_url;
+  if(proj.qa_task_url)lv['QA Task']=proj.qa_task_url;
+  if(proj.product_template_url)lv['Product Template']=proj.product_template_url;
+  if(proj.badge_reader_url)lv['Badge Reader']=proj.badge_reader_url;
+  if(proj.employee_list_url)lv['Employee List']=proj.employee_list_url;
+  if(proj.facility_survey_url)lv['Facility Site Survey']=proj.facility_survey_url;
+  if(proj.it_survey_url)lv['IT Site Survey']=proj.it_survey_url;
+  if(proj.vision_training_url)lv['Vision Training']=proj.vision_training_url;
+  if(proj.vinyl_odoo_url)lv['Vinyl Render Odoo']=proj.vinyl_odoo_url;
+
+  const filledLinks=Object.entries(lv).filter(([,url])=>url&&url.startsWith('http'));
+  if(!filledLinks.length){showToast('No links saved for this project yet');return;}
+
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:440px;max-height:80vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <span class="modal-title">🔗 Quick links — ${proj.name||''}</span>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-body" style="padding:12px 0">
+        ${filledLinks.map(([label,url])=>`
+          <a href="${url}" target="_blank" onclick="closeModal()" style="display:flex;align-items:center;justify-content:space-between;padding:10px 20px;text-decoration:none;color:var(--black);border-bottom:1px solid var(--gray-50)" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='transparent'">
+            <span style="font-size:13px;font-weight:500">${label}</span>
+            <span style="font-size:11px;color:var(--blue)">Open ↗</span>
+          </a>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
 function openClientExport(){
-  try {
+  try{
   const proj=projects.find(p=>p.id===ppProjId);
   if(!proj){showToast('No project selected');return;}
   const pMs=[...milestones.filter(m=>m.project_id===ppProjId)].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
