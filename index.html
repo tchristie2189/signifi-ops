@@ -3404,10 +3404,15 @@ table{width:100%;border-collapse:collapse}
 </body>
 </html>`;
 
-  // Open in new tab
-  const win=window.open('','_blank');
-  win.document.write(html);
-  win.document.close();
+  // Download as HTML file instead of popup (avoids popup blocker)
+  const blob=new Blob([html],{type:'text/html'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=proj.name.replace(/[^a-z0-9]/gi,'-')+'-status.html';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('Client export downloaded ✓');
 }
 function exportProjPageExcel(){
   const proj=projects.find(p=>p.id===ppProjId);
