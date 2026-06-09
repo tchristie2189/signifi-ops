@@ -1220,7 +1220,7 @@ function renderDeptView(dept){
     '<div class="section">'+
     '<div class="section-head">'+
     '<div class="section-title" style="border-left:3px solid '+c.color+';padding-left:8px">'+c.title+'</div>'+
-    '<div style="display:flex;gap:7px;align-items:center">'+pmDropdown('renderDeptView.bind(null,"'+dept+'")') + hideCompletedBtn(dept)+'<button class="btn-export" onclick="exportToExcel()">&#8675; Excel</button></div>'+
+    '<div style="display:flex;gap:7px;align-items:center">'+pmDropdown('renderDeptView(\"'+dept+'\")') + hideCompletedBtn(dept)+'<button class="btn-export" onclick="exportToExcel()">&#8675; Excel</button></div>'+
     '</div>'+filterBar+
     '<div class="dept-table-wrap"><table class="dept-table"><thead><tr>'+
     c.cols.map(col=>'<th>'+col+'</th>').join('')+
