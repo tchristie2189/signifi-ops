@@ -634,7 +634,7 @@ function renderTab(){
 
 // ── DATA ───────────────────────────────────────────────────
 async function loadAll(){
-  const[pr,ms,lg,ci,md,mh,ah,as_]=await Promise.all([
+  const[pr,ms,lg,ci,md,mh,ah,as_,pl]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
@@ -643,6 +643,7 @@ async function loadAll(){
     sb.from('milestone_history').select('*').order('changed_at',{ascending:true}),
     sb.from('adhoc_schedule').select('*').order('created_at'),
     sb.from('app_settings').select('*'),
+    sb.from('project_links').select('project_id,label,url'),
   ]);
   projects=pr.data||[];milestones=ms.data||[];activityLog=lg.data||[];
   checkinStatus={};(ci.data||[]).forEach(c=>{checkinStatus[c.milestone_id]=c;});
@@ -667,6 +668,14 @@ async function loadAll(){
   sortByDate(adHocRows.shipping,'shipDate');
   sortByDate(adHocRows.installation,'installDate');
   appSettings={};(as_.data||[]).forEach(s=>{appSettings[s.key]=s.value;});
+  // Backfill install_ticket_url from project_links for projects missing it
+  const allProjLinks=pl.data||[];
+  projects.forEach(p=>{
+    if(!p.install_ticket_url){
+      const lnk=allProjLinks.find(l=>l.project_id===p.id&&l.label==='Installation Ticket'&&l.url);
+      if(lnk)p.install_ticket_url=lnk.url;
+    }
+  });
   if(projects.length&&!selectedProjId)selectedProjId=projects[0].id;
 
   // Load vinyl schedule from Supabase, then merge with project data
@@ -1168,11 +1177,7 @@ function renderDeptView(dept){
       const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)" title="Click to change date">`:`<button onclick="openAddMsForProj('${p.id}')" style="font-size:10px;color:var(--blue);background:none;border:1px dashed var(--blue);border-radius:4px;padding:1px 6px;cursor:pointer">+ Add</button>`;
       const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)" title="Click to change date">`:`<button onclick="openAddMsForProj('${p.id}')" style="font-size:10px;color:var(--blue);background:none;border:1px dashed var(--blue);border-radius:4px;padding:1px 6px;cursor:pointer">+ Add</button>`;
       const confirmed=p.install_date_confirmed?`<span style="font-size:11px;color:var(--success);font-weight:600">✓ ${fmt(p.install_date_confirmed)}</span>`:`<span style="font-size:10px;color:var(--gray-400)">Pending</span>`;
-      // Pull ticket URL from project field OR from project_links table
-      const _ticketLink=(ppData?.links||[]).find(l=>l.label==='Installation Ticket');
-      const ticketUrl=p.install_ticket_url||(_ticketLink?.url)||'';
-      // Silently sync back so it shows next time
-      if(!p.install_ticket_url&&ticketUrl)p.install_ticket_url=ticketUrl;
+      const ticketUrl=p.install_ticket_url||'';
       const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>`:`<input type="text" value="" placeholder="Paste URL..." data-proj="${p.id}" style="font-size:10px;padding:2px 6px;border:1px solid var(--gray-200);border-radius:4px;width:110px;font-family:var(--font)" onchange="saveInstallTicketUrl('${p.id}',this.value)">`;
       extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';
     }
