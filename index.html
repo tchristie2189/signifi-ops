@@ -436,6 +436,7 @@ let planFilter={status:'',search:'',dateFrom:'',dateTo:''};
 let deptFilter={shipping:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'},installation:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'}};
 let adHocRows={shipping:[],installation:[]}; // standalone entries not tied to a project
 let pmFilter='';
+let salesFilter='';
 
 // ── UTILS ──────────────────────────────────────────────────
 function truncateSO(so,max=2){
@@ -754,6 +755,16 @@ function pmDropdown(renderFn){
   </select>`;
 }
 function filterByPM(list){return pmFilter?list.filter(p=>p.pm===pmFilter):list;}
+function salesDropdown(renderFn){
+  const salesList=[...new Set(projects.map(p=>p.sales).filter(Boolean))].sort();
+  if(!salesList.length)return'';
+  const onChange=renderFn.includes('(')?renderFn:renderFn+'()';
+  return`<select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="salesFilter=this.value;${onChange}">
+    <option value="">All Sales</option>
+    ${salesList.map(s=>`<option value="${s}"${salesFilter===s?' selected':''}>${s}</option>`).join('')}
+  </select>`;
+}
+function filterBySales(list){return salesFilter?list.filter(p=>p.sales===salesFilter):list;}
 
 // Helper — filters out completed projects based on per-page toggle
 function activeProjects(page){
@@ -787,12 +798,13 @@ function renderGlance(){
   const visibleProjects=projects.filter(p=>{
     if(glanceFilter==='archived'?p.status!=='complete':p.status==='complete')return false;
     if(pmFilter&&p.pm!==pmFilter)return false;
+    if(salesFilter&&p.sales!==salesFilter)return false;
     return true;
   });
   const allActive=projects.filter(p=>p.status!=='complete');
   const allArchived=projects.filter(p=>p.status==='complete');
   const overdue=milestones.filter(m=>isMilestoneOverdue(m)).length;
-  const adHocMs=getAdHocAsMilestones();
+  const adHocMs=getAdHocAsMilestones().filter(m=>!pmFilter||m._raw?.pm===pmFilter);
   const adHocOverdue=adHocMs.filter(m=>daysDiff(m.date)<0&&m._status!=='Complete').length;
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
   const adHocThisWeek=adHocMs.filter(m=>daysDiff(m.date)>=0&&daysDiff(m.date)<=6&&m._status!=='Complete').length;
@@ -841,14 +853,16 @@ function renderGlance(){
       const hasEscalation=!allDone&&stageMs.some(m=>isMilestoneEscalation(m));
       const hasRisk=!allDone&&stageMs.some(m=>isMilestoneAtRisk(m));
       const noMs=stageMs.length===0;
-      const chipCls=noMs?'chip-future':allDone?'chip-done':hasEscalation?'chip-overdue':hasOverdue?'chip-overdue':hasRisk?'chip-atrisk':st.chip;
-      const chipLbl=noMs?'Not set':allDone?'Done ✓':hasEscalation?'Escalation':hasOverdue?'Overdue':hasRisk?'At risk':st.label;
+      // If no milestones exist for this stage, skip it entirely
+      if(noMs)return null;
+      const chipCls=allDone?'chip-done':hasEscalation?'chip-overdue':hasOverdue?'chip-overdue':hasRisk?'chip-atrisk':st.chip;
+      const chipLbl=allDone?'Done ✓':hasEscalation?'Escalation':hasOverdue?'Overdue':hasRisk?'At risk':st.label;
       let pct=0;
       if(allDone){pct=100;}
       else if(sd){const s=new Date(sd+'T00:00:00');const e=ed?new Date(ed+'T00:00:00'):s;const t=today();if(t>e)pct=100;else if(t>=s){const total=(e-s)||86400000;pct=Math.min(100,Math.round((t-s)/total*100));}}
       const barColor=allDone?'var(--success)':hasOverdue||hasEscalation?'var(--red)':hasRisk?'var(--warning)':stage.color;
       return `<div class="cycle-stage"><div class="cycle-stage-name">${stage.label}</div><div class="cycle-bar-wrap"><div class="cycle-bar" style="width:${pct}%;background:${pct>0?barColor:'var(--gray-200)'}"></div></div><div style="text-align:right"><span class="stage-chip ${chipCls}">${chipLbl}</span></div></div>`;
-    }).join('');
+    }).filter(Boolean).join('');
     // Notes section
     const notes=(p.notes||'').trim();
     const notesHtml=notes?`<div class="glance-notes">
@@ -896,7 +910,7 @@ function renderGlance(){
           <button class="ftab${glanceFilter==='archived'?' active':''}" onclick="glanceFilter='archived';renderGlance()">Completed (${allArchived.length})</button>
         </div>
         <div style="display:flex;align-items:center;gap:6px">
-${pmDropdown('renderGlance')}
+${pmDropdown('renderGlance')}${salesDropdown('renderGlance')}
         </div>
         <span style="font-size:11px;color:var(--gray-500)">Health score top-right · ✓ Complete to archive</span>
       </div>
@@ -937,10 +951,10 @@ function renderOverview(){
     </div>`;
   }).join('');
   const pillsHtml=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
-    <div class="proj-pills" style="margin-bottom:0;flex:1">${filterByPM(activeProjects('overview')).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
+    <div class="proj-pills" style="margin-bottom:0;flex:1">${filterBySales(filterByPM(activeProjects('overview'))).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
       <label style="font-size:11px;color:var(--gray-500);white-space:nowrap">PM:</label>
-      ${pmDropdown('renderOverview')}
+      ${pmDropdown('renderOverview')}${salesDropdown('renderOverview')}
     </div>
   </div>`;
   el.innerHTML=`
@@ -1010,10 +1024,10 @@ function selProj(id){selectedProjId=id;renderOverview();}
 function renderWeek(){
   const el=document.getElementById('tab-week');
   const we=addD(weekStart,6);
-  const ap=filterByPM(activeProjects('week'));
+  const ap=filterBySales(filterByPM(activeProjects('week')));
   const allMs=milestones.filter(m=>ap.some(p=>p.id===m.project_id)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
   // Include ad hoc shipping/installation in week view
-  const adHocMs=getAdHocAsMilestones().filter(m=>m.status!=='Complete');
+  const adHocMs=getAdHocAsMilestones().filter(m=>m._status!=='Complete'&&(!pmFilter||m._raw?.pm===pmFilter)&&(!salesFilter||false));
   const allMsWithAdhoc=[...allMs,...adHocMs];
   const overdueMs=allMsWithAdhoc.filter(m=>m.date&&daysDiff(m.date)<0&&daysDiff(m.date)>=-14&&isMilestoneOverdue(m));
   const overdueHtml=overdueMs.length?`<details style="margin-bottom:1rem;background:var(--red-light);border:1px solid var(--red-mid);border-radius:var(--radius);padding:0">
@@ -1037,7 +1051,7 @@ function renderWeek(){
       <button class="wnav" onclick="shiftW(1)">&#8250;</button>
       <button class="wnav" onclick="goToday()">Today</button>
       <button class="btn-add" onclick="openAddEvModal()">+ Add</button>
-      ${pmDropdown('renderWeek')}
+      ${pmDropdown('renderWeek')}${salesDropdown('renderWeek')}
       ${hideCompletedBtn('week')}
       <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
     </div>
@@ -1091,7 +1105,7 @@ function buildGantt(startKeys,endKeys,segsFn,title,legend){
 
   // Sort: active now → upcoming → past (no dates last)
   const deptKey=title.toLowerCase().includes('prod')?'production':'quality';
-  const allGanttProjs=filterByPM(activeProjects(deptKey));
+  const allGanttProjs=filterBySales(filterByPM(activeProjects(deptKey)));
   const sortedGanttProjs=[...allGanttProjs].sort((a,b)=>{
     const getRange=(p)=>{
       const pMs=milestones.filter(m=>m.project_id===p.id);
@@ -1156,7 +1170,7 @@ function renderDeptView(dept){
   const f=hasFilter?deptFilter[dept]:null;
   const mainKey=dept==='shipping'?'shipping':'installation';
 
-  let filteredProjects=filterByPM(activeProjects(dept));
+  let filteredProjects=filterBySales(filterBySales(filterByPM(activeProjects(dept))));
   if(hasFilter&&f){
     if(f.search){const q=f.search.toLowerCase();filteredProjects=filteredProjects.filter(p=>(p.name||'').toLowerCase().includes(q)||(p.so_number||'').toLowerCase().includes(q)||(p.client||'').toLowerCase().includes(q));}
     if(f.dateFrom){filteredProjects=filteredProjects.filter(p=>{const d=getMsDate(p.id,mainKey);return!d||d>=f.dateFrom;});}
@@ -1202,7 +1216,7 @@ function renderDeptView(dept){
   };
 
   const projRows=filteredProjects.map(makeRow);
-  const adHoc=hasFilter?(adHocRows[dept]||[]).filter(r=>!pmFilter||r.pm===pmFilter):[];
+  const adHoc=hasFilter?(adHocRows[dept]||[]).filter(r=>(!pmFilter||r.pm===pmFilter)):[];
   const ahRows=adHoc.map((r,i)=>makeAdHocRow(r,adHocRows[dept].indexOf(r)));
 
   const allItems=hasFilter?[...projRows,...ahRows].sort((a,b)=>{
@@ -1267,7 +1281,7 @@ function applyVinylFilter(data){
 function renderVinyl(){
   const el=document.getElementById('tab-vinyl');
   const vinylBase=hideCompleted['vinyl']?vinylSchedule.filter(v=>v.status!=='Complete'):vinylSchedule;
-  const source=pmFilter?vinylBase.filter(v=>{const p=projects.find(x=>x.id===v.project_id);return p?p.pm===pmFilter:!pmFilter;}):vinylBase;
+  const source=vinylBase.filter(v=>{const p=projects.find(x=>x.id===v.project_id);if(!p)return!pmFilter&&!salesFilter;if(pmFilter&&p.pm!==pmFilter)return false;if(salesFilter&&p.sales!==salesFilter)return false;return true;});
   const filtered=applyVinylFilter(source);
   const activeFilters=[vinylFilter.status,vinylFilter.search,vinylFilter.dateFrom,vinylFilter.dateTo].filter(Boolean).length;
   const rows=filtered.map((item,i)=>{
@@ -1289,7 +1303,7 @@ function renderVinyl(){
     </tr>`;
   }).join('');
   el.innerHTML=`<div class="section">
-    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderVinyl')}${hideCompletedBtn('vinyl')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
+    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderVinyl')}${salesDropdown('renderVinyl')}${hideCompletedBtn('vinyl')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
     <!-- FILTER BAR -->
     <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
       <input placeholder="🔍 Search name, SO, client..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:210px" value="${vinylFilter.search}" oninput="vinylFilter.search=this.value;renderVinyl()">
@@ -1334,7 +1348,7 @@ function applyPlanFilter(data){
 function renderPlanogram(){
   const el=document.getElementById('tab-planogram');
   const planBase=hideCompleted['planogram']?planogramSchedule.filter(v=>v.status!=='Complete'):planogramSchedule;
-  const source=pmFilter?planBase.filter(v=>{const p=projects.find(x=>x.id===v.project_id);return p?p.pm===pmFilter:!pmFilter;}):planBase;
+  const source=planBase.filter(v=>{const p=projects.find(x=>x.id===v.project_id);if(!p)return!pmFilter&&!salesFilter;if(pmFilter&&p.pm!==pmFilter)return false;if(salesFilter&&p.sales!==salesFilter)return false;return true;});
   const filtered=applyPlanFilter(source);
   const activeFilters=[planFilter.status,planFilter.search,planFilter.dateFrom,planFilter.dateTo].filter(Boolean).length;
   const rows=filtered.map((item,i)=>{
@@ -1360,7 +1374,7 @@ function renderPlanogram(){
     </tr>`;
   }).join('');
   el.innerHTML=`<div class="section">
-    <div class="section-head"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderPlanogram')}${hideCompletedBtn('planogram')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
+    <div class="section-head"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderPlanogram')}${salesDropdown('renderPlanogram')}${hideCompletedBtn('planogram')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
     <!-- FILTER BAR -->
     <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
       <input placeholder="🔍 Search name, SO, client, machine..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:230px" value="${planFilter.search}" oninput="planFilter.search=this.value;renderPlanogram()">
@@ -1599,7 +1613,7 @@ function renderCheckinOverview(){
   const el=document.getElementById('tab-checkin');
   const base=monday(today());
   const weeks=[{label:'This week',start:base},{label:'Next week',start:addD(base,7)}];
-  const apci=filterByPM(activeProjects('checkin'));
+  const apci=filterBySales(filterByPM(activeProjects('checkin')));
   const depts=Object.keys(DEPT_KEYS);
 
   function getDeptMs(dept,wStart){
@@ -1695,7 +1709,7 @@ function renderCheckinOverview(){
   el.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">'+
     '<div><div style="font-size:16px;font-weight:600">🚦 Department check-in</div>'+
     '<div style="font-size:12px;color:var(--gray-500);margin-top:2px">Dept leads update via <strong>signifi-ops.vercel.app/checkin</strong></div></div>'+
-    pmDropdown('renderCheckinOverview')+pmDropdown('renderCheckinOverview')+'<button class="btn" style="font-size:11px;padding:4px 10px" onclick="snapshotCheckin()" title="Save this week\'s stoplights to history">📸 Snapshot week</button>'+'<button class="btn-export" onclick="loadAll()">↻ Refresh</button></div>'+
+    pmDropdown('renderCheckinOverview')+pmDropdown('renderCheckinOverview')+salesDropdown('renderCheckinOverview')+'<button class="btn" style="font-size:11px;padding:4px 10px" onclick="snapshotCheckin()" title="Save this week\'s stoplights to history">📸 Snapshot week</button>'+'<button class="btn-export" onclick="loadAll()">↻ Refresh</button></div>'+
     '<div style="background:var(--blue-bg);border:1px solid #bfdbfe;border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;font-size:11px;color:var(--blue)">'+
     '<strong>Dept passcodes:</strong> Production: <code>prod2026</code> · UI: <code>ui2026</code> · Inventory: <code>inv2026</code> · Procurement: <code>proc2026</code> · MO: <code>mo2026</code> · QA: <code>qa2026</code> · Shipping: <code>ship2026</code> · Deployment: <code>deploy2026</code></div>'+
     weeksHtml;
@@ -1718,17 +1732,17 @@ async function snapshotCheckin(){
 }
 function renderBriefing(){
   const el=document.getElementById('tab-briefing');
-  const ap2=filterByPM(activeProjects('briefing'));const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+  const ap2=filterBySales(filterByPM(activeProjects('briefing')));const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
   const timeStr=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
   const allMs=milestones.map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:'',so:p?p.so_number:'',client:p?p.client:''};});
   // Merge ad hoc items into briefing milestones
-  const adHocBriefMs=getAdHocAsMilestones().filter(m=>m._status!=='Complete').map(m=>({...m,so:m.so||'',client:m.client||''}));
+  const adHocBriefMs=getAdHocAsMilestones().filter(m=>m._status!=='Complete'&&(!pmFilter||m._raw?.pm===pmFilter)).map(m=>({...m,so:m.so||'',client:m.client||''}));
   const allMsBriefing=[...allMs,...adHocBriefMs];
   const thisWeekMs=allMsBriefing.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).sort((a,b)=>a.date.localeCompare(b.date));
   const overdueMs=allMsBriefing.filter(m=>m.date&&daysDiff(m.date)<0&&isMilestoneOverdue(m)).sort((a,b)=>b.date.localeCompare(a.date));
   const upcomingMs=allMsBriefing.filter(m=>m.date&&daysDiff(m.date)>6&&daysDiff(m.date)<=14).sort((a,b)=>a.date.localeCompare(b.date));
   const STAGES=[{label:'Readiness',startKey:'po-release',endKey:'arrival'},{label:'Production',startKey:'production-start',endKey:'production-end'},{label:'Quality / QA',startKey:'quality-start',endKey:'quality-end'},{label:'UAT',startKey:'uat',endKey:'uat'},{label:'Shipping',startKey:'shipping',endKey:'shipping'},{label:'Installation',startKey:'installation',endKey:'installation'}];
-  const projSummary=filterByPM(activeProjects('briefing')).map(p=>{
+  const projSummary=filterBySales(filterByPM(activeProjects('briefing'))).map(p=>{
     const currentStage=STAGES.find(s=>{const sd=getMsDate(p.id,s.startKey);const ed=getMsDate(p.id,s.endKey);if(!sd)return false;const t=today();const start=new Date(sd+'T00:00:00');const end=ed?new Date(ed+'T00:00:00'):start;return t>=start&&t<=end;});
     const nextMs=allMs.filter(m=>m.project_id===p.id&&m.date&&daysDiff(m.date)>=0).sort((a,b)=>a.date.localeCompare(b.date))[0];
     const h=calcHealth(p.id);
@@ -1745,7 +1759,7 @@ function renderBriefing(){
         <div style="font-size:12px;color:#aaa;margin-top:2px">${dateStr} · ${timeStr} · Prepared by ${currentUserName}</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
-        ${pmDropdown('renderBriefing')}
+        ${pmDropdown('renderBriefing')}${salesDropdown('renderBriefing')}
         <button class="no-print" style="background:#1a1a1a;color:white;border:1px solid #333;padding:8px 16px;border-radius:var(--radius);cursor:pointer;font-family:var(--font);font-size:12px" onclick="window.print()">🖨 Print / Save PDF</button>
       </div>
     </div>
@@ -2203,7 +2217,7 @@ function renderProjPage(){
   if(!projects.length){el.innerHTML='<div class="empty-state">No projects yet.</div>';return;}
   if(!ppProjId)ppProjId=selectedProjId||projects[0].id;
   const sortedProjs=[...projects].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  const filteredProjList=pmFilter?sortedProjs.filter(p=>p.pm===pmFilter):sortedProjs;
+  const filteredProjList=sortedProjs.filter(p=>((!pmFilter||p.pm===pmFilter)&&(!salesFilter||p.sales===salesFilter)));
   if(pmFilter&&ppProjId&&!filteredProjList.find(p=>p.id===ppProjId)&&filteredProjList.length){ppProjId=filteredProjList[0].id;selectedProjId=ppProjId;}
   // Build a name->id map for the search
   const projNameMap={};
@@ -2221,7 +2235,7 @@ function renderProjPage(){
           ${selectOpts}
         </select>
       </div>
-      ${pmDropdown('renderProjPage')}
+      ${pmDropdown('renderProjPage')}${salesDropdown('renderProjPage')}
       <span id="pp-saved" class="pp-saved">Saved ✓</span>
     </div>
     <div id="pp-body"><div style="text-align:center;padding:3rem;color:var(--gray-500)"><div style="font-size:20px;margin-bottom:8px">⏳</div>Loading project page...</div></div>`;
