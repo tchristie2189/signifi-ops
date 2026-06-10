@@ -2409,10 +2409,18 @@ function renderProjPageBody(){
 
     <!-- ROW 1: Summary + Quick Links -->
     <div class="pp-grid">
-      <div class="pp-card">
-        <div class="pp-card-head"><span class="pp-card-title">Project summary</span><span style="font-size:10px;color:var(--gray-400)">Click to edit</span></div>
-        <div class="pp-card-body">
-          <textarea class="pp-textarea" placeholder="Brief 3-5 sentence summary of current project status, major accomplishments, upcoming milestones, and any concerns requiring attention..." onchange="savePPSection('summary',this.value)" style="min-height:100px">${getSection('summary')}</textarea>
+      <div>
+        <div class="pp-card" style="margin-bottom:12px">
+          <div class="pp-card-head"><span class="pp-card-title">Project summary</span><span style="font-size:10px;color:var(--gray-400)">Internal only · Click to edit</span></div>
+          <div class="pp-card-body">
+            <textarea class="pp-textarea" placeholder="Brief 3-5 sentence summary of current project status, major accomplishments, upcoming milestones, and any concerns requiring attention..." onchange="savePPSection('summary',this.value)" style="min-height:80px">${getSection('summary')}</textarea>
+          </div>
+        </div>
+        <div class="pp-card">
+          <div class="pp-card-head"><span class="pp-card-title">Client updates</span><span style="font-size:10px;color:var(--success)">Appears on client export</span></div>
+          <div class="pp-card-body">
+            <textarea class="pp-textarea" placeholder="Updates, status, and notes for the client..." onchange="savePPSection('client_updates',this.value)" style="min-height:80px">${getSection('client_updates')}</textarea>
+          </div>
         </div>
       </div>
       <div class="pp-card">
@@ -3730,6 +3738,7 @@ function openClientExport(){
   const pMs=[...milestones.filter(m=>m.project_id===ppProjId)].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   const teamRows=(ppData.team||[]).filter(t=>t.name&&t.name!=='Name'&&t.name.trim());
   const summary=getSection('summary')||'';
+  const clientUpdateText=getSection('client_updates')||'';
   const statusVal=getSection('status')||'on-track';
   const statusLbl=statusVal==='on-track'?'On Track':statusVal==='at-risk'?'At Risk':'Off Track';
   const statusColor=statusVal==='on-track'?'#166534':statusVal==='at-risk'?'#854d0e':'#991b1b';
@@ -3859,7 +3868,7 @@ body{font-family:'DM Sans',sans-serif;background:#f1f5f9;color:#0f172a;-webkit-p
   </div>
 
   <!-- SUMMARY -->
-  ${summary?`<div class="summary-card"><div class="card-label">Project Summary</div><p style="line-height:1.65;color:#475569">${summary.replace(/\n/g,'<br>')}</p></div>`:''}
+  ${clientUpdateText?`<div class="summary-card"><div class="card-label">Client Updates</div><p style="line-height:1.65;color:#475569">${clientUpdateText.replace(/\n/g,'<br>')}</p></div>`:''}
 
   <!-- PROGRESS -->
   <div class="progress-section">
