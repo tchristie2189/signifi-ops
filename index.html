@@ -1136,7 +1136,7 @@ function renderDeptView(dept){
     production:{title:'Production schedule',startKey:'production-start',endKey:'production-end',color:'#7c3aed',cols:['Project','SO','Client','PM','Prod start','Prod end','Duration','Status']},
     quality:{title:'Quality / QA schedule',startKey:'quality-start',endKey:'quality-end',color:'#d97706',cols:['Project','SO','Client','PM','QA start','QA end','Duration','Vinyl','UAT','Status']},
     shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO','Client','PM','Pack & ship','Delivery','Status','']},
-    installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO','Client','PM','Training','Installation','Confirmed','Status','']},
+    installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO','Client','PM','Training','Installation','Confirmed','Install Ticket','Status','']},
   };
   const c=cfg[dept];
   let ganttHtml='';
@@ -1168,7 +1168,9 @@ function renderDeptView(dept){
       const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)" title="Click to change date">`:`<button onclick="openAddMsForProj('${p.id}')" style="font-size:10px;color:var(--blue);background:none;border:1px dashed var(--blue);border-radius:4px;padding:1px 6px;cursor:pointer">+ Add</button>`;
       const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)" title="Click to change date">`:`<button onclick="openAddMsForProj('${p.id}')" style="font-size:10px;color:var(--blue);background:none;border:1px dashed var(--blue);border-radius:4px;padding:1px 6px;cursor:pointer">+ Add</button>`;
       const confirmed=p.install_date_confirmed?`<span style="font-size:11px;color:var(--success);font-weight:600">✓ ${fmt(p.install_date_confirmed)}</span>`:`<span style="font-size:10px;color:var(--gray-400)">Pending</span>`;
-      extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td>';
+      const ticketUrl=p.install_ticket_url||'';
+      const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>`:`<input type="text" value="" placeholder="Paste URL..." data-proj="${p.id}" style="font-size:10px;padding:2px 6px;border:1px solid var(--gray-200);border-radius:4px;width:110px;font-family:var(--font)" onchange="saveInstallTicketUrl('${p.id}',this.value)">`;
+      extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';
     }
     const html='<tr><td style="font-weight:500">'+p.name+'</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+(hasFilter?'<td></td>':'')+'</tr>';
     return{_d:sd||'',html};
@@ -1974,6 +1976,7 @@ function openEditProj(id){
         <div class="field full"><label>Employee list URL</label><input id="ep-employee" value="${proj.employee_list_url||''}" placeholder="SharePoint or Jira link..."></div>
         <div class="field full"><label>Facility Site Survey Review URL</label><input id="ep-facility-survey" value="${proj.facility_survey_url||''}" placeholder="https://..."></div>
         <div class="field full"><label>IT Site Survey Review URL</label><input id="ep-it-survey" value="${proj.it_survey_url||''}" placeholder="https://..."></div>
+        <div class="field full"><label>Installation Ticket URL</label><input id="ep-install-ticket" value="${proj.install_ticket_url||''}" placeholder="https://..."></div>
         <div class="field full"><label>Vision Training URL</label><input id="ep-vision-training" value="${proj.vision_training_url||''}" placeholder="https://..."></div>
         <div class="field full"><label>Vinyl Render Odoo URL</label><input id="ep-vinyl-odoo" value="${proj.vinyl_odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..."></div>
 
@@ -2007,6 +2010,7 @@ async function saveEditProj(id){
     facility_survey_url:document.getElementById('ep-facility-survey')?.value.trim()||null,
     it_survey_url:document.getElementById('ep-it-survey')?.value.trim()||null,
     vision_training_url:document.getElementById('ep-vision-training')?.value.trim()||null,
+    install_ticket_url:document.getElementById('ep-install-ticket')?.value.trim()||null,
     vinyl_odoo_url:document.getElementById('ep-vinyl-odoo')?.value.trim()||null,
     changed_by:currentUserName,changed_at:new Date().toISOString()
   }).eq('id',id);
@@ -2267,7 +2271,7 @@ function renderProjPageBody(){
   const linkMap={};
   ppData.links.forEach(l=>{if(!linkMap[l.label])linkMap[l.label]=[];if(l.url)linkMap[l.label].push({url:l.url,id:l.id});});
   // Override with project record fields (authoritative single-value sources)
-  const projLinkOverrides={'Odoo Task':proj.odoo_url,'Jira / UI Task':proj.ui_task_url,'QA Task':proj.qa_task_url,'Product Template':proj.product_template_url,'Badge Reader':proj.badge_reader_url,'Employee List':proj.employee_list_url,'Facility Site Survey':proj.facility_survey_url,'IT Site Survey':proj.it_survey_url,'Vision Training':proj.vision_training_url,'Vinyl Render Odoo':proj.vinyl_odoo_url};
+  const projLinkOverrides={'Odoo Task':proj.odoo_url,'Jira / UI Task':proj.ui_task_url,'QA Task':proj.qa_task_url,'Product Template':proj.product_template_url,'Badge Reader':proj.badge_reader_url,'Employee List':proj.employee_list_url,'Facility Site Survey':proj.facility_survey_url,'IT Site Survey':proj.it_survey_url,'Vision Training':proj.vision_training_url,'Vinyl Render Odoo':proj.vinyl_odoo_url,'Installation Ticket':proj.install_ticket_url};
   Object.entries(projLinkOverrides).forEach(([label,url])=>{if(url){if(!linkMap[label])linkMap[label]=[];if(!linkMap[label].find(x=>x.url===url))linkMap[label].unshift({url,id:'proj-'+label});}});
   // Keep backward compat for things that still use linkVals
   const linkVals=Object.fromEntries(Object.entries(linkMap).map(([k,v])=>[k,v[0]?.url||'']));
@@ -2385,6 +2389,7 @@ function renderProjPageBody(){
           <span>📋 SO: <strong>${proj.so_number||'—'}</strong></span>
           <span>👤 PM: <strong>${proj.pm||'—'}</strong></span>
           <span>🏢 ${proj.client||'—'}</span>
+          ${proj.product_type?`<span>📦 ${proj.product_type}</span>`:''}
           ${goLive?`<span>🎯 Go-live: <strong>${fmt(goLive)}</strong></span>`:''}
         </div>
         <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -2397,6 +2402,7 @@ function renderProjPageBody(){
           <input value="${phase}" style="font-size:12px;background:rgba(255,255,255,0.1);border:none;border-bottom:1px solid #444;color:white;padding:2px 6px;font-family:var(--font);width:120px" onchange="savePPSection('phase',this.value)" placeholder="Current phase">
           <span style="font-size:11px;color:#555">Last updated: ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>
         </div>
+
       </div>
       <div style="display:flex;flex-direction:column;gap:7px;align-items:flex-end;flex-shrink:0" class="no-print">
         <button onclick="openLinksPopout()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #3b82f6;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🔗 Quick links</button>
@@ -2611,45 +2617,74 @@ async function removePPLink(label,idx){
 
 // ── PM TASKS ────────────────────────────────────────────────
 function renderPMTaskRows(pid,saved){
-  const defaults=['Vinyl design request','UI Task','Product Template task','IT Survey Review task','Facility Survey Review task','Language Translation task','Vision User Access task','Vision Training task','Installation Ticket','Planogram Layout','QA Task','Badge Task'].map(label=>({label,due_date:null,status:'Pending',_default:true}));
-  const rows=saved.length?saved:defaults;
+  var defaults=['Vinyl design request','UI Task','Product Template task','IT Survey Review task','Facility Survey Review task','Language Translation task','Vision User Access task','Vision Training task','Installation Ticket','Planogram Layout','QA Task','Badge Task'].map(function(label){return{label:label,due_date:null,status:'Pending',_default:true};});
+  var rows=saved.length?saved:defaults;
   return rows.map(function(t){
-    const id=t.id||('def-'+t.label.replace(/[^a-zA-Z0-9]/g,'-'));
-    const sc=t.status==='Done'?'var(--success)':t.status==='In Progress'?'var(--blue)':'var(--gray-400)';
-    const labelCell=t.id
-      ?'<input value="'+t.label.split('"').join('&quot;')+'" style="font-family:var(--font);font-size:12px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:180px" onblur="savePMTask(&#39;'+pid+'&#39;,&#39;'+t.id+'&#39;,&#39;label&#39;,this.value)">'
-      :'<span style="color:var(--gray-700)">'+t.label+'</span>';
-    const dueCell='<input type="date" value="'+(t.due_date||'')+'" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px" onchange="savePMTask(&#39;'+pid+'&#39;,&#39;'+id+'&#39;,&#39;due_date&#39;,this.value)">';
-    const statusOpts=['Pending','In Progress','Done'].map(s=>'<option'+(t.status===s?' selected':'')+'>'+s+'</option>').join('');
-    const statusCell='<select style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;color:'+sc+';font-weight:500" onchange="savePMTask(&#39;'+pid+'&#39;,&#39;'+id+'&#39;,&#39;status&#39;,this.value)">'+statusOpts+'</select>';
-    const delCell='<button onclick="deletePMTask(\''+id+'\')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px" title="Remove">✕</button>';
-    return'<tr id="pmt-row-'+id+'" style="border-bottom:1px solid var(--gray-50)"><td style="padding:5px 8px;font-size:12px">'+labelCell+'</td><td style="padding:5px 8px">'+dueCell+'</td><td style="padding:5px 8px">'+statusCell+'</td><td style="padding:5px 8px;text-align:center">'+delCell+'</td></tr>';
+    var id=t.id?t.id:('def-'+t.label.replace(/[^a-zA-Z0-9]/g,'-'));
+    var sc=t.status==='Done'?'var(--success)':t.status==='In Progress'?'var(--blue)':'var(--gray-400)';
+    var lbl=t.label.split('"').join('&quot;');
+    var isSaved=!!t.id;
+    var labelCell='<input value="'+lbl+'" id="pmt-lbl-'+id+'" data-pid="'+pid+'" data-tid="'+id+'" data-field="label" style="font-family:var(--font);font-size:12px;padding:3px 6px;border:'+(isSaved?'1px solid var(--gray-200)':'1px solid transparent')+';border-radius:4px;width:170px;background:'+(isSaved?'var(--white)':'transparent')+'" onblur="pmtBlur(this)" onfocus="this.style.border=\'1px solid var(--gray-200)\';this.style.background=\'var(--white)\'">';
+    var dueCell='<input type="date" value="'+(t.due_date||'')+'" data-pid="'+pid+'" data-tid="'+id+'" data-field="due_date" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px" onchange="pmtChange(this)">';
+    var statusOpts=['Pending','In Progress','Done'].map(function(s){return'<option'+(t.status===s?' selected':'')+'>'+s+'</option>';}).join('');
+    var statusCell='<select data-pid="'+pid+'" data-tid="'+id+'" data-field="status" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;color:'+sc+';font-weight:500" onchange="pmtChange(this)">'+statusOpts+'</select>';
+    var delCell='<button data-tid="'+id+'" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px" title="Remove" onclick="deletePMTask(this.dataset.tid)">✕</button>';
+    return'<tr id="pmt-row-'+id+'" style="border-bottom:1px solid var(--gray-50)"><td style="padding:5px 8px">'+labelCell+'</td><td style="padding:5px 8px">'+dueCell+'</td><td style="padding:5px 8px">'+statusCell+'</td><td style="padding:5px 8px;text-align:center">'+delCell+'</td></tr>';
   }).join('');
 }
+function pmtBlur(el){savePMTask(el.dataset.pid,el.dataset.tid,'label',el.value);}
+function pmtChange(el){savePMTask(el.dataset.pid,el.dataset.tid,el.dataset.field,el.value);}
 const DEFAULT_PM_TASKS=['Vinyl design request','UI Task','Product Template task','IT Survey Review task','Facility Survey Review task','Language Translation task','Vision User Access task','Vision Training task','Installation Ticket','Planogram Layout','QA Task','Badge Task'];
 async function savePMTask(pid,taskId,field,val){
   if(taskId.startsWith('new-')){
+    // Brand new user-added row — insert with label from input
     const label=document.getElementById('pmt-label-'+taskId)?.value.trim()||'Task';
-    const{data}=await sb.from('pm_tasks').insert({project_id:pid,label,due_date:field==='due_date'?val||null:null,status:field==='status'?val:'Pending',sort_order:0}).select().single();
+    if(!label||label==='Task')return;
+    const{data}=await sb.from('pm_tasks').insert({project_id:pid,label,due_date:field==='due_date'?val||null:null,status:field==='status'?val:'Pending',sort_order:ppData.pmtasks.length}).select().single();
     if(data){
+      ppData.pmtasks.push(data);
       const el=document.getElementById('pmt-row-'+taskId);
-      if(el){el.id='pmt-row-'+data.id;el.dataset.pmtid=data.id;}
+      if(el){el.id='pmt-row-'+data.id;}
+      // Update all onclick handlers in this row to use real ID
+      el?.querySelectorAll('[onchange],[onblur]').forEach(inp=>{
+        if(inp.getAttribute('onchange'))inp.setAttribute('onchange',inp.getAttribute('onchange').replace(taskId,data.id));
+        if(inp.getAttribute('onblur'))inp.setAttribute('onblur',inp.getAttribute('onblur').replace(taskId,data.id));
+      });
+    }
+  } else if(taskId.startsWith('def-')){
+    // Default task — insert into DB first
+    const label=document.getElementById('pmt-row-'+taskId)?.querySelector('span')?.textContent||taskId.replace('def-','').replace(/-/g,' ');
+    const{data}=await sb.from('pm_tasks').insert({project_id:pid,label,due_date:field==='due_date'?val||null:null,status:field==='status'?val:'Pending',sort_order:ppData.pmtasks.length}).select().single();
+    if(data){
+      ppData.pmtasks.push(data);
+      // Update row ID and all event handlers to use real DB id
+      const row=document.getElementById('pmt-row-'+taskId);
+      if(row){
+        row.id='pmt-row-'+data.id;
+        row.querySelectorAll('[onchange],[onblur]').forEach(el=>{
+          if(el.getAttribute('onchange'))el.setAttribute('onchange',el.getAttribute('onchange').replace(new RegExp(taskId.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g'),data.id));
+          if(el.getAttribute('onblur'))el.setAttribute('onblur',el.getAttribute('onblur').replace(new RegExp(taskId.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g'),data.id));
+        });
+        row.querySelectorAll('[onclick]').forEach(el=>{
+          if(el.getAttribute('onclick'))el.setAttribute('onclick',el.getAttribute('onclick').replace(new RegExp(taskId.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g'),data.id));
+        });
+      }
     }
   } else {
+    // Existing DB row — just update
     await sb.from('pm_tasks').update({[field]:val||null}).eq('id',taskId);
+    // Update local ppData
+    const t=ppData.pmtasks.find(x=>x.id===taskId);
+    if(t)t[field]=val||null;
   }
 }
 async function deletePMTask(taskId){
-  if(taskId.startsWith('new-')){
-    document.getElementById('pmt-row-'+taskId)?.remove();
-    return;
-  }
-  if(taskId.startsWith('def-')){
-    // Default task not yet in DB — just remove from DOM
+  if(taskId.startsWith('new-')||taskId.startsWith('def-')){
     document.getElementById('pmt-row-'+taskId)?.remove();
     return;
   }
   await sb.from('pm_tasks').delete().eq('id',taskId);
+  ppData.pmtasks=ppData.pmtasks.filter(x=>x.id!==taskId);
   document.getElementById('pmt-row-'+taskId)?.remove();
 }
 async function addPMTaskRow(pid,containerId){
@@ -2658,13 +2693,14 @@ async function addPMTaskRow(pid,containerId){
   if(!container)return;
   const tr=document.createElement('tr');
   tr.id='pmt-row-'+tempId;
-  tr.innerHTML=`
-    <td style="padding:5px 8px"><input id="pmt-label-${tempId}" placeholder="Task name..." style="font-family:var(--font);font-size:12px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:4px;width:180px" onblur="savePMTask('${pid}','${tempId}','label',this.value)"></td>
-    <td style="padding:5px 8px"><input type="date" style="font-family:var(--font);font-size:11px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:4px" onchange="savePMTask('${pid}','${tempId}','due_date',this.value)"></td>
-    <td style="padding:5px 8px"><select style="font-family:var(--font);font-size:11px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:4px" onchange="savePMTask('${pid}','${tempId}','status',this.value)"><option>Pending</option><option>In Progress</option><option>Done</option></select></td>
-    <td style="padding:5px 8px;text-align:center"><button onclick="deletePMTask('${tempId}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:14px">✕</button></td>`;
+  tr.style.borderBottom='1px solid var(--gray-50)';
+  tr.innerHTML=
+    '<td style="padding:5px 8px"><input id="pmt-lbl-'+tempId+'" data-pid="'+pid+'" data-tid="'+tempId+'" data-field="label" placeholder="Task name..." style="font-family:var(--font);font-size:12px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:4px;width:170px" onblur="pmtBlur(this)"></td>'+
+    '<td style="padding:5px 8px"><input type="date" data-pid="'+pid+'" data-tid="'+tempId+'" data-field="due_date" style="font-family:var(--font);font-size:11px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:4px" onchange="pmtChange(this)"></td>'+
+    '<td style="padding:5px 8px"><select data-pid="'+pid+'" data-tid="'+tempId+'" data-field="status" style="font-family:var(--font);font-size:11px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:4px" onchange="pmtChange(this)"><option>Pending</option><option>In Progress</option><option>Done</option></select></td>'+
+    '<td style="padding:5px 8px;text-align:center"><button data-tid="'+tempId+'" onclick="deletePMTask(this.dataset.tid)" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px">✕</button></td>';
   container.appendChild(tr);
-  document.getElementById('pmt-label-'+tempId)?.focus();
+  document.getElementById('pmt-lbl-'+tempId)?.focus();
 }
 
 // Team CRUD
@@ -3302,6 +3338,17 @@ async function removeAdHoc(dept,idx){
 const DEFAULT_PRODUCT_TYPES=['SparkXL V8','SparkXL V7','18" Control Locker','18" Add-on Locker','Companion','10" Smart Companion','15" Smart Companion','Stand-up TED','Sit-down TED','TVM','Smart Drawer','Mini Drawer','Stuff Station Lite','Stuff Station Standard','Stuff Station Plus','GrabnGo','SKD 2-Hopper','SKD 4-Hopper','SparkXL w/ Ted Side Panel'];
 function getProductTypes(){return appSettings['product_types']||DEFAULT_PRODUCT_TYPES;}
 
+// ── PROJECT PHOTOS ─────────────────────────────────────────
+async function saveInstallTicketUrl(projId,url){
+  await sb.from('projects').update({install_ticket_url:url,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',projId);
+  const p=projects.find(x=>x.id===projId);if(p)p.install_ticket_url=url;
+  // Also save to project_links so it shows in Quick Links
+  const existing=ppData.links?.find(l=>l.label==='Installation Ticket'&&l.project_id===projId);
+  if(existing){await sb.from('project_links').update({url}).eq('id',existing.id);}
+  else{await sb.from('project_links').insert({project_id:projId,label:'Installation Ticket',url,category:'',sort_order:0});}
+  showToast('Installation ticket saved ✓');
+  renderDeptView('installation');
+}
 function renderSettings(){
   const el=document.getElementById('tab-settings');
   const types=getProductTypes();
