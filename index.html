@@ -2617,8 +2617,14 @@ async function removePPLink(label,idx){
 
 // ── PM TASKS ────────────────────────────────────────────────
 function renderPMTaskRows(pid,saved){
-  var defaults=['Vinyl design request','UI Task','Product Template task','IT Survey Review task','Facility Survey Review task','Language Translation task','Vision User Access task','Vision Training task','Installation Ticket','Planogram Layout','QA Task','Badge Task'].map(function(label){return{label:label,due_date:null,status:'Pending',_default:true};});
-  var rows=saved.length?saved:defaults;
+  var DEFAULT_LABELS=['Vinyl design request','UI Task','Product Template task','IT Survey Review task','Facility Survey Review task','Language Translation task','Vision User Access task','Vision Training task','Installation Ticket','Planogram Layout','QA Task','Badge Task'];
+  // Always merge: start with defaults, override with saved data if exists, append any extra saved rows
+  var rows=DEFAULT_LABELS.map(function(label){
+    var s=saved.find(function(x){return x.label===label;});
+    return s||{label:label,due_date:null,status:'Pending',_default:true};
+  });
+  // Append any saved rows that aren't in the default list
+  saved.forEach(function(s){if(!DEFAULT_LABELS.includes(s.label))rows.push(s);});
   return rows.map(function(t){
     var id=t.id?t.id:('def-'+t.label.replace(/[^a-zA-Z0-9]/g,'-'));
     var sc=t.status==='Done'?'var(--success)':t.status==='In Progress'?'var(--blue)':'var(--gray-400)';
