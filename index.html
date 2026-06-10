@@ -2155,18 +2155,19 @@ function exportToExcel(){
 
 // ── PROJECT PAGE ───────────────────────────────────────────
 let ppProjId=null;
-let ppData={team:[],actions:[],risks:[],decisions:[],sections:{},links:[]};
+let ppData={team:[],actions:[],risks:[],decisions:[],sections:{},links:[],pmtasks:[]};
 let ppSaveTimer=null;
 
 async function loadProjPage(pid){
   ppProjId=pid;
-  const[team,actions,risks,decisions,sections,links]=await Promise.all([
+  const[team,actions,risks,decisions,sections,links,pmt]=await Promise.all([
     sb.from('project_team').select('*').eq('project_id',pid).order('sort_order'),
     sb.from('action_items').select('*').eq('project_id',pid).order('created_at'),
     sb.from('risks').select('*').eq('project_id',pid).order('created_at'),
     sb.from('decisions').select('*').eq('project_id',pid).order('decision_date',{ascending:false}),
     sb.from('project_sections').select('*').eq('project_id',pid),
     sb.from('project_links').select('*').eq('project_id',pid).order('sort_order'),
+    sb.from('pm_tasks').select('*').eq('project_id',pid).order('sort_order'),
   ]);
   ppData={
     team:team.data||[],
@@ -2175,6 +2176,7 @@ async function loadProjPage(pid){
     decisions:decisions.data||[],
     sections:Object.fromEntries((sections.data||[]).map(s=>[s.section_key,s])),
     links:links.data||[],
+    pmtasks:pmt.data||[],
   };
 }
 
@@ -2261,29 +2263,32 @@ function renderProjPageBody(){
     {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira / UI Task',key:'jira'},{label:'QA Task',key:'qa_task'},{label:'Product Template',key:'product_template'},{label:'Badge Reader',key:'badge_reader'},{label:'Employee List',key:'employee_list'},{label:'Facility Site Survey',key:'facility_survey'},{label:'IT Site Survey',key:'it_survey'},{label:'Odoo Task',key:'odoo'},{label:'Vinyl Render Odoo',key:'vinyl_odoo'},{label:'Client Portal',key:'client_portal'}]},
   ];
   // Start with anything saved in project_links table
-  const linkVals=Object.fromEntries(ppData.links.map(l=>[l.label,l.url]));
-  // Always override with the authoritative fields from the project record
-  if(proj.odoo_url)linkVals['Odoo Task']=proj.odoo_url;
-  if(proj.ui_task_url)linkVals['Jira / UI Task']=proj.ui_task_url;
-  if(proj.qa_task_url)linkVals['QA Task']=proj.qa_task_url;
-  if(proj.product_template_url)linkVals['Product Template']=proj.product_template_url;
-  if(proj.badge_reader_url)linkVals['Badge Reader']=proj.badge_reader_url;
-  if(proj.employee_list_url)linkVals['Employee List']=proj.employee_list_url;
-  if(proj.facility_survey_url)linkVals['Facility Site Survey']=proj.facility_survey_url;
-  if(proj.it_survey_url)linkVals['IT Site Survey']=proj.it_survey_url;
-  if(proj.vision_training_url)linkVals['Vision Training']=proj.vision_training_url;
-  if(proj.vinyl_odoo_url)linkVals['Vinyl Render Odoo']=proj.vinyl_odoo_url;
+  // Build multi-link map: {label: [url, url2, ...]}
+  const linkMap={};
+  ppData.links.forEach(l=>{if(!linkMap[l.label])linkMap[l.label]=[];if(l.url)linkMap[l.label].push({url:l.url,id:l.id});});
+  // Override with project record fields (authoritative single-value sources)
+  const projLinkOverrides={'Odoo Task':proj.odoo_url,'Jira / UI Task':proj.ui_task_url,'QA Task':proj.qa_task_url,'Product Template':proj.product_template_url,'Badge Reader':proj.badge_reader_url,'Employee List':proj.employee_list_url,'Facility Site Survey':proj.facility_survey_url,'IT Site Survey':proj.it_survey_url,'Vision Training':proj.vision_training_url,'Vinyl Render Odoo':proj.vinyl_odoo_url};
+  Object.entries(projLinkOverrides).forEach(([label,url])=>{if(url){if(!linkMap[label])linkMap[label]=[];if(!linkMap[label].find(x=>x.url===url))linkMap[label].unshift({url,id:'proj-'+label});}});
+  // Keep backward compat for things that still use linkVals
+  const linkVals=Object.fromEntries(Object.entries(linkMap).map(([k,v])=>[k,v[0]?.url||'']));
 
   const linksHtml=LINK_CATS.map(cat=>`
     <div style="margin-bottom:10px">
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">${cat.cat}</div>
       ${cat.items.map(item=>{
-        const val=linkVals[item.label]||'';
-        return`<div class="pp-link-item">
-          <span class="pp-link-label">${item.label}</span>
-          <input class="pp-link-input" value="${val}" placeholder="https://..." onchange="savePPLink('${item.label}',this.value)" data-link="${item.label}">
-          ${val?`<a href="${val}" target="_blank" class="pp-link-go" title="Open">↗</a>`:'<span class="pp-link-go"> </span>'}
-        </div>`;
+        const entries=linkMap[item.label]||[];
+        const rows=entries.length?entries.map((e,i)=>`
+          <div class="pp-link-item" style="padding-left:${i>0?'110px':'0'}">
+            ${i===0?`<span class="pp-link-label">${item.label}</span>`:'<span class="pp-link-label" style="opacity:0"> </span>'}
+            <input class="pp-link-input" value="${e.url.replace(/"/g,'&quot;')}" placeholder="https://..." onchange="updatePPLink('${item.label}',${i},this.value)" data-link="${item.label}">
+            <a href="${e.url}" target="_blank" class="pp-link-go" title="Open">↗</a>
+            <button onclick="removePPLink('${item.label}',${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px" title="Remove">✕</button>
+          </div>`).join(''):`<div class="pp-link-item">
+            <span class="pp-link-label">${item.label}</span>
+            <input class="pp-link-input" value="" placeholder="https://..." onchange="updatePPLink('${item.label}',0,this.value)" data-link="${item.label}">
+            <span class="pp-link-go"> </span>
+          </div>`;
+        return rows+`<div style="padding-left:110px;margin-top:2px"><button onclick="addPPLink('${item.label}')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>`;
       }).join('')}
     </div>`).join('');
 
@@ -2426,7 +2431,26 @@ function renderProjPageBody(){
             <tbody id="pp-team">${teamHtml}</tbody>
           </table>
         </div>
-        <button class="pp-add-btn" onclick="ppAddTeam()">+ Add team member</button>
+      <button class="pp-add-btn" onclick="ppAddTeam()">+ Add team member</button>
+    </div>
+
+    <div class="pp-card">
+      <div class="pp-card-head">
+        <span class="pp-card-title">PM Tasks</span>
+        <span style="font-size:10px;color:var(--gray-400)">Checklist with due dates</span>
+      </div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="border-bottom:1px solid var(--gray-100)">
+          <th style="padding:5px 8px;font-size:10px;font-weight:700;color:var(--gray-400);text-align:left;text-transform:uppercase;white-space:nowrap">Task</th>
+          <th style="padding:5px 8px;font-size:10px;font-weight:700;color:var(--gray-400);text-align:left;text-transform:uppercase;white-space:nowrap">Due date</th>
+          <th style="padding:5px 8px;font-size:10px;font-weight:700;color:var(--gray-400);text-align:left;text-transform:uppercase">Status</th>
+          <th style="width:28px"></th>
+        </tr></thead>
+        <tbody id="pmt-body-${ppProjId}">
+          ${renderPMTaskRows(ppProjId,ppData.pmtasks||[])}
+        </tbody>
+      </table>
+      <button class="pp-add-btn" onclick="addPMTaskRow('${ppProjId}','pmt-body-${ppProjId}')">+ Add task</button>
       </div>
       <div class="pp-card">
         <div class="pp-card-head"><span class="pp-card-title">Milestone tracker</span><span style="font-size:10px;color:var(--gray-400)">Synced from hub</span></div>
@@ -2543,38 +2567,83 @@ async function savePPSection(key,value){
 }
 
 async function savePPLink(label,url){
-  // Map from quick link labels to project record columns
-  const HUB_FIELD_MAP={
-    'Odoo Task':'odoo_url',
-    'Jira / UI Task':'ui_task_url',
-    'QA Task':'qa_task_url',
-    'Product Template':'product_template_url',
-    'Badge Reader':'badge_reader_url',
-    'Employee List':'employee_list_url',
-    'Facility Site Survey':'facility_survey_url',
-    'IT Site Survey':'it_survey_url',
-    'Vision Training':'vision_training_url',
-    'Vinyl Render Odoo':'vinyl_odoo_url',
-  };
-  // If this label maps to a hub field, write back to the projects table too
+  const HUB_FIELD_MAP={'Odoo Task':'odoo_url','Jira / UI Task':'ui_task_url','QA Task':'qa_task_url','Product Template':'product_template_url','Badge Reader':'badge_reader_url','Employee List':'employee_list_url','Facility Site Survey':'facility_survey_url','IT Site Survey':'it_survey_url','Vision Training':'vision_training_url','Vinyl Render Odoo':'vinyl_odoo_url'};
   const hubField=HUB_FIELD_MAP[label];
   if(hubField){
     await sb.from('projects').update({[hubField]:url,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',ppProjId);
-    // Update local projects array so Generate Docs picks it up immediately
-    const proj=projects.find(p=>p.id===ppProjId);
-    if(proj)proj[hubField]=url;
+    const proj=projects.find(p=>p.id===ppProjId);if(proj)proj[hubField]=url;
     await logActivity('updated link',label,label,ppProjId,null,url);
   }
-  // Also save to project_links for the quick links display
   const existing=ppData.links.find(l=>l.label===label);
-  if(existing){
-    await sb.from('project_links').update({url}).eq('id',existing.id);
-    existing.url=url;
-  } else {
-    const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:'',sort_order:ppData.links.length}).select().single();
-    if(data)ppData.links.push(data);
-  }
+  if(existing){await sb.from('project_links').update({url}).eq('id',existing.id);existing.url=url;}
+  else{const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:'',sort_order:ppData.links.length}).select().single();if(data)ppData.links.push(data);}
   showPPSaved();
+}
+async function updatePPLink(label,idx,url){
+  const entries=(ppData.links||[]).filter(l=>l.label===label);
+  if(entries[idx]){await sb.from('project_links').update({url}).eq('id',entries[idx].id);entries[idx].url=url;}
+  else{const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:'',sort_order:idx}).select().single();if(data)ppData.links.push(data);}
+  showPPSaved();
+}
+async function addPPLink(label){
+  const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url:'',category:'',sort_order:ppData.links.filter(l=>l.label===label).length}).select().single();
+  if(data){ppData.links.push(data);renderProjPageBody(ppProjId);}
+}
+async function removePPLink(label,idx){
+  const entries=(ppData.links||[]).filter(l=>l.label===label);
+  if(!entries[idx])return;
+  await sb.from('project_links').delete().eq('id',entries[idx].id);
+  ppData.links=ppData.links.filter(l=>l.id!==entries[idx].id);
+  renderProjPageBody(ppProjId);
+}
+
+// ── PM TASKS ────────────────────────────────────────────────
+function renderPMTaskRows(pid,saved){
+  const defaults=['Vinyl design request','UI Task','Product Template task','IT Survey Review task','Facility Survey Review task','Language Translation task','Vision User Access task','Vision Training task','Installation Ticket','Planogram Layout','QA Task','Badge Task'].map(label=>({label,due_date:null,status:'Pending',_default:true}));
+  const rows=saved.length?saved:defaults;
+  return rows.map(function(t){
+    const id=t.id||('def-'+t.label.replace(/[^a-zA-Z0-9]/g,'-'));
+    const sc=t.status==='Done'?'var(--success)':t.status==='In Progress'?'var(--blue)':'var(--gray-400)';
+    const labelCell=t.id
+      ?'<input value="'+t.label.split('"').join('&quot;')+'" style="font-family:var(--font);font-size:12px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:180px" onblur="savePMTask(&#39;'+pid+'&#39;,&#39;'+t.id+'&#39;,&#39;label&#39;,this.value)">'
+      :'<span style="color:var(--gray-700)">'+t.label+'</span>';
+    const dueCell='<input type="date" value="'+(t.due_date||'')+'" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px" onchange="savePMTask(&#39;'+pid+'&#39;,&#39;'+id+'&#39;,&#39;due_date&#39;,this.value)">';
+    const statusOpts=['Pending','In Progress','Done'].map(s=>'<option'+(t.status===s?' selected':'')+'>'+s+'</option>').join('');
+    const statusCell='<select style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;color:'+sc+';font-weight:500" onchange="savePMTask(&#39;'+pid+'&#39;,&#39;'+id+'&#39;,&#39;status&#39;,this.value)">'+statusOpts+'</select>';
+    const delCell=t.id?'<button onclick="deletePMTask(&#39;'+t.id+'&#39;)" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px">✕</button>':'';
+    return'<tr id="pmt-row-'+id+'" style="border-bottom:1px solid var(--gray-50)"><td style="padding:5px 8px;font-size:12px">'+labelCell+'</td><td style="padding:5px 8px">'+dueCell+'</td><td style="padding:5px 8px">'+statusCell+'</td><td style="padding:5px 8px;text-align:center">'+delCell+'</td></tr>';
+  }).join('');
+}
+const DEFAULT_PM_TASKS=['Vinyl design request','UI Task','Product Template task','IT Survey Review task','Facility Survey Review task','Language Translation task','Vision User Access task','Vision Training task','Installation Ticket','Planogram Layout','QA Task','Badge Task'];
+async function savePMTask(pid,taskId,field,val){
+  if(taskId.startsWith('new-')){
+    const label=document.getElementById('pmt-label-'+taskId)?.value.trim()||'Task';
+    const{data}=await sb.from('pm_tasks').insert({project_id:pid,label,due_date:field==='due_date'?val||null:null,status:field==='status'?val:'Pending',sort_order:0}).select().single();
+    if(data){
+      const el=document.getElementById('pmt-row-'+taskId);
+      if(el){el.id='pmt-row-'+data.id;el.dataset.pmtid=data.id;}
+    }
+  } else {
+    await sb.from('pm_tasks').update({[field]:val||null}).eq('id',taskId);
+  }
+}
+async function deletePMTask(taskId){
+  if(!taskId.startsWith('new-'))await sb.from('pm_tasks').delete().eq('id',taskId);
+  document.getElementById('pmt-row-'+taskId)?.remove();
+}
+async function addPMTaskRow(pid,containerId){
+  const tempId='new-'+Date.now();
+  const container=document.getElementById(containerId);
+  if(!container)return;
+  const tr=document.createElement('tr');
+  tr.id='pmt-row-'+tempId;
+  tr.innerHTML=`
+    <td style="padding:5px 8px"><input id="pmt-label-${tempId}" placeholder="Task name..." style="font-family:var(--font);font-size:12px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:4px;width:180px" onblur="savePMTask('${pid}','${tempId}','label',this.value)"></td>
+    <td style="padding:5px 8px"><input type="date" style="font-family:var(--font);font-size:11px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:4px" onchange="savePMTask('${pid}','${tempId}','due_date',this.value)"></td>
+    <td style="padding:5px 8px"><select style="font-family:var(--font);font-size:11px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:4px" onchange="savePMTask('${pid}','${tempId}','status',this.value)"><option>Pending</option><option>In Progress</option><option>Done</option></select></td>
+    <td style="padding:5px 8px;text-align:center"><button onclick="deletePMTask('${tempId}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:14px">✕</button></td>`;
+  container.appendChild(tr);
+  document.getElementById('pmt-label-'+tempId)?.focus();
 }
 
 // Team CRUD
