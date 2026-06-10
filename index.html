@@ -1168,7 +1168,11 @@ function renderDeptView(dept){
       const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)" title="Click to change date">`:`<button onclick="openAddMsForProj('${p.id}')" style="font-size:10px;color:var(--blue);background:none;border:1px dashed var(--blue);border-radius:4px;padding:1px 6px;cursor:pointer">+ Add</button>`;
       const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)" title="Click to change date">`:`<button onclick="openAddMsForProj('${p.id}')" style="font-size:10px;color:var(--blue);background:none;border:1px dashed var(--blue);border-radius:4px;padding:1px 6px;cursor:pointer">+ Add</button>`;
       const confirmed=p.install_date_confirmed?`<span style="font-size:11px;color:var(--success);font-weight:600">✓ ${fmt(p.install_date_confirmed)}</span>`:`<span style="font-size:10px;color:var(--gray-400)">Pending</span>`;
-      const ticketUrl=p.install_ticket_url||'';
+      // Pull ticket URL from project field OR from project_links table
+      const _ticketLink=(ppData?.links||[]).find(l=>l.label==='Installation Ticket');
+      const ticketUrl=p.install_ticket_url||(_ticketLink?.url)||'';
+      // Silently sync back so it shows next time
+      if(!p.install_ticket_url&&ticketUrl)p.install_ticket_url=ticketUrl;
       const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>`:`<input type="text" value="" placeholder="Paste URL..." data-proj="${p.id}" style="font-size:10px;padding:2px 6px;border:1px solid var(--gray-200);border-radius:4px;width:110px;font-family:var(--font)" onchange="saveInstallTicketUrl('${p.id}',this.value)">`;
       extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';
     }
@@ -1180,6 +1184,11 @@ function renderDeptView(dept){
     const sd=dept==='shipping'?(r.shipDate||r.ship_date||''):(r.installDate||r.install_date||'');
     let extra='';
     if(dept==='shipping'){extra='<td class="date-cell">'+fmt(r.shipDate||r.ship_date)+'</td><td class="date-cell">'+fmt(r.deliveryDate||r.delivery_date)+'</td>';}
+    else if(dept==='installation'){
+      const adTicket=r.install_ticket_url||'';
+      const adTicketCell=adTicket?'<a href="'+adTicket+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
+      extra='<td class="date-cell">'+fmt(r.trainingDate||r.training_date)+'</td><td class="date-cell">'+fmt(r.installDate||r.install_date)+'</td><td class="date-cell"><span style="font-size:10px;color:var(--gray-400)">—</span></td><td class="date-cell">'+adTicketCell+'</td>';
+    }
     else{extra='<td class="date-cell">'+fmt(r.trainingDate||r.training_date)+'</td><td class="date-cell">'+fmt(r.installDate||r.install_date)+'</td>';}
     const editOC='openEditAdHoc(&quot;'+dept+'&quot;,'+origIdx+')';
     const delOC='removeAdHoc(&quot;'+dept+'&quot;,'+origIdx+')';
@@ -2585,7 +2594,7 @@ async function savePPSection(key,value){
 }
 
 async function savePPLink(label,url){
-  const HUB_FIELD_MAP={'Odoo Task':'odoo_url','Jira / UI Task':'ui_task_url','QA Task':'qa_task_url','Product Template':'product_template_url','Badge Reader':'badge_reader_url','Employee List':'employee_list_url','Facility Site Survey':'facility_survey_url','IT Site Survey':'it_survey_url','Vision Training':'vision_training_url','Vinyl Render Odoo':'vinyl_odoo_url'};
+  const HUB_FIELD_MAP={'Odoo Task':'odoo_url','Jira / UI Task':'ui_task_url','QA Task':'qa_task_url','Product Template':'product_template_url','Badge Reader':'badge_reader_url','Employee List':'employee_list_url','Facility Site Survey':'facility_survey_url','IT Site Survey':'it_survey_url','Vision Training':'vision_training_url','Vinyl Render Odoo':'vinyl_odoo_url','Installation Ticket':'install_ticket_url'};
   const hubField=HUB_FIELD_MAP[label];
   if(hubField){
     await sb.from('projects').update({[hubField]:url,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',ppProjId);
@@ -3225,6 +3234,7 @@ function openAdHocModal(dept){
           <div class="field"><label>Installation date</label><input type="date" id="ah-install"></div>
           `}
           <div class="field"><label>Project Manager</label><select id="ah-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">Select PM...</option>${['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'].map(pm=>`<option>${pm}</option>`).join('')}</select></div>
+          <div class="field full"><label>Installation Ticket URL</label><input id="ah-ticket-url" placeholder="https://..." style="font-family:var(--mono);font-size:12px"></div>
           <div class="field full"><label>Notes</label><input id="ah-notes" placeholder="Any special notes..."></div>
         </div>
       </div>
@@ -3246,6 +3256,7 @@ async function saveAdHoc(dept){
     status:document.getElementById('ah-status')?.value||'Scheduled',
     notes:document.getElementById('ah-notes')?.value.trim()||null,
     pm:document.getElementById('ah-pm')?.value||null,
+    install_ticket_url:document.getElementById('ah-ticket-url')?.value.trim()||null,
     created_by:currentUserName,
   };
   if(isShip){
@@ -3288,6 +3299,7 @@ function openEditAdHoc(dept,idx){
           <div class="field"><label>Installation date</label><input type="date" id="eh-install" value="${instDate}"></div>
           `}
           <div class="field"><label>Project Manager</label><select id="eh-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">Select PM...</option>${['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'].map(pm=>`<option${pm===(r.pm||'')?' selected':''}>${pm}</option>`).join('')}</select></div>
+          <div class="field full"><label>Installation Ticket URL</label><input id="eh-ticket-url" value="${r.install_ticket_url||''}" placeholder="https://" style="font-family:var(--mono);font-size:12px"></div>
           <div class="field full"><label>Notes</label><input id="eh-notes" value="${r.notes||''}" placeholder="Any special notes..."></div>
         </div>
       </div>
@@ -3310,6 +3322,7 @@ async function saveEditAdHoc(dept,idx){
     client:document.getElementById('eh-client')?.value.trim()||null,
     status:document.getElementById('eh-status')?.value||'Scheduled',
     pm:document.getElementById('eh-pm')?.value||null,
+    install_ticket_url:document.getElementById('eh-ticket-url')?.value.trim()||null,
     notes:document.getElementById('eh-notes')?.value.trim()||null,
   };
   if(isShip){
