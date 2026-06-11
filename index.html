@@ -2868,10 +2868,15 @@ let docFormState={};
 function getDocState(){
   const pid=selectedDocProjId||'__none';
   if(!docFormState[pid])docFormState[pid]={shared:{},install:{},ui:{},qa:{}};
-  return docFormState[pid];
+  const s=docFormState[pid];
+  if(!s.install)s.install={};
+  if(!s.ui)s.ui={};
+  if(!s.qa)s.qa={};
+  if(!s.shared)s.shared={};
+  return s;
 }
 // Fields auto-filled from project record — never restore these from state
-const AUTO_FILL_FIELDS=new Set(['if-so','if-address','qf-address','if-naming','qf-naming','if-client','if-ship','if-del','if-inst','if-vinyl','if-odoo','if-ui-task','if-qa-task','if-template','if-badge','if-employee','qf-ship','qf-vinyl','qf-jira-task','qf-jira-product','qf-jira-badge','qf-employee','uf-client']);
+const AUTO_FILL_FIELDS=new Set(['if-so','if-address','qf-address','if-naming','qf-naming','qf-so','if-client','if-ship','if-del','if-inst','if-vinyl','if-odoo','if-ui-task','if-qa-task','if-template','if-badge','if-employee','qf-ship','qf-vinyl','qf-jira-task','qf-jira-product','qf-jira-badge','qf-employee','uf-client']);
 
 let _docSaveTimer=null;
 function saveDocFormState(immediate=false){
@@ -2948,8 +2953,16 @@ function renderGenDocs(){
       <div style="padding:16px">
         <div class="proj-select-row">
           <label>Project</label>
-          <select onchange="selectedDocProjId=this.value;loadDocState(this.value).then(()=>renderGenDocs())"><option value="">Select project...</option>${projOpts}</select>
-          ${selectedDocProjId?`<span style="font-size:11px;color:var(--gray-500)">Dates and client info auto-pulled ✓</span>`:''}
+          <input list="gd-proj-list" id="gd-proj-search" placeholder="Type to search..." value="${selectedDocProjId?projects.find(p=>p.id===selectedDocProjId)?.name||'':''}"
+            style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);flex:1;min-width:0"
+            oninput="onDocProjSearch(this.value)">
+          <datalist id="gd-proj-list">${projects.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(p=>`<option value="${(p.name+(p.so_number?' — '+p.so_number:'')).replace(/"/g,'&quot;')}">`).join('')}</datalist>
+          <select style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);max-width:260px"
+            onchange="selectedDocProjId=this.value;loadDocState(this.value).then(()=>renderGenDocs())">
+            <option value="">Select project...</option>
+            ${projOpts}
+          </select>
+          ${selectedDocProjId?`<span style="font-size:11px;color:var(--success);white-space:nowrap">✓ Auto-filled</span>`:''}
         </div>
         <div class="doc-tabs" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
           <div style="display:flex;gap:4px">
@@ -3089,6 +3102,7 @@ function renderQAForm(){
     ${fld('qf-ship','Shipping date','','','text',shipDate)}
     ${fld('qf-vinyl','Vinyl date','','','text',vinylDate)}
     <div class="doc-section-lbl">Project details</div>
+    ${fld('qf-so','Sales Order (SO)','','','text',p.so_number||'')}
     ${fld('qf-address','Installation address','','full','text',p.address||'')}
     ${fld('qf-naming','Naming convention & locations','e.g. ALLIZ-BOURN-LON-SPXL','full','text',p.naming_convention||'')}
     ${fld('qf-kiosk','Kiosk type / product','e.g. SparkXL','')}
@@ -3115,6 +3129,21 @@ function renderQAForm(){
   </div>`;
 }
 
+function onDocProjSearch(val){
+  if(!val||val.length<2)return;
+  const vl=val.toLowerCase();
+  const match=projects.find(p=>{
+    const display=p.name+(p.so_number?' — '+p.so_number:'');
+    return display.toLowerCase()===vl||p.name.toLowerCase()===vl||(p.so_number&&val.includes(p.so_number));
+  })||projects.find(p=>{
+    const display=p.name+(p.so_number?' — '+p.so_number:'');
+    return display.toLowerCase().startsWith(vl)||p.name.toLowerCase().startsWith(vl);
+  });
+  if(match&&match.id!==selectedDocProjId){
+    selectedDocProjId=match.id;
+    loadDocState(match.id).then(()=>renderGenDocs());
+  }
+}
 function g(id){
   const el=document.getElementById(id);
   if(el)return el.value.trim();
@@ -3251,7 +3280,9 @@ ${g('qf-special')?`\nSpecial Requirements:\n${g('qf-special')}`:''}`;
   document.getElementById(`doc-content-${type}`).textContent=text;
   document.getElementById(`doc-output-${type}`).style.display='block';
   document.getElementById(`doc-output-${type}`).scrollIntoView({behavior:'smooth',block:'nearest'});
-  getDocState()[type].__output=text;
+  const ds=getDocState();
+  if(!ds[type])ds[type]={};
+  ds[type].__output=text;
   }catch(e){alert('Generate doc error: '+e.message);}
 }
 
