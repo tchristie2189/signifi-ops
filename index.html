@@ -2873,28 +2873,60 @@ function getDocState(){
 // Fields auto-filled from project record — never restore these from state
 const AUTO_FILL_FIELDS=new Set(['if-so','if-address','qf-address','if-naming','qf-naming','if-client','if-ship','if-del','if-inst','if-vinyl','if-odoo','if-ui-task','if-qa-task','if-template','if-badge','if-employee','qf-ship','qf-vinyl','qf-jira-task','qf-jira-product','qf-jira-badge','qf-employee','uf-client']);
 
+let _docSaveTimer=null;
 function saveDocFormState(){
   const state=getDocState();
   if(!state.shared)state.shared={};
   document.querySelectorAll('#tab-gendocs input,#tab-gendocs select,#tab-gendocs textarea').forEach(el=>{
     if(el.id&&!AUTO_FILL_FIELDS.has(el.id)){
-      // Save to both tab-specific and shared state
       if(!state[activeDocTab])state[activeDocTab]={};
       state[activeDocTab][el.id]=el.value;
       state.shared[el.id]=el.value;
     }
   });
+  // Persist to DB — debounced so we don't hammer on every keystroke
+  if(selectedDocProjId){
+    clearTimeout(_docSaveTimer);
+    _docSaveTimer=setTimeout(()=>persistDocState(selectedDocProjId),1500);
+  }
+}
+async function persistDocState(pid){
+  if(!pid)return;
+  const state=getDocState();
+  const val=JSON.stringify(state);
+  const existing=ppData?.sections?.['gendoc_state'];
+  if(existing){
+    await sb.from('project_sections').update({content:val}).eq('id',existing.id);
+  } else {
+    const{data}=await sb.from('project_sections').insert({project_id:pid,section_key:'gendoc_state',content:val}).select().single();
+    if(data&&ppData?.sections)ppData.sections['gendoc_state']=data;
+  }
+}
+async function loadDocState(pid){
+  if(!pid)return;
+  // Try ppData first (already loaded on project page)
+  let saved=ppData?.sections?.['gendoc_state'];
+  if(!saved){
+    // Fetch directly
+    const{data}=await sb.from('project_sections').select('*').eq('project_id',pid).eq('section_key','gendoc_state').single();
+    saved=data;
+    if(data&&ppData?.sections)ppData.sections['gendoc_state']=data;
+  }
+  if(saved?.content){
+    try{
+      const parsed=JSON.parse(saved.content);
+      docFormState[pid]=parsed;
+    }catch(e){}
+  }
 }
 function restoreDocFormState(){
   const state=getDocState();
-  // Merge shared + tab-specific (tab-specific wins)
   const merged=Object.assign({},state.shared||{},state[activeDocTab]||{});
   Object.entries(merged).forEach(([id,val])=>{
     if(AUTO_FILL_FIELDS.has(id))return;
     const el=document.getElementById(id);
     if(el)el.value=val;
   });
-  // Restore generated output if any
   const out=getDocState()[activeDocTab]?.__output;
   if(out){
     const outEl=document.getElementById('doc-output-'+activeDocTab);
@@ -2913,7 +2945,7 @@ function renderGenDocs(){
       <div style="padding:16px">
         <div class="proj-select-row">
           <label>Project</label>
-          <select onchange="selectedDocProjId=this.value;renderGenDocs()"><option value="">Select project...</option>${projOpts}</select>
+          <select onchange="selectedDocProjId=this.value;loadDocState(this.value).then(()=>renderGenDocs())"><option value="">Select project...</option>${projOpts}</select>
           ${selectedDocProjId?`<span style="font-size:11px;color:var(--gray-500)">Dates and client info auto-pulled ✓</span>`:''}
         </div>
         <div class="doc-tabs" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
@@ -2962,7 +2994,7 @@ function renderInstallForm(){
   const instDate=getDocDate('installation');
   const vinylDate=getDocDate('vinyl');
   const shipDate=getDocDate('shipping');
-  return`<div class="doc-form-grid">
+  return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()">
     <div class="doc-section-lbl">Project identifiers (auto-filled from hub)</div>
     ${fld('if-so','Sales Order (SO)','SO-XXXXX','','text',p.so_number||'')}
     ${fld('if-client','End Client (CX)','e.g. Google','','text',p.client||'')}
@@ -3015,7 +3047,7 @@ function renderInstallForm(){
 
 function renderUIForm(){
   const p=getDocProj();
-  return`<div class="doc-form-grid">
+  return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()">
     <div class="doc-section-lbl">Project identifiers</div>
     ${fld('uf-cp','Channel Partner (CP)','e.g. TD Synnex, Direct','')}
     ${fld('uf-client','End Client (CX)','e.g. LinkedIn','','text',p.client||'')}
@@ -3049,7 +3081,7 @@ function renderQAForm(){
   const p=getDocProj();
   const shipDate=getDocDate('shipping');
   const vinylDate=getDocDate('vinyl');
-  return`<div class="doc-form-grid">
+  return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()">
     <div class="doc-section-lbl">Dates (auto-filled)</div>
     ${fld('qf-ship','Shipping date','','','text',shipDate)}
     ${fld('qf-vinyl','Vinyl date','','','text',vinylDate)}
