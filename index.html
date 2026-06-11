@@ -1996,6 +1996,8 @@ function openEditProj(id){
         <div class="field"><label>Sales</label><input id="ep-sales" value="${proj.sales||''}" placeholder="Sales contact"></div>
         <div class="field"><label>Account Manager</label><input id="ep-am" value="${proj.account_manager||''}" placeholder="Account Manager"></div>
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
+        <div class="field"><label>Naming convention</label><input id="ep-naming" value="${proj.naming_convention||''}" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono)"></div>
+        <div class="field full"><label>Installation address</label><input id="ep-address" value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
         <div class="field full"><label>Notes</label><textarea id="ep-notes" style="min-height:55px">${proj.notes||''}</textarea></div>
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">🔗 Links — auto-populate into Generate Docs</div>
@@ -2463,10 +2465,19 @@ function renderProjPageBody(){
             <textarea class="pp-textarea" placeholder="Brief 3-5 sentence summary of current project status, major accomplishments, upcoming milestones, and any concerns requiring attention..." onchange="savePPSection('summary',this.value)" style="min-height:80px">${getSection('summary')}</textarea>
           </div>
         </div>
-        <div class="pp-card">
+        <div class="pp-card" style="margin-bottom:12px">
           <div class="pp-card-head"><span class="pp-card-title">Client updates</span><span style="font-size:10px;color:var(--success)">Appears on client export</span></div>
           <div class="pp-card-body">
             <textarea class="pp-textarea" placeholder="Updates, status, and notes for the client..." onchange="savePPSection('client_updates',this.value)" style="min-height:80px">${getSection('client_updates')}</textarea>
+          </div>
+        </div>
+        <div class="pp-card">
+          <div class="pp-card-head"><span class="pp-card-title">Naming & Address</span></div>
+          <div class="pp-card-body" style="display:grid;grid-template-columns:1fr;gap:8px;padding:10px 0">
+            <div><div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Naming Convention</div>
+              <input value="${proj.naming_convention||''}" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:12px;padding:6px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);width:100%" onchange="saveProjField('${proj.id}','naming_convention',this.value)"></div>
+            <div><div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Installation Address</div>
+              <input value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085" style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);width:100%" onchange="saveProjField('${proj.id}','address',this.value)"></div>
           </div>
         </div>
       </div>
@@ -2613,6 +2624,11 @@ function showPPSaved(){
   ppSaveTimer=setTimeout(()=>{el.style.display='none';},2000);
 }
 
+async function saveProjField(projId,field,val){
+  await sb.from('projects').update({[field]:val||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',projId);
+  const p=projects.find(x=>x.id===projId);if(p)p[field]=val||null;
+  showPPSaved();
+}
 async function savePPSection(key,value){
   const existing=ppData.sections[key];
   if(existing){
@@ -2851,23 +2867,30 @@ let docFormState={};
 
 function getDocState(){
   const pid=selectedDocProjId||'__none';
-  if(!docFormState[pid])docFormState[pid]={install:{},ui:{},qa:{}};
+  if(!docFormState[pid])docFormState[pid]={shared:{},install:{},ui:{},qa:{}};
   return docFormState[pid];
 }
-// Fields auto-filled from project record — never restore these from state (they should always reflect the selected project)
+// Fields auto-filled from project record — never restore these from state
 const AUTO_FILL_FIELDS=new Set(['if-so','if-address','qf-address','if-naming','qf-naming','if-client','if-ship','if-del','if-inst','if-vinyl','if-odoo','if-ui-task','if-qa-task','if-template','if-badge','if-employee','qf-ship','qf-vinyl','qf-jira-task','qf-jira-product','qf-jira-badge','qf-employee','uf-client']);
 
 function saveDocFormState(){
-  const state={};
+  const state=getDocState();
+  if(!state.shared)state.shared={};
   document.querySelectorAll('#tab-gendocs input,#tab-gendocs select,#tab-gendocs textarea').forEach(el=>{
-    if(el.id&&!AUTO_FILL_FIELDS.has(el.id))state[el.id]=el.value;
+    if(el.id&&!AUTO_FILL_FIELDS.has(el.id)){
+      // Save to both tab-specific and shared state
+      if(!state[activeDocTab])state[activeDocTab]={};
+      state[activeDocTab][el.id]=el.value;
+      state.shared[el.id]=el.value;
+    }
   });
-  getDocState()[activeDocTab]=state;
 }
 function restoreDocFormState(){
-  const state=getDocState()[activeDocTab]||{};
-  Object.entries(state).forEach(([id,val])=>{
-    if(AUTO_FILL_FIELDS.has(id))return; // never overwrite auto-filled fields
+  const state=getDocState();
+  // Merge shared + tab-specific (tab-specific wins)
+  const merged=Object.assign({},state.shared||{},state[activeDocTab]||{});
+  Object.entries(merged).forEach(([id,val])=>{
+    if(AUTO_FILL_FIELDS.has(id))return;
     const el=document.getElementById(id);
     if(el)el.value=val;
   });
@@ -3076,6 +3099,7 @@ function generateDoc(type){
     saveDocFormState();
     activeDocTab=type;
     renderGenDocs();
+    restoreDocFormState();
   }
   const proj=getDocProj();
   const safeGet=id=>{const el=document.getElementById(id);return el?el.value.trim():'';};
@@ -3687,12 +3711,22 @@ async function saveProjInstDates(projId){
   if(p)Object.assign(p,updates);
   showToast('Installation dates saved ✓');
 }
+async function renamePPLink(oldLabel,newLabel){
+  if(!newLabel.trim()||newLabel===oldLabel)return;
+  // Update all project_links rows with this label
+  const entries=(ppData.links||[]).filter(l=>l.label===oldLabel);
+  for(const e of entries){
+    await sb.from('project_links').update({label:newLabel.trim()}).eq('id',e.id);
+    e.label=newLabel.trim();
+  }
+  showPPSaved();
+}
 function openLinksPopout(){
   const proj=projects.find(p=>p.id===ppProjId)||{};
   const ALL_LINKS=[
     {cat:'Meetings',items:['Kickoff recording','Meeting minutes']},
     {cat:'Project Documents',items:['Statement of Work','Installation Ticket','Vision Training']},
-    {cat:'Custom Links',items:['Custom link 1','Custom link 2','Custom link 3']},
+    {cat:'Custom Links',items:['Custom link 1','Custom link 2','Custom link 3','Custom link 4','Custom link 5']},
     {cat:'Systems & Tools',items:['Teams Channel','SharePoint Site','Jira / UI Task','QA Task','Product Template','Badge Reader','Employee List','Facility Site Survey','IT Site Survey','Odoo Task','Vinyl Render Odoo','Client Portal']},
   ];
   const lv=Object.fromEntries((ppData.links||[]).map(l=>[l.label,l.url||'']));
@@ -3706,20 +3740,48 @@ function openLinksPopout(){
   if(proj.it_survey_url)lv['IT Site Survey']=proj.it_survey_url;
   if(proj.vision_training_url)lv['Vision Training']=proj.vision_training_url;
   if(proj.vinyl_odoo_url)lv['Vinyl Render Odoo']=proj.vinyl_odoo_url;
-  const catsHtml=ALL_LINKS.map(cat=>`
-    <div style="margin-bottom:10px">
-      <div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.07em;padding:0 20px;margin-bottom:4px">${cat.cat}</div>
-      ${cat.items.map(label=>{
-        const url=lv[label]||'';
-        return`<div style="display:flex;align-items:center;gap:8px;padding:5px 20px;border-bottom:1px solid var(--gray-50)">
-          <span style="font-size:12px;color:var(--gray-600);min-width:150px;flex-shrink:0">${label}</span>
-          <input value="${url.replace(/"/g,'&quot;')}" placeholder="https://..." data-label="${label}"
-            style="flex:1;font-family:var(--mono);font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)"
-            onchange="savePPLink('${label}',this.value)">
-          ${url?`<a href="${url}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;flex-shrink:0">↗</a>`:'<span style="width:16px"></span>'}
-        </div>`;
-      }).join('')}
-    </div>`).join('');
+  const catsHtml=ALL_LINKS.map(cat=>{
+    const isCustom=cat.cat==='Custom Links';
+    const itemsHtml=cat.items.map(label=>{
+      const entries=(ppData.links||[]).filter(l=>l.label===label);
+      const url=lv[label]||entries[0]?.url||'';
+      if(isCustom){
+        return'<div style="display:flex;align-items:center;gap:6px;padding:5px 20px;border-bottom:1px solid var(--gray-50)">'+
+          '<input value="'+label.replace(/"/g,'&quot;')+'" placeholder="Link name..." '+
+          'style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);width:130px;font-family:var(--font);color:var(--gray-600);flex-shrink:0" '+
+          'onblur="renamePPLink(\''+label+'\',this.value)">'+
+          '<input value="'+url.replace(/"/g,'&quot;')+'" placeholder="https://..." data-label="'+label+'" '+
+          'style="flex:1;font-family:var(--mono);font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" '+
+          'onchange="savePPLink(\''+label+'\',this.value)">'+
+          (url?'<a href="'+url+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;flex-shrink:0">↗</a>':'<span style="width:16px"></span>')+
+        '</div>';
+      }
+      // Multi-link rows for non-custom items
+      const rows=entries.length?entries.map((e,i)=>{
+        return'<div style="display:flex;align-items:center;gap:8px;padding:5px 20px;border-bottom:1px solid var(--gray-50)">'+
+          '<span style="font-size:12px;color:var(--gray-600);min-width:150px;flex-shrink:0">'+(i===0?label:'')+'</span>'+
+          '<input value="'+(e.url||'').replace(/"/g,'&quot;')+'" placeholder="https://..." '+
+          'style="flex:1;font-family:var(--mono);font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" '+
+          'onchange="updatePPLink(\''+label+'\','+i+',this.value)">'+
+          (e.url?'<a href="'+e.url+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;flex-shrink:0">↗</a>':'<span style="width:16px"></span>')+
+          '<button onclick="removePPLink(\''+label+'\','+i+')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:12px;flex-shrink:0">✕</button>'+
+        '</div>';
+      }).join(''):
+        '<div style="display:flex;align-items:center;gap:8px;padding:5px 20px;border-bottom:1px solid var(--gray-50)">'+
+          '<span style="font-size:12px;color:var(--gray-600);min-width:150px;flex-shrink:0">'+label+'</span>'+
+          '<input value="" placeholder="https://..." '+
+          'style="flex:1;font-family:var(--mono);font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" '+
+          'onchange="updatePPLink(\''+label+'\',0,this.value)">'+
+          '<span style="width:16px"></span>'+
+        '</div>';
+      const addBtn='<div style="padding:3px 20px 3px 170px"><button onclick="addPPLink(\''+label+'\')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>';
+      return rows+addBtn;
+    }).join('');
+    return'<div style="margin-bottom:10px">'+
+      '<div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.07em;padding:0 20px;margin-bottom:4px">'+cat.cat+'</div>'+
+      itemsHtml+
+    '</div>';
+  }).join('');
   document.getElementById('modal-root').innerHTML=`
   <div class="modal-backdrop" onclick="closeModal()">
     <div class="modal" style="width:600px;max-height:85vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
