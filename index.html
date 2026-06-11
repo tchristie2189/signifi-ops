@@ -427,7 +427,7 @@ const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end',uat:'UAT',installation:'Installation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','po-release':'PO Release','mo-release':'MO Release',other:'Other'};
 const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa',uat:'ev-uat',installation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
-const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date'];
+const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date','Print Day'];
 
 let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={};
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
@@ -798,6 +798,17 @@ function activeProjects(page){
       const m=milestones.find(ms=>ms.project_id===p.id&&ms.key===stageKey);
       if(!m)return true; // no milestone = not done, show it
       return !isMilestoneDone(m);
+    });
+  }
+  // For dept/schedule views: if master has active children, show children not master
+  const schedPages=['production','quality','shipping','installation'];
+  if(schedPages.includes(page)){
+    list=list.filter(p=>{
+      if(isMaster(p)){
+        const activeKids=getChildren(p.id).filter(c=>c.status!=='complete');
+        if(activeKids.length)return false; // hide master, children show instead
+      }
+      return true;
     });
   }
   return list;
@@ -1365,24 +1376,32 @@ function applyVinylFilter(data){
 function renderVinyl(){
   const el=document.getElementById('tab-vinyl');
   const vinylBase=hideCompleted['vinyl']?vinylSchedule.filter(v=>v.status!=='Complete'):vinylSchedule;
-  const source=vinylBase.filter(v=>{const p=projects.find(x=>x.id===v.project_id);if(!p)return!pmFilter&&!salesFilter;if(pmFilter&&p.pm!==pmFilter)return false;if(salesFilter&&p.sales!==salesFilter)return false;return true;});
+  const source=vinylBase.filter(v=>{
+    const p=projects.find(x=>x.id===v.project_id);
+    if(!p)return!pmFilter&&!salesFilter;
+    if(pmFilter&&p.pm!==pmFilter)return false;
+    if(salesFilter&&p.sales!==salesFilter)return false;
+    // If project has children, skip master — show children instead
+    if(isMaster(p)){const kids=getChildren(p.id);if(kids.length)return vinylSchedule.some(vv=>kids.some(c=>c.id===vv.project_id))===false||false;}
+    return true;
+  });
   const filtered=applyVinylFilter(source);
   const activeFilters=[vinylFilter.status,vinylFilter.search,vinylFilter.dateFrom,vinylFilter.dateTo].filter(Boolean).length;
   const rows=filtered.map((item,i)=>{
     const origIdx=vinylSchedule.indexOf(item);
     const readStyle='font-size:12px;color:var(--gray-700);padding:4px 2px;';
-    return`<tr draggable="true" data-idx="${origIdx}" data-type="vinyl" ondragstart="dragStart(event,${origIdx},'vinyl')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'vinyl')" ondragleave="dragLeave(event)">
+    return`<tr draggable="true" data-idx="${origIdx}" data-type="vinyl" ondragstart="dragStart(event,${origIdx},'vinyl')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'vinyl')" ondragleave="dragLeave(event)" style="${item.status==='Print Day'?'background:#fff0f0;color:#991b1b;font-weight:600;':''}">
       <td><span class="drag-handle">⠿</span></td>
       <td><span class="priority-num">${item.priority}</span></td>
       <td style="${readStyle}">${item.so||'—'}</td>
       <td style="${readStyle}">${item.client||'—'}</td>
       <td style="${readStyle}">${item.name||'—'}</td>
-      <td><select class="sched-select" onchange="vs(${origIdx},'vinylType',this.value)">${['','Decal','Partial Vinyl','Full Vinyl'].map(t=>`<option${t===item.vinylType?' selected':''}>${t||'Select...'}</option>`).join('')}</select></td>
+      <td><select class="sched-select" onchange="vs('${item.id || origIdx}','vinylType',this.value)">${['','Decal','Partial Vinyl','Full Vinyl'].map(t=>`<option${t===item.vinylType?' selected':''}>${t||'Select...'}</option>`).join('')}</select></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vinylDateSync(${origIdx},this.value,'vinyl')" title="Syncs with project overview"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vinylDateSync(${origIdx},this.value,'ship')" title="Syncs with project overview"></td>
       <td style="${readStyle}">${item.pm||'—'}</td>
-      <td><input class="sched-input" value="${item.formFactor||''}" placeholder="Form factor" style="width:110px" onchange="vs(${origIdx},'formFactor',this.value)"></td>
-      <td><select class="sched-select" onchange="vs(${origIdx},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
+      <td><input class="sched-input" value="${item.formFactor||''}" placeholder="Form factor" style="width:110px" onchange="vs('${item.id || origIdx}','formFactor',this.value)"></td>
+      <td><select class="sched-select" onchange="vs('${item.id || origIdx}','status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
       <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">✕</button></td>
     </tr>`;
   }).join('');
@@ -1432,25 +1451,32 @@ function applyPlanFilter(data){
 function renderPlanogram(){
   const el=document.getElementById('tab-planogram');
   const planBase=hideCompleted['planogram']?planogramSchedule.filter(v=>v.status!=='Complete'):planogramSchedule;
-  const source=planBase.filter(v=>{const p=projects.find(x=>x.id===v.project_id);if(!p)return!pmFilter&&!salesFilter;if(pmFilter&&p.pm!==pmFilter)return false;if(salesFilter&&p.sales!==salesFilter)return false;return true;});
+  const source=planBase.filter(v=>{
+    const p=projects.find(x=>x.id===v.project_id);
+    if(!p)return!pmFilter&&!salesFilter;
+    if(pmFilter&&p.pm!==pmFilter)return false;
+    if(salesFilter&&p.sales!==salesFilter)return false;
+    if(isMaster(p)){const kids=getChildren(p.id);if(kids.length)return planogramSchedule.some(vv=>kids.some(c=>c.id===vv.project_id))===false||false;}
+    return true;
+  });
   const filtered=applyPlanFilter(source);
   const activeFilters=[planFilter.status,planFilter.search,planFilter.dateFrom,planFilter.dateTo].filter(Boolean).length;
   const rows=filtered.map((item,i)=>{
     const origIdx=planogramSchedule.indexOf(item);
     return`<tr draggable="true" data-idx="${origIdx}" data-type="planogram" ondragstart="dragStart(event,${origIdx},'planogram')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'planogram')" ondragleave="dragLeave(event)">
       <td><span class="drag-handle">⠿</span></td><td><span class="priority-num">${item.priority||i+1}</span></td>
-      <td><input class="sched-input" value="${item.so||''}" style="width:100px" onchange="ps2(${origIdx},'so',this.value)"></td>
-      <td><input class="sched-input" value="${item.client||''}" onchange="ps2(${origIdx},'client',this.value)"></td>
-      <td><input class="sched-input" value="${item.name||''}" onchange="ps2(${origIdx},'name',this.value)"></td>
-      <td><input class="sched-input" value="${item.machineType||''}" style="width:120px" onchange="ps2(${origIdx},'machineType',this.value)"></td>
-      <td><input type="date" class="sched-input" style="width:120px" value="${item.planStart||''}" onchange="ps2(${origIdx},'planStart',this.value)" title="Planogram start"></td>
-      <td><input type="date" class="sched-input" style="width:120px" value="${item.planEnd||''}" onchange="ps2(${origIdx},'planEnd',this.value)" title="Planogram end"></td>
+      <td><input class="sched-input" value="${item.so||''}" style="width:100px" onchange="ps2('${item.id}','so',this.value)"></td>
+      <td><input class="sched-input" value="${item.client||''}" onchange="ps2('${item.id}','client',this.value)"></td>
+      <td><input class="sched-input" value="${item.name||''}" onchange="ps2('${item.id}','name',this.value)"></td>
+      <td><input class="sched-input" value="${item.machineType||''}" style="width:120px" onchange="ps2('${item.id}','machineType',this.value)"></td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${item.planStart||''}" onchange="ps2('${item.id}','planStart',this.value)" title="Planogram start"></td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${item.planEnd||''}" onchange="ps2('${item.id}','planEnd',this.value)" title="Planogram end"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${origIdx},'date',this.value,'planogram')"></td>
-      <td><select class="sched-select" onchange="ps2(${origIdx},'status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
-      <td><select class="sched-select" style="min-width:100px" onchange="ps2(${origIdx},'revision_status',this.value)" title="Revision status">
+      <td><select class="sched-select" onchange="ps2('${item.id}','status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
+      <td><select class="sched-select" style="min-width:100px" onchange="ps2('${item.id}','revision_status',this.value)" title="Revision status">
         ${['','In Progress','Approved','Revision Requested','Re-approved'].map(s=>`<option value="${s}"${(item.revision_status||'')===(s)?' selected':''}>${s||'— status —'}</option>`).join('')}
       </select></td>
-      <td><input class="sched-input" value="${(item.notes||'').replace(/"/g,'&quot;')}" placeholder="Notes / revision details..." style="min-width:180px" onchange="ps2(${origIdx},'notes',this.value)" title="${item.notes||''}"></td>
+      <td><input class="sched-input" value="${(item.notes||'').replace(/"/g,'&quot;')}" placeholder="Notes / revision details..." style="min-width:180px" onchange="ps2('${item.id}','notes',this.value)" title="${item.notes||''}"></td>
       <td style="white-space:nowrap">
         ${item.project_id?`<button onclick="syncPlanToProject(${origIdx})" style="font-size:10px;padding:2px 8px;border-radius:8px;border:1px solid var(--blue);color:var(--blue);background:transparent;cursor:pointer;font-family:var(--font)" title="Push dates to Project Overview milestones">↑ Sync</button> `:''}
         <button onclick="removeSchedRow('planogram',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button>
@@ -1493,9 +1519,10 @@ function sortPlan(key){
   planogramSchedule.sort((a,b)=>{const av=a[key]||'';const bv=b[key]||'';return av.localeCompare(bv);});
   renderPlanogram();showToast('Sorted by '+key);
 }
-function vs(i,k,v){
-  vinylSchedule[i][k]=v;
-  const item=vinylSchedule[i];
+function vs(itemId,k,v){
+  const item=typeof itemId==='number'?vinylSchedule[itemId]:vinylSchedule.find(x=>x.id===itemId)||vinylSchedule[itemId];
+  if(!item)return;
+  item[k]=v;
   if(item.id){
     // Map local keys to DB column names
     const colMap={so:'so',client:'client',name:'name',vinylType:'vinyl_type',shipDate:'ship_date',pm:'pm',formFactor:'form_factor',status:'status'};
@@ -1503,13 +1530,15 @@ function vs(i,k,v){
     sb.from('vinyl_schedule').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('vs save error',error);});
   }
 }
-function ps2(i,k,v){
-  planogramSchedule[i][k]=v;
-  const item=planogramSchedule[i];
+function ps2(itemId,k,v){
+  // Find by ID not index (index changes after filtering)
+  const item=planogramSchedule.find(x=>x.id===itemId)||planogramSchedule[itemId];
+  if(!item)return;
+  item[k]=v;
   if(item.id){
-    const colMap={so:'so',client:'client',name:'name',machineType:'machine_type',status:'status'};
+    const colMap={so:'so',client:'client',name:'name',machineType:'machine_type',status:'status',planStart:'plan_start',planEnd:'plan_end',notes:'notes',revisionStatus:'revision_status'};
     const col=colMap[k]||k;
-    sb.from('planogram_schedule').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('ps2 save error',error);});
+    sb.from('planogram_schedule').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('ps2 save error',error);else showToast('Saved ✓');});
   }
 }
 // Vinyl date sync — updates both the local schedule AND the milestone in Supabase
@@ -2517,7 +2546,13 @@ function renderProjPageBody(){
     <!-- HEADER -->
     <div class="pp-header">
       <div style="flex:1;min-width:0">
-        <div class="pp-title">${proj.name}</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px">
+          <div class="pp-title" style="margin:0">${proj.name}</div>
+          ${isMaster(proj)?`<div style="display:flex;gap:4px;flex-wrap:wrap">
+            ${getChildren(proj.id).map(c=>`<button onclick="switchProjPage('${c.id}')" style="font-size:10px;padding:2px 10px;border-radius:10px;border:1px solid #7c3aed;background:${ppProjId===c.id?'#7c3aed':'rgba(124,58,237,0.15)'};color:${ppProjId===c.id?'white':'#c4b5fd'};cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">⬡ ${c.so_number||c.name}</button>`).join('')}
+          </div>`:''}
+          ${isChild(proj)?`<button onclick="switchProjPage('${proj.parent_project_id}')" style="font-size:10px;padding:2px 10px;border-radius:10px;border:1px solid #e879f9;background:rgba(232,121,249,0.15);color:#e879f9;cursor:pointer;font-family:var(--font)">🏛 Back to master</button>`:''}
+        </div>
         <div class="pp-meta">
           <span>📋 SO: <strong>${proj.so_number||'—'}</strong></span>
           <span>👤 PM: <strong>${proj.pm||'—'}</strong></span>
