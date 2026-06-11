@@ -439,6 +439,7 @@ let deptFilter={shipping:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'},insta
 let adHocRows={shipping:[],installation:[]}; // standalone entries not tied to a project
 let pmFilter='';
 let salesFilter='';
+let weekDeptFilter='';
 
 // ── UTILS ──────────────────────────────────────────────────
 function truncateSO(so,max=2){
@@ -1007,16 +1008,25 @@ function renderOverview(){
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
     </div>`:'<div class="empty-state">No projects yet.</div>'}`;
 }
+async function quickStatusAdHoc(adHocId,status){
+  if(!adHocId)return;
+  await sb.from('adhoc_schedule').update({status}).eq('id',adHocId);
+  // Update local adhoc data
+  ['shipping','installation'].forEach(dept=>{
+    const r=adHocRows[dept]?.find(x=>x.id===adHocId);
+    if(r)r.status=status;
+  });
+  renderWeek();
+}
 async function quickStatusMs(msId,val){
   if(val==='done'){
-    // Mark as done in milestone_done table
     const existing=milestoneDone[msId];
     if(!existing){
-      const{data}=await sb.from('milestone_done').insert({milestone_id:msId,project_id:milestones.find(m=>m.id===msId)?.project_id,done_by:currentUserName,done_at:new Date().toISOString()}).select().single();
+      const pid=milestones.find(m=>m.id===msId)?.project_id;
+      const{data}=await sb.from('milestone_done').insert({milestone_id:msId,project_id:pid,done_by:currentUserName,done_at:new Date().toISOString()}).select().single();
       if(data)milestoneDone[msId]=data;
     }
   } else {
-    // Unmark
     await sb.from('milestone_done').delete().eq('milestone_id',msId);
     delete milestoneDone[msId];
   }
@@ -1088,12 +1098,21 @@ function renderWeek(){
   </details>`:'';
   const DAY=['Monday','Tuesday','Wednesday','Thursday','Friday'];
   const t=today();
+  // Apply dept filter
+  const filteredMsWithAdhoc=weekDeptFilter?allMsWithAdhoc.filter(m=>{
+    if(weekDeptFilter==='adhoc')return m._adhoc;
+    if(m._adhoc)return false;
+    const deptKeyMap={shipping:['shipping','delivery'],arrival:['arrival','parts-arrival'],production:['production-start','production-end','inventory-pick'],qa:['quality-start','quality-end'],uat:['uat'],vinyl:['vinyl'],installation:['training','installation']};
+    return (deptKeyMap[weekDeptFilter]||[]).includes(m.key);
+  }):allMsWithAdhoc;
   const daysHtml=[0,1,2,3,4].map(i=>{
     const d=addD(weekStart,i);const isT=sameDay(d,t);
-    const evs=allMsWithAdhoc.filter(m=>m.date&&sameDay(new Date(m.date+'T00:00:00'),d));
+    const evs=filteredMsWithAdhoc.filter(m=>m.date&&sameDay(new Date(m.date+'T00:00:00'),d));
     return`<div class="day-col${isT?' today-col':''}"><div class="day-hdr"><div class="day-name">${DAY[i]}${isT?'<span class="today-pip"></span>':''}</div><div class="day-num">${d.getDate()}</div></div><div class="day-events">${evs.length?evs.map(e=>{
         const isDone=e._adhoc?(e._status==='Complete'):isMilestoneEffectivelyDone(e);
-        const statusSel=e._adhoc?'':`<select style="font-size:9px;padding:1px 3px;border:none;border-radius:3px;background:rgba(255,255,255,0.3);font-family:var(--font);cursor:pointer;margin-top:2px" onchange="quickStatusMs('${e.id}',this.value)" onclick="event.stopPropagation()"><option value="pending"${!isDone?'selected':''}>Pending</option><option value="done"${isDone?'selected':''}>Done</option></select>`;
+        const adHocStatusSel=e._adhoc?`<select style="font-size:9px;padding:1px 3px;border:none;border-radius:3px;background:rgba(255,255,255,0.3);font-family:var(--font);cursor:pointer;margin-top:2px" onchange="quickStatusAdHoc('${e._raw?.id}',this.value)" onclick="event.stopPropagation()"><option value="Scheduled"${e._status!=='Complete'?'selected':''}>Scheduled</option><option value="Complete"${e._status==='Complete'?'selected':''}>Complete</option></select><button onclick="event.stopPropagation();openEditAdHoc('${e._raw?.dept}','${e._raw?.id}')" style="font-size:9px;padding:1px 5px;border:none;border-radius:3px;background:rgba(255,255,255,0.25);cursor:pointer;margin-left:3px">edit</button>`:
+          `<select style="font-size:9px;padding:1px 3px;border:none;border-radius:3px;background:rgba(255,255,255,0.3);font-family:var(--font);cursor:pointer;margin-top:2px" onchange="quickStatusMs('${e.id}',this.value)" onclick="event.stopPropagation()"><option value="pending"${!isDone?'selected':''}>Pending</option><option value="done"${isDone?'selected':''}>Done</option></select>`;
+        const statusSel=adHocStatusSel;
         const projLink=e._projId?`<span style="cursor:pointer;text-decoration:underline;opacity:0.8" onclick="event.stopPropagation();goToProjPage('${e._projId}')">${e.projectName}</span>`:e.projectName;
         return`<div class="ev ${isDone?'ev-done':TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${projLink}${e._adhoc?' 📦':''}</div>${statusSel}</div>`;
       }).join(''):'<div class="empty-day">—</div>'}</div></div>`;
@@ -1106,6 +1125,17 @@ function renderWeek(){
       <button class="wnav" onclick="goToday()">Today</button>
       <button class="btn-add" onclick="openAddEvModal()">+ Add</button>
       ${pmDropdown('renderWeek')}${salesDropdown('renderWeek')}
+      <select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="weekDeptFilter=this.value;renderWeek()">
+        <option value="">All milestones</option>
+        <option value="shipping"${weekDeptFilter==='shipping'?' selected':''}>🚢 Shipping</option>
+        <option value="arrival"${weekDeptFilter==='arrival'?' selected':''}>📦 Arrival</option>
+        <option value="production"${weekDeptFilter==='production'?' selected':''}>🏭 Production</option>
+        <option value="qa"${weekDeptFilter==='qa'?' selected':''}>✅ QA</option>
+        <option value="uat"${weekDeptFilter==='uat'?' selected':''}>🖥 UAT</option>
+        <option value="vinyl"${weekDeptFilter==='vinyl'?' selected':''}>🎨 Vinyl</option>
+        <option value="installation"${weekDeptFilter==='installation'?' selected':''}>🔧 Installation</option>
+        <option value="adhoc"${weekDeptFilter==='adhoc'?' selected':''}>📌 Ad Hoc</option>
+      </select>
       ${hideCompletedBtn('week')}
       <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
     </div>
@@ -2286,7 +2316,15 @@ function renderProjPage(){
   sortedProjs.forEach(p=>{projNameMap[p.name+(p.so_number?' — '+p.so_number:'')]=p.id;});
   // Datalist uses display text as value so browser shows names not UUIDs
   const projOpts=filteredProjList.map(p=>`<option value="${p.name+(p.so_number?' — '+p.so_number:'')}">`).join('');
-  const selectOpts=filteredProjList.map(p=>`<option value="${p.id}"${p.id===ppProjId?' selected':''}>${p.name+(p.so_number?' — '+p.so_number:'')}</option>`).join('');
+  // Build dropdown: group children under their master
+  const masterProjs=filteredProjList.filter(p=>!p.parent_project_id);
+  const childProjs=filteredProjList.filter(p=>p.parent_project_id);
+  const selectOpts=masterProjs.map(p=>{
+    const kids=childProjs.filter(c=>c.parent_project_id===p.id);
+    const masterOpt=`<option value="${p.id}"${p.id===ppProjId?' selected':''}>${isMaster(p)?'🏛 ':''}${p.name+(p.so_number?' — '+p.so_number:'')}</option>`;
+    const kidOpts=kids.map(c=>`<option value="${c.id}"${c.id===ppProjId?' selected':''}>　⬡ ${c.name+(c.so_number?' — '+c.so_number:'')}</option>`).join('');
+    return masterOpt+kidOpts;
+  }).join('')+childProjs.filter(c=>!masterProjs.find(m=>m.id===c.parent_project_id)).map(c=>`<option value="${c.id}"${c.id===ppProjId?' selected':''}>⬡ ${c.name+(c.so_number?' — '+c.so_number:'')}</option>`).join('');
   el.innerHTML=`
     <div class="proj-sel-bar">
       <label>Project</label>
@@ -2562,10 +2600,7 @@ function renderProjPageBody(){
           </tbody>
         </table>
         <button class="pp-add-btn" onclick="addPMTaskRow('${ppProjId}','pmt-body-${ppProjId}')">+ Add task</button>
-        <div style="border-top:1px solid var(--gray-100);margin-top:10px;padding-top:10px">
-          <div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Notes</div>
-          <textarea placeholder="Key reminders, follow-ups, escalations..." style="font-family:var(--font);font-size:12px;padding:8px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);width:100%;min-height:70px;resize:vertical;color:var(--gray-700)" onchange="savePPSection('pm_task_notes',this.value)">${getSection('pm_task_notes')}</textarea>
-        </div>
+
       </div>
 
       <div class="pp-card">
@@ -2751,7 +2786,9 @@ function renderPMTaskRows(pid,saved){
     var statusOpts=['Pending','In Progress','Done'].map(function(s){return'<option'+(t.status===s?' selected':'')+'>'+s+'</option>';}).join('');
     var statusCell='<select data-pid="'+pid+'" data-tid="'+id+'" data-field="status" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;color:'+sc+';font-weight:500" onchange="pmtChange(this)">'+statusOpts+'</select>';
     var delCell='<button data-tid="'+id+'" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px" title="Remove" onclick="deletePMTask(this.dataset.tid)">✕</button>';
-    return'<tr id="pmt-row-'+id+'" style="border-bottom:1px solid var(--gray-50)"><td style="padding:5px 8px">'+labelCell+'</td><td style="padding:5px 8px">'+dueCell+'</td><td style="padding:5px 8px">'+statusCell+'</td><td style="padding:5px 8px;text-align:center">'+delCell+'</td></tr>';
+    var noteVal=(t.notes||'').split('"').join('&quot;');
+    var noteCell='<input type="text" value="'+noteVal+'" placeholder="Note..." data-pid="'+pid+'" data-tid="'+id+'" data-field="notes" style="font-family:var(--font);font-size:10px;padding:2px 5px;border:none;border-bottom:1px solid var(--gray-100);border-radius:0;width:100%;color:var(--gray-500);background:transparent" onblur="pmtBlur(this)">';
+    return'<tr id="pmt-row-'+id+'" style="border-bottom:1px solid var(--gray-50)"><td style="padding:5px 8px 1px 8px">'+labelCell+'<div>'+noteCell+'</div></td><td style="padding:5px 8px">'+dueCell+'</td><td style="padding:5px 8px">'+statusCell+'</td><td style="padding:5px 8px;text-align:center">'+delCell+'</td></tr>';
   }).join('');
 }
 function pmtBlur(el){savePMTask(el.dataset.pid,el.dataset.tid,'label',el.value);}
