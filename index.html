@@ -2876,7 +2876,7 @@ function getDocState(){
   return s;
 }
 // Fields auto-filled from project record — never restore these from state
-const AUTO_FILL_FIELDS=new Set(['if-so','if-address','qf-address','if-naming','qf-naming','qf-so','if-client','if-ship','if-del','if-inst','if-vinyl','if-odoo','if-ui-task','if-qa-task','if-template','if-badge','if-employee','qf-ship','qf-vinyl','qf-jira-task','qf-jira-product','qf-jira-badge','qf-employee','uf-client']);
+const AUTO_FILL_FIELDS=new Set(['if-so','if-address','qf-address','if-naming','qf-naming','qf-so','if-kiosk','uf-kiosk','qf-kiosk','if-client','if-ship','if-del','if-inst','if-vinyl','if-odoo','if-ui-task','if-qa-task','if-template','if-badge','if-employee','qf-ship','qf-vinyl','qf-jira-task','qf-jira-product','qf-jira-badge','qf-employee','uf-client']);
 
 let _docSaveTimer=null;
 function saveDocFormState(immediate=false){
@@ -3023,7 +3023,7 @@ function renderInstallForm(){
     ${fld('if-vinyl','Vinyl date','','','text',vinylDate)}
     <div class="doc-section-lbl">Unit configuration</div>
     ${fld('if-cp','Channel Partner (CP)','e.g. Direct, TD Synnex...','')}
-    ${fld('if-kiosk','Kiosk type','e.g. Retail Enclosure, V8 SparkXL...','')}
+    ${fld('if-kiosk','Kiosk type / product','e.g. Retail Enclosure, V8 SparkXL...','','text',[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'')}
     ${fld('if-elevator','Vending unit elevator','e.g. Enhanced, Standard','')}
     ${fld('if-screen','Screen size','e.g. 42" (1080x1920)','')}
     ${fld('if-workflow','Workflow','e.g. Retail Vending, Pick-up, Drop-off','full')}
@@ -3067,7 +3067,7 @@ function renderUIForm(){
     <div class="doc-section-lbl">Project identifiers</div>
     ${fld('uf-cp','Channel Partner (CP)','e.g. TD Synnex, Direct','')}
     ${fld('uf-client','End Client (CX)','e.g. LinkedIn','','text',p.client||'')}
-    ${fld('uf-kiosk','Kiosk type','e.g. V8 SparkXL & 18in Locker','full')}
+    ${fld('uf-kiosk','Kiosk type / product','e.g. V8 SparkXL & 18in Locker','full','text',[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'')}
     ${fld('uf-elevator','Vending unit elevator','e.g. Enhanced Quendra','')}
     ${fld('uf-screen','Screen size','e.g. 43"','')}
     <div class="doc-section-lbl">Configuration</div>
@@ -3105,7 +3105,7 @@ function renderQAForm(){
     ${fld('qf-so','Sales Order (SO)','','','text',p.so_number||'')}
     ${fld('qf-address','Installation address','','full','text',p.address||'')}
     ${fld('qf-naming','Naming convention & locations','e.g. ALLIZ-BOURN-LON-SPXL','full','text',p.naming_convention||'')}
-    ${fld('qf-kiosk','Kiosk type / product','e.g. SparkXL','')}
+    ${fld('qf-kiosk','Kiosk type / product','e.g. SparkXL','','text',[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'')}
     ${fld('qf-lang','Language','e.g. English and German','')}
     ${fld('qf-hosting','Hosting','e.g. Default European Server','')}
     ${fld('qf-connectivity','Internet connectivity','e.g. LAN (primary), Wifi (backup)','full')}
