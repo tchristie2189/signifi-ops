@@ -131,6 +131,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .today-pip{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--red);margin-left:3px;vertical-align:middle;}
 .day-events{padding:6px;}
 .ev{border-radius:var(--radius);padding:4px 7px;margin-bottom:3px;}
+.ev-done{opacity:0.5;border-left-color:var(--gray-300)!important;}
 .ev-ship{background:#d1fae5;border-left:3px solid #059669;}
 .ev-arr{background:#dbeafe;border-left:3px solid #2563eb;}
 .ev-prod{background:#ede9fe;border-left:3px solid #7c3aed;}
@@ -932,7 +933,9 @@ function renderOverview(){
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
   const proj=activeProjects('overview').find(p=>p.id===selectedProjId)||projects.find(p=>p.id===selectedProjId);
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
-  const msHtml=projMs.map(m=>{
+  // Group milestones by SO if project has multiple SOs
+  const soList=(proj?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const buildMsHtml=(ms)=>ms.map(m=>{
     const isDone=isMilestoneEffectivelyDone(m);
     const isManualDone=isMilestoneDone(m);
     const isOverdue=isMilestoneOverdue(m);
@@ -954,6 +957,13 @@ function renderOverview(){
       ${hist.length&&origDate?`<div style="font-size:9px;color:var(--gray-400);margin-top:1px">Orig: ${fmt(origDate)}</div>`:''}
     </div>`;
   }).join('');
+  // If multiple SOs, group milestones under each SO header
+  const msHtml=soList.length>1
+    ?soList.map(so=>{
+        const soMs=projMs.filter(m=>(m.so_number||proj?.so_number||'').includes(so)||true);
+        return`<div style="grid-column:1/-1;margin:8px 0 4px"><div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em;padding:4px 8px;background:var(--gray-50);border-radius:4px;border-left:3px solid var(--red)">SO: ${so}</div></div>`+buildMsHtml(soMs);
+      }).join('')
+    :buildMsHtml(projMs);
   const pillsHtml=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
     <div class="proj-pills" style="margin-bottom:0;flex:1">${filterBySales(filterByPM(activeProjects('overview'))).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
@@ -985,6 +995,21 @@ function renderOverview(){
       </div>
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
     </div>`:'<div class="empty-state">No projects yet.</div>'}`;
+}
+async function quickStatusMs(msId,val){
+  if(val==='done'){
+    // Mark as done in milestone_done table
+    const existing=milestoneDone[msId];
+    if(!existing){
+      const{data}=await sb.from('milestone_done').insert({milestone_id:msId,project_id:milestones.find(m=>m.id===msId)?.project_id,done_by:currentUserName,done_at:new Date().toISOString()}).select().single();
+      if(data)milestoneDone[msId]=data;
+    }
+  } else {
+    // Unmark
+    await sb.from('milestone_done').delete().eq('milestone_id',msId);
+    delete milestoneDone[msId];
+  }
+  renderWeek();
 }
 async function quickUpdateMs(msId,newDate){
   const m=milestones.find(x=>x.id===msId);
@@ -1029,7 +1054,7 @@ function renderWeek(){
   const el=document.getElementById('tab-week');
   const we=addD(weekStart,6);
   const ap=filterBySales(filterByPM(activeProjects('week')));
-  const allMs=milestones.filter(m=>ap.some(p=>p.id===m.project_id)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:''};});
+  const allMs=milestones.filter(m=>ap.some(p=>p.id===m.project_id)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:'',_projId:p?p.id:null};});
   // Include ad hoc shipping/installation in week view
   const adHocMs=getAdHocAsMilestones().filter(m=>m._status!=='Complete'&&(!pmFilter||m._raw?.pm===pmFilter)&&(!salesFilter||false));
   const allMsWithAdhoc=[...allMs,...adHocMs];
@@ -1046,7 +1071,12 @@ function renderWeek(){
   const daysHtml=[0,1,2,3,4].map(i=>{
     const d=addD(weekStart,i);const isT=sameDay(d,t);
     const evs=allMsWithAdhoc.filter(m=>m.date&&sameDay(new Date(m.date+'T00:00:00'),d));
-    return`<div class="day-col${isT?' today-col':''}"><div class="day-hdr"><div class="day-name">${DAY[i]}${isT?'<span class="today-pip"></span>':''}</div><div class="day-num">${d.getDate()}</div></div><div class="day-events">${evs.length?evs.map(e=>`<div class="ev ${TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${e.projectName}${e._adhoc?' 📦':''}</div></div>`).join(''):'<div class="empty-day">—</div>'}</div></div>`;
+    return`<div class="day-col${isT?' today-col':''}"><div class="day-hdr"><div class="day-name">${DAY[i]}${isT?'<span class="today-pip"></span>':''}</div><div class="day-num">${d.getDate()}</div></div><div class="day-events">${evs.length?evs.map(e=>{
+        const isDone=e._adhoc?(e._status==='Complete'):isMilestoneEffectivelyDone(e);
+        const statusSel=e._adhoc?'':`<select style="font-size:9px;padding:1px 3px;border:none;border-radius:3px;background:rgba(255,255,255,0.3);font-family:var(--font);cursor:pointer;margin-top:2px" onchange="quickStatusMs('${e.id}',this.value)" onclick="event.stopPropagation()"><option value="pending"${!isDone?'selected':''}>Pending</option><option value="done"${isDone?'selected':''}>Done</option></select>`;
+        const projLink=e._projId?`<span style="cursor:pointer;text-decoration:underline;opacity:0.8" onclick="event.stopPropagation();goToProjPage('${e._projId}')">${e.projectName}</span>`:e.projectName;
+        return`<div class="ev ${isDone?'ev-done':TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${projLink}${e._adhoc?' 📦':''}</div>${statusSel}</div>`;
+      }).join(''):'<div class="empty-day">—</div>'}</div></div>`;
   }).join('');
   el.innerHTML=`
     <div class="week-nav-row">
@@ -1996,7 +2026,7 @@ function openEditProj(id){
         <div class="field"><label>Sales</label><input id="ep-sales" value="${proj.sales||''}" placeholder="Sales contact"></div>
         <div class="field"><label>Account Manager</label><input id="ep-am" value="${proj.account_manager||''}" placeholder="Account Manager"></div>
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
-        <div class="field"><label>Naming convention</label><input id="ep-naming" value="${proj.naming_convention||''}" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono)"></div>
+        <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${proj.naming_convention||''}</textarea></div>
         <div class="field full"><label>Installation address</label><input id="ep-address" value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
         <div class="field full"><label>Notes</label><textarea id="ep-notes" style="min-height:55px">${proj.notes||''}</textarea></div>
       </div>
@@ -2474,8 +2504,8 @@ function renderProjPageBody(){
         <div class="pp-card">
           <div class="pp-card-head"><span class="pp-card-title">Naming & Address</span></div>
           <div class="pp-card-body" style="display:grid;grid-template-columns:1fr;gap:8px;padding:10px 0">
-            <div><div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Naming Convention</div>
-              <input value="${proj.naming_convention||''}" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:12px;padding:6px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);width:100%" onchange="saveProjField('${proj.id}','naming_convention',this.value)"></div>
+            <div><div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Naming Convention <span style="font-weight:400;text-transform:none;font-size:9px">(one per line)</span></div>
+              <textarea placeholder="e.g. GPIX-B2B-SUN-CA-ENC&#10;GPIX-B2B-SUN-CA-ENC-2" style="font-family:var(--mono);font-size:12px;padding:6px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);width:100%;min-height:60px;resize:vertical" onchange="saveProjField('${proj.id}','naming_convention',this.value)">${proj.naming_convention||''}</textarea></div>
             <div><div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Installation Address</div>
               <input value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085" style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);width:100%" onchange="saveProjField('${proj.id}','address',this.value)"></div>
           </div>
@@ -2684,7 +2714,7 @@ function renderPMTaskRows(pid,saved){
   saved.forEach(function(s){if(!DEFAULT_LABELS.includes(s.label))rows.push(s);});
   return rows.map(function(t){
     var id=t.id?t.id:('def-'+t.label.replace(/[^a-zA-Z0-9]/g,'-'));
-    var sc=t.status==='Done'?'var(--success)':t.status==='In Progress'?'var(--blue)':'var(--gray-400)';
+    var sc=t.status==='Done'?'var(--success)':t.status==='In Progress'?'#d97706':'#e11d48';
     var lbl=t.label.split('"').join('&quot;');
     var isSaved=!!t.id;
     var labelCell='<input value="'+lbl+'" id="pmt-lbl-'+id+'" data-pid="'+pid+'" data-tid="'+id+'" data-field="label" style="font-family:var(--font);font-size:12px;padding:3px 6px;border:'+(isSaved?'1px solid var(--gray-200)':'1px solid transparent')+';border-radius:4px;width:170px;background:'+(isSaved?'var(--white)':'transparent')+'" onblur="pmtBlur(this)" onfocus="this.style.border=\'1px solid var(--gray-200)\';this.style.background=\'var(--white)\'">';
