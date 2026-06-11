@@ -431,6 +431,7 @@ const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date'];
 
 let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={};
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
+let milestoneDeviations={}; // keyed by project_id → {milestone_key: deviation_row}
 let currentUser=null,currentUserName='';
 let vinylFilter={status:'',search:'',dateFrom:'',dateTo:'',pm:''};
 let planFilter={status:'',search:'',dateFrom:'',dateTo:''};
@@ -636,7 +637,7 @@ function renderTab(){
 
 // ── DATA ───────────────────────────────────────────────────
 async function loadAll(){
-  const[pr,ms,lg,ci,md,mh,ah,as_,pl]=await Promise.all([
+  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
@@ -646,6 +647,7 @@ async function loadAll(){
     sb.from('adhoc_schedule').select('*').order('created_at'),
     sb.from('app_settings').select('*'),
     sb.from('project_links').select('project_id,label,url'),
+    sb.from('milestone_deviations').select('*'),
   ]);
   projects=pr.data||[];milestones=ms.data||[];activityLog=lg.data||[];
   checkinStatus={};(ci.data||[]).forEach(c=>{checkinStatus[c.milestone_id]=c;});
@@ -670,6 +672,12 @@ async function loadAll(){
   sortByDate(adHocRows.shipping,'shipDate');
   sortByDate(adHocRows.installation,'installDate');
   appSettings={};(as_.data||[]).forEach(s=>{appSettings[s.key]=s.value;});
+  // Build deviation map: {project_id: {milestone_key: row}}
+  milestoneDeviations={};
+  (dev.data||[]).forEach(d=>{
+    if(!milestoneDeviations[d.project_id])milestoneDeviations[d.project_id]={};
+    milestoneDeviations[d.project_id][d.milestone_key]=d;
+  });
   // Backfill install_ticket_url from project_links for projects missing it
   const allProjLinks=pl.data||[];
   projects.forEach(p=>{
@@ -879,12 +887,14 @@ function renderGlance(){
     </div>`:'';
     // Archive/complete button
     const isComplete=p.status==='complete';
-    return `<div class="glance-card" style="${isComplete?'opacity:0.75':''}">
+    return `<div class="glance-card" style="${isComplete?'opacity:0.75':''}${isChild(p)?'border-left:3px solid #7c3aed;':isMaster(p)?'border-left:3px solid #e22f4a;':''}">
       <div class="glance-card-head">
         <div style="flex:1;min-width:0">
-          <div style="display:flex;align-items:center;gap:6px">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <div class="glance-proj-name">${p.name}</div>
             ${isComplete?'<span style="font-size:10px;padding:1px 7px;border-radius:10px;background:var(--gray-100);color:var(--gray-500);font-weight:600">Complete</span>':''}
+            ${isMaster(p)?`<span style="font-size:9px;padding:1px 7px;border-radius:10px;background:#fce7f3;color:#be185d;font-weight:700;cursor:pointer" onclick="openCampaignModal('${p.id}')">🏛 Master · ${getChildren(p.id).length} children</span>`:''}
+            ${isChild(p)?`<span style="font-size:9px;padding:1px 7px;border-radius:10px;background:#ede9fe;color:#7c3aed;font-weight:700">⬡ Child · ${getMaster(p.id)?.name||''}</span>`:''}
           </div>
           <div class="glance-proj-meta"><span class="glance-so" title="${p.so_number||''}">${truncateSO(p.so_number)}</span><span class="glance-client">${p.client||''}</span>${p.naming_convention?`<span class="glance-client" style="font-family:var(--mono);font-size:9px;color:var(--gray-400)">${p.naming_convention}</span>`:''}</div>
           ${overallStart&&overallEnd?`<div style="margin-top:7px"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Overall progress</span><span style="font-size:9px;color:var(--gray-500)">${overallPct}%</span></div><div style="background:var(--gray-100);border-radius:3px;height:4px"><div style="height:4px;border-radius:3px;background:linear-gradient(90deg,#7c3aed,#e22f4a);width:${overallPct}%"></div></div></div>`:''}
@@ -893,6 +903,7 @@ function renderGlance(){
           ${h?healthRing(p.id):''}
           <button onclick="goToProjPage('${p.id}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)" title="Open project page">↗ Project page</button>
           <button onclick="toggleArchive('${p.id}','${p.status}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)">${isComplete?'↩ Restore':'✓ Complete'}</button>
+          ${!isChild(p)?`<button onclick="openCampaignModal('${p.id}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid #7c3aed;background:transparent;color:#7c3aed;cursor:pointer;font-family:var(--font)" title="Campaign / child projects">🏛 Campaign</button>`:''}
         </div>
       </div>
       <div class="cycle-track"><div class="cycle-stages">${stagesHtml}</div></div>
@@ -1014,9 +1025,18 @@ async function quickStatusMs(msId,val){
 async function quickUpdateMs(msId,newDate){
   const m=milestones.find(x=>x.id===msId);
   if(!m)return;
-  if(!m.original_date)await sb.from('milestones').update({original_date:newDate}).eq('id',msId);
+  const oldDate=m.date;
+  if(!m.original_date)await sb.from('milestones').update({original_date:m.date}).eq('id',msId);
   await sb.from('milestones').update({date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',msId);
-  showToast('Date updated ✓');
+  m.date=newDate;
+  // If this project is a child, mark deviation
+  const proj=projects.find(p=>p.id===m.project_id);
+  if(proj?.parent_project_id){
+    await markMilestoneDeviated(m.project_id,m.key,oldDate,newDate);
+    showToast('Date updated ✓ — marked as deviated from master');
+  } else {
+    showToast('Date updated ✓');
+  }
   await loadAll();
 }
 function openAddMsForProj(projId){
@@ -2379,6 +2399,7 @@ function renderProjPageBody(){
   </tr>`).join('');
 
   // Milestones from hub — show ALL milestones not just preset keys
+  const ppProj=projects.find(p=>p.id===ppProjId);
   const msHtml=pMs.sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(m=>{
     const isDone=isMilestoneEffectivelyDone(m);
     const isManualDone=isMilestoneDone(m);
@@ -2396,8 +2417,11 @@ function renderProjPageBody(){
     else if(d<=7){chip='chip-atrisk';lbl='In '+d+'d';}
     else{chip='chip-future';lbl=fmt(m.date);}
     const slDot=ci?.stoplight?`<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${ci.stoplight==='green'?'#22c55e':ci.stoplight==='yellow'?'#eab308':'#ef4444'};margin-left:4px" title="Dept: ${ci.stoplight}"></span>`:'';
+    // Deviation indicator for children
+    const dev=ppProj?.parent_project_id?milestoneDeviations[ppProjId]?.[m.key]:null;
+    const devTag=dev?`<span style="font-size:9px;padding:1px 5px;border-radius:8px;background:#ede9fe;color:#7c3aed;font-weight:600;margin-left:4px" title="Deviated from master (was ${dev.master_date?fmt(dev.master_date):'unknown'})">🔀 deviated</span>`:'';
     return`<tr>
-      <td style="font-weight:500">${m.label}${slDot}</td>
+      <td style="font-weight:500">${m.label}${slDot}${devTag}</td>
       <td class="date-cell">${fmt(m.date)}</td>
       <td><span class="status-chip ${chip}">${lbl}</span></td>
       <td style="display:flex;gap:4px;align-items:center">
@@ -2482,6 +2506,7 @@ function renderProjPageBody(){
         <button onclick="exportProjPageExcel()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #2d6a4f;background:#1a4a35;color:#4ade80;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">⬇ Excel</button>
         <button onclick="openClientExport()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #1d4ed8;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📤 Client export</button>
         <button onclick="openClientDeliverables()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #d97706;background:#3f2200;color:#fbbf24;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📋 Edit deliverables</button>
+        <button onclick="openCampaignModal('${proj.id}')" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #7c3aed;background:#2e1065;color:#c4b5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🏛 Campaign${getChildren(proj.id).length?' · '+getChildren(proj.id).length:''}</button>
         <button onclick="window.print()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #555;background:#1a1a1a;color:#aaa;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🖨 Print / PDF</button>
       </div>
     </div>
@@ -2537,6 +2562,10 @@ function renderProjPageBody(){
           </tbody>
         </table>
         <button class="pp-add-btn" onclick="addPMTaskRow('${ppProjId}','pmt-body-${ppProjId}')">+ Add task</button>
+        <div style="border-top:1px solid var(--gray-100);margin-top:10px;padding-top:10px">
+          <div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Notes</div>
+          <textarea placeholder="Key reminders, follow-ups, escalations..." style="font-family:var(--font);font-size:12px;padding:8px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);width:100%;min-height:70px;resize:vertical;color:var(--gray-700)" onchange="savePPSection('pm_task_notes',this.value)">${getSection('pm_task_notes')}</textarea>
+        </div>
       </div>
 
       <div class="pp-card">
@@ -3523,6 +3552,203 @@ async function saveInstallTicketUrl(projId,url){
   showToast('Installation ticket saved ✓');
   renderDeptView('installation');
 }
+// ═══════════════════════════════════════════════════════════
+// CAMPAIGN / PARENT-CHILD PROJECTS
+// ═══════════════════════════════════════════════════════════
+function getChildren(masterId){return projects.filter(p=>p.parent_project_id===masterId);}
+function getMaster(childId){const p=projects.find(x=>x.id===childId);return p?.parent_project_id?projects.find(x=>x.id===p.parent_project_id):null;}
+function isMaster(p){return p.is_master||projects.some(x=>x.parent_project_id===p.id);}
+function isChild(p){return !!p.parent_project_id;}
+
+// Open "Make this a master / Add child" modal
+function openCampaignModal(projId){
+  const proj=projects.find(p=>p.id===projId);
+  if(!proj)return;
+  const children=getChildren(projId);
+  const master=getMaster(projId);
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:600px" onclick="event.stopPropagation()">
+      <div class="modal-head"><span class="modal-title">🏛 Campaign: ${proj.name}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div style="padding:16px">
+        ${master?`<div style="padding:10px 14px;background:var(--blue-light);border-radius:8px;margin-bottom:12px;font-size:12px">
+          This is a child of <strong>${master.name}</strong>
+          <button onclick="unlinkFromMaster('${projId}')" style="float:right;font-size:11px;padding:2px 8px;border:1px solid var(--red);color:var(--red);background:none;border-radius:4px;cursor:pointer">Unlink</button>
+        </div>`:''}
+        ${children.length?`<div style="margin-bottom:16px">
+          <div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;margin-bottom:8px">Children (${children.length})</div>
+          ${children.map(c=>`<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--gray-50);border-radius:6px;margin-bottom:6px">
+            <div style="flex:1">
+              <div style="font-size:12px;font-weight:600">${c.name}</div>
+              <div style="font-size:11px;color:var(--gray-500)">${c.so_number||'No SO'} · ${c.pm||'No PM'}</div>
+            </div>
+            <button onclick="openPushDatesModal('${projId}','${c.id}')" style="font-size:11px;padding:3px 10px;border:1px solid var(--blue);color:var(--blue);background:none;border-radius:4px;cursor:pointer">Push dates →</button>
+            <button onclick="unlinkChild('${c.id}')" style="font-size:11px;padding:3px 8px;border:1px solid var(--gray-300);color:var(--gray-500);background:none;border-radius:4px;cursor:pointer">Unlink</button>
+          </div>`).join('')}
+        </div>`:''}
+        <div style="border-top:1px solid var(--gray-100);padding-top:14px">
+          <div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;margin-bottom:10px">Add child projects</div>
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <input id="camp-so" placeholder="Sales Order (e.g. S13799)" style="font-family:var(--mono);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);flex:1">
+            <input id="camp-name" placeholder="Child name (e.g. IUD — Machine 2)" style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);flex:2">
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <input id="camp-addr" placeholder="Address / Location (optional)" style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);flex:1">
+            <input id="camp-naming" placeholder="Naming convention (optional)" style="font-family:var(--mono);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);flex:1">
+          </div>
+          <button class="btn btn-primary" onclick="addChildProject('${projId}')">+ Add child</button>
+          <span style="font-size:11px;color:var(--gray-400);margin-left:10px">Child inherits all milestone dates from this project</span>
+        </div>
+        ${!master?`<div style="border-top:1px solid var(--gray-100);padding-top:14px;margin-top:14px">
+          <div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;margin-bottom:8px">Or link to existing master</div>
+          <div style="display:flex;gap:8px">
+            <select id="camp-master-sel" style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);flex:1">
+              <option value="">Select master project...</option>
+              ${projects.filter(p=>p.id!==projId&&!p.parent_project_id).map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}
+            </select>
+            <button class="btn" onclick="linkToMaster('${projId}')">Link</button>
+          </div>
+        </div>`:''}
+      </div>
+      <div class="modal-actions">
+        ${children.length?`<button class="btn btn-primary" onclick="openPushAllDatesModal('${projId}')">📅 Push all dates to children</button>`:''}
+        <button class="btn" onclick="closeModal()">Done</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function addChildProject(masterId){
+  const master=projects.find(p=>p.id===masterId);
+  if(!master){showToast('Master not found');return;}
+  const so=document.getElementById('camp-so')?.value.trim();
+  const name=document.getElementById('camp-name')?.value.trim()||master.name+' — Child';
+  const addr=document.getElementById('camp-addr')?.value.trim()||null;
+  const naming=document.getElementById('camp-naming')?.value.trim()||null;
+  // Create child project inheriting master's fields
+  const{data:child,error}=await sb.from('projects').insert({
+    name,so_number:so||master.so_number,client:master.client,pm:master.pm,
+    sdm:master.sdm,solutions:master.solutions,sales:master.sales,
+    account_manager:master.account_manager,channel_partner:master.channel_partner,
+    product_type:master.product_type,form_factor:master.form_factor,
+    vinyl_type:master.vinyl_type,naming_convention:naming,address:addr,
+    parent_project_id:masterId,status:'active',
+    changed_by:currentUserName,changed_at:new Date().toISOString(),
+  }).select().single();
+  if(error){showToast('Error: '+error.message);return;}
+  // Clone milestones from master
+  const masterMs=milestones.filter(m=>m.project_id===masterId);
+  if(masterMs.length){
+    const newMs=masterMs.map(m=>({
+      project_id:child.id,label:m.label,key:m.key,date:m.date,
+      so_number:so||m.so_number||null,created_by:currentUserName,
+    }));
+    const{data:createdMs}=await sb.from('milestones').insert(newMs).select();
+    if(createdMs)milestones.push(...createdMs);
+  }
+  // Mark master as campaign master
+  await sb.from('projects').update({is_master:true}).eq('id',masterId);
+  master.is_master=true;
+  projects.push(child);
+  await loadAll();
+  showToast('Child project created ✓');
+  openCampaignModal(masterId);
+}
+
+async function linkToMaster(childId){
+  const masterId=document.getElementById('camp-master-sel')?.value;
+  if(!masterId){showToast('Select a master project');return;}
+  await sb.from('projects').update({parent_project_id:masterId}).eq('id',childId);
+  await sb.from('projects').update({is_master:true}).eq('id',masterId);
+  const child=projects.find(p=>p.id===childId);if(child)child.parent_project_id=masterId;
+  const master=projects.find(p=>p.id===masterId);if(master)master.is_master=true;
+  closeModal();showToast('Linked to master ✓');renderTab();
+}
+
+async function unlinkChild(childId){
+  await sb.from('projects').update({parent_project_id:null}).eq('id',childId);
+  const c=projects.find(p=>p.id===childId);if(c)c.parent_project_id=null;
+  showToast('Unlinked ✓');await loadAll();renderTab();
+}
+
+async function unlinkFromMaster(childId){
+  await unlinkChild(childId);
+  closeModal();
+}
+
+// Push dates from master to one or all children
+function openPushAllDatesModal(masterId){
+  const children=getChildren(masterId);
+  const masterMs=milestones.filter(m=>m.project_id===masterId);
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:520px" onclick="event.stopPropagation()">
+      <div class="modal-head"><span class="modal-title">📅 Push dates to all children</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div style="padding:16px">
+        <p style="font-size:13px;color:var(--gray-600);margin-bottom:14px">Choose which milestones to push from master to all ${children.length} children:</p>
+        ${masterMs.map(m=>{
+          const devCount=children.filter(c=>milestoneDeviations[c.id]?.[m.key]).length;
+          return`<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--gray-50)">
+            <input type="checkbox" id="push-ms-${m.id}" checked style="cursor:pointer">
+            <div style="flex:1">
+              <span style="font-size:12px;font-weight:500">${m.label}</span>
+              ${devCount?`<span style="font-size:10px;color:var(--amber);margin-left:8px">⚠ ${devCount} child${devCount>1?'ren':''} deviated</span>`:''}
+            </div>
+            <span style="font-size:11px;font-family:var(--mono);color:var(--gray-500)">${m.date?fmt(m.date):'No date'}</span>
+          </div>`;
+        }).join('')}
+        <div style="margin-top:14px;padding:10px;background:#fffbeb;border-radius:6px;font-size:11px;color:#92400e">
+          ⚠ Milestones marked as deviated will also be overwritten. Children can re-deviate after.
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="pushDatesToAll('${masterId}')">Push to all ${children.length} children →</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function pushDatesToAll(masterId){
+  const children=getChildren(masterId);
+  const masterMs=milestones.filter(m=>m.project_id===masterId);
+  const checkedKeys=masterMs.filter(m=>document.getElementById('push-ms-'+m.id)?.checked).map(m=>m.key);
+  let pushed=0;
+  for(const child of children){
+    const childMs=milestones.filter(m=>m.project_id===child.id);
+    for(const key of checkedKeys){
+      const masterM=masterMs.find(m=>m.key===key);
+      if(!masterM?.date)continue;
+      const childM=childMs.find(m=>m.key===key);
+      if(childM){
+        await sb.from('milestones').update({date:masterM.date}).eq('id',childM.id);
+        childM.date=masterM.date;
+        // Clear deviation for this key
+        await sb.from('milestone_deviations').delete().eq('project_id',child.id).eq('milestone_key',key);
+        if(milestoneDeviations[child.id])delete milestoneDeviations[child.id][key];
+      } else {
+        const{data}=await sb.from('milestones').insert({project_id:child.id,label:masterM.label,key,date:masterM.date,created_by:currentUserName}).select().single();
+        if(data)milestones.push(data);
+      }
+      pushed++;
+    }
+  }
+  closeModal();showToast(`Pushed ${pushed} dates to ${children.length} children ✓`);renderTab();
+}
+
+// Mark a milestone as deviated on a child
+async function markMilestoneDeviated(projId,msKey,masterDate,childDate){
+  await sb.from('milestone_deviations').upsert({
+    project_id:projId,milestone_key:msKey,
+    master_date:masterDate,child_date:childDate,
+    deviated_by:currentUserName,deviated_at:new Date().toISOString()
+  },{onConflict:'project_id,milestone_key'});
+  if(!milestoneDeviations[projId])milestoneDeviations[projId]={};
+  milestoneDeviations[projId][msKey]={master_date:masterDate,child_date:childDate};
+}
+
+function openPushDatesModal(masterId,childId){}// placeholder - handled by openPushAllDatesModal
+
 function renderSettings(){
   const el=document.getElementById('tab-settings');
   const types=getProductTypes();
