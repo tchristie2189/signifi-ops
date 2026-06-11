@@ -2874,7 +2874,7 @@ function getDocState(){
 const AUTO_FILL_FIELDS=new Set(['if-so','if-address','qf-address','if-naming','qf-naming','if-client','if-ship','if-del','if-inst','if-vinyl','if-odoo','if-ui-task','if-qa-task','if-template','if-badge','if-employee','qf-ship','qf-vinyl','qf-jira-task','qf-jira-product','qf-jira-badge','qf-employee','uf-client']);
 
 let _docSaveTimer=null;
-function saveDocFormState(){
+function saveDocFormState(immediate=false){
   const state=getDocState();
   if(!state.shared)state.shared={};
   document.querySelectorAll('#tab-gendocs input,#tab-gendocs select,#tab-gendocs textarea').forEach(el=>{
@@ -2884,10 +2884,13 @@ function saveDocFormState(){
       state.shared[el.id]=el.value;
     }
   });
-  // Persist to DB — debounced so we don't hammer on every keystroke
   if(selectedDocProjId){
     clearTimeout(_docSaveTimer);
-    _docSaveTimer=setTimeout(()=>persistDocState(selectedDocProjId),1500);
+    if(immediate){
+      persistDocState(selectedDocProjId);
+    } else {
+      _docSaveTimer=setTimeout(()=>persistDocState(selectedDocProjId),1500);
+    }
   }
 }
 async function persistDocState(pid){
@@ -2950,9 +2953,9 @@ function renderGenDocs(){
         </div>
         <div class="doc-tabs" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
           <div style="display:flex;gap:4px">
-            <button class="doc-tab${activeDocTab==='install'?' active':''}" onclick="saveDocFormState();activeDocTab='install';renderGenDocs()">🔧 Installation ticket</button>
-            <button class="doc-tab${activeDocTab==='ui'?' active':''}" onclick="saveDocFormState();activeDocTab='ui';renderGenDocs()">🖥 UI request</button>
-            <button class="doc-tab${activeDocTab==='qa'?' active':''}" onclick="saveDocFormState();activeDocTab='qa';renderGenDocs()">✅ QA task</button>
+            <button class="doc-tab${activeDocTab==='install'?' active':''}" onclick="saveDocFormState(true);activeDocTab='install';renderGenDocs()">🔧 Installation ticket</button>
+            <button class="doc-tab${activeDocTab==='ui'?' active':''}" onclick="saveDocFormState(true);activeDocTab='ui';renderGenDocs()">🖥 UI request</button>
+            <button class="doc-tab${activeDocTab==='qa'?' active':''}" onclick="saveDocFormState(true);activeDocTab='qa';renderGenDocs()">✅ QA task</button>
           </div>
           <button onclick="saveDocFormState();generateAllDocs()" style="font-size:12px;padding:6px 16px;border-radius:var(--radius);border:none;background:var(--black);color:white;cursor:pointer;font-family:var(--font);font-weight:600">⚡ Generate all three →</button>
         </div>
@@ -3128,7 +3131,7 @@ function generateDoc(type){
   try{
   // Make sure the right form is rendered before generating
   if(activeDocTab!==type){
-    saveDocFormState();
+    saveDocFormState(true);
     activeDocTab=type;
     renderGenDocs();
     restoreDocFormState();
