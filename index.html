@@ -2970,7 +2970,7 @@ function renderGenDocs(){
             <button class="doc-tab${activeDocTab==='ui'?' active':''}" onclick="saveDocFormState(true);activeDocTab='ui';renderGenDocs()">🖥 UI request</button>
             <button class="doc-tab${activeDocTab==='qa'?' active':''}" onclick="saveDocFormState(true);activeDocTab='qa';renderGenDocs()">✅ QA task</button>
           </div>
-          <button onclick="saveDocFormState();generateAllDocs()" style="font-size:12px;padding:6px 16px;border-radius:var(--radius);border:none;background:var(--black);color:white;cursor:pointer;font-family:var(--font);font-weight:600">⚡ Generate all three →</button>
+          <button onclick="saveDocFormState(true);showToast('Form saved ✓')" style="font-size:12px;padding:6px 14px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);color:var(--gray-700);cursor:pointer;font-family:var(--font)">💾 Save form</button><button onclick="saveDocFormState();generateAllDocs()" style="font-size:12px;padding:6px 16px;border-radius:var(--radius);border:none;background:var(--black);color:white;cursor:pointer;font-family:var(--font);font-weight:600">⚡ Generate all three →</button>
         </div>
         ${activeDocTab==='install'?renderInstallForm():activeDocTab==='ui'?renderUIForm():renderQAForm()}
       </div>
@@ -2995,13 +2995,13 @@ function getDocLink(label){
   return'';
 }
 function fld(id,label,placeholder,fullWidth,type='text',val=''){
-  return`<div class="field${fullWidth?' full':''}"><label>${label}</label><input id="${id}" type="${type}" placeholder="${placeholder}" value="${val}" style="font-size:12px"></div>`;
+  return`<div class="field${fullWidth?' full':''}"><label>${label}</label><input id="${id}" type="${type}" placeholder="${placeholder}" value="${val}" style="font-size:12px" onblur="saveDocFormState(true)"></div>`;
 }
 function fldSelect(id,label,opts,val=''){
   return`<div class="field"><label>${label}</label><select id="${id}" style="font-size:12px">${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
 }
 function fldTA(id,label,placeholder,val=''){
-  return`<div class="field full"><label>${label}</label><textarea id="${id}" placeholder="${placeholder}" style="min-height:70px;font-size:12px">${val}</textarea></div>`;
+  return`<div class="field full"><label>${label}</label><textarea id="${id}" placeholder="${placeholder}" style="min-height:70px;font-size:12px" onblur="saveDocFormState(true)">${val}</textarea></div>`;
 }
 
 function renderInstallForm(){
@@ -3010,7 +3010,7 @@ function renderInstallForm(){
   const instDate=getDocDate('installation');
   const vinylDate=getDocDate('vinyl');
   const shipDate=getDocDate('shipping');
-  return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()">
+  return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()" onfocusout="saveDocFormState(true)">
     <div class="doc-section-lbl">Project identifiers (auto-filled from hub)</div>
     ${fld('if-so','Sales Order (SO)','SO-XXXXX','','text',p.so_number||'')}
     ${fld('if-client','End Client (CX)','e.g. Google','','text',p.client||'')}
@@ -3063,7 +3063,7 @@ function renderInstallForm(){
 
 function renderUIForm(){
   const p=getDocProj();
-  return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()">
+  return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()" onfocusout="saveDocFormState(true)">
     <div class="doc-section-lbl">Project identifiers</div>
     ${fld('uf-cp','Channel Partner (CP)','e.g. TD Synnex, Direct','')}
     ${fld('uf-client','End Client (CX)','e.g. LinkedIn','','text',p.client||'')}
@@ -3097,7 +3097,7 @@ function renderQAForm(){
   const p=getDocProj();
   const shipDate=getDocDate('shipping');
   const vinylDate=getDocDate('vinyl');
-  return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()">
+  return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()" onfocusout="saveDocFormState(true)">
     <div class="doc-section-lbl">Dates (auto-filled)</div>
     ${fld('qf-ship','Shipping date','','','text',shipDate)}
     ${fld('qf-vinyl','Vinyl date','','','text',vinylDate)}
