@@ -1311,6 +1311,7 @@ function renderDeptView(dept){
   const makeAdHocRow=(r,origIdx)=>{
     const sd=dept==='shipping'?(r.shipDate||r.ship_date||''):(r.installDate||r.install_date||'');
     let extra='';
+    let extraAfterStatus='';
     if(dept==='shipping'){
       const shipTicket=r.install_ticket_url||'';
       const shipTicketCell=shipTicket?'<a href="'+shipTicket+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
