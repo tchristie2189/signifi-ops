@@ -566,7 +566,10 @@ async function toggleMilestoneDone(mid,pid,e){
     if(data)milestoneDone[mid]=data;
   }
   showToast(isDone?'Marked as not done':'Marked as done ✓');
-  await loadAll();
+  // Partial re-render — don't reload entire page, just refresh milestones display
+  if(currentTab==='projpage'){renderProjPageBody(pid);}
+  else if(currentTab==='overview'){renderOverview();}
+  else{await loadAll();}
 }
 
 // ── ACTIVITY LOG ───────────────────────────────────────────
@@ -762,6 +765,8 @@ let hideCompleted={glance:false,overview:false,week:false,production:false,quali
 // Helper — filters out completed projects based on per-page toggle
 function pmDropdown(renderFn){
   const PM_LIST=['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'];
+const SALES_LIST=['Adnan Aga','Michael Harrison','Danny Pack','Julianna Reynolds','Michelle Hernandez','Kevin Bell','Shoubi Rastegar','Daniel Nowak'];
+const AM_LIST=['Ian Harrison','Daniel Pini','Michelle Hernandez','Tyler Stevenson','Pamela Gilliam'];
   const onChange=renderFn.includes('(')?renderFn:renderFn+'()';
   return`<select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pmFilter=this.value;${onChange}">
     <option value="">All PMs</option>
@@ -1253,7 +1258,7 @@ function renderDeptView(dept){
   const cfg={
     production:{title:'Production schedule',startKey:'production-start',endKey:'production-end',color:'#7c3aed',cols:['Project','SO','Client','PM','Prod start','Prod end','Duration','Status']},
     quality:{title:'Quality / QA schedule',startKey:'quality-start',endKey:'quality-end',color:'#d97706',cols:['Project','SO','Client','PM','QA start','QA end','Duration','Vinyl','UAT','Status']},
-    shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO','Client','PM','Pack & ship','Delivery','Status','']},
+    shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO','Client','PM','Pack & ship','Delivery','Status','Install Ticket','']},
     installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO','Client','PM','Training','Installation','Confirmed','Install Ticket','Status','']},
   };
   const c=cfg[dept];
@@ -1290,14 +1295,18 @@ function renderDeptView(dept){
       const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>`:`<input type="text" value="" placeholder="Paste URL..." data-proj="${p.id}" style="font-size:10px;padding:2px 6px;border:1px solid var(--gray-200);border-radius:4px;width:110px;font-family:var(--font)" onchange="saveInstallTicketUrl('${p.id}',this.value)">`;
       extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';
     }
-    const html='<tr><td style="font-weight:500">'+p.name+'</td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+(hasFilter?'<td></td>':'')+'</tr>';
+    const html='<tr><td style="font-weight:500"><span style="cursor:pointer;color:var(--blue);text-decoration:underline" onclick="goToProjPage(\"'+p.id+'\")">'+p.name+'</span></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+(hasFilter?'<td></td>':'')+'</tr>';
     return{_d:sd||'',html};
   };
 
   const makeAdHocRow=(r,origIdx)=>{
     const sd=dept==='shipping'?(r.shipDate||r.ship_date||''):(r.installDate||r.install_date||'');
     let extra='';
-    if(dept==='shipping'){extra='<td class="date-cell">'+fmt(r.shipDate||r.ship_date)+'</td><td class="date-cell">'+fmt(r.deliveryDate||r.delivery_date)+'</td>';}
+    if(dept==='shipping'){
+      const shipTicket=p.install_ticket_url||'';
+      const shipTicketCell=shipTicket?'<a href="'+shipTicket+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
+      extra='<td class="date-cell">'+fmt(r.shipDate||r.ship_date)+'</td><td class="date-cell">'+fmt(r.deliveryDate||r.delivery_date)+'</td><td class="date-cell">'+shipTicketCell+'</td>';
+    }
     else if(dept==='installation'){
       const adTicket=r.install_ticket_url||'';
       const adTicketCell=adTicket?'<a href="'+adTicket+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
@@ -1311,7 +1320,7 @@ function renderDeptView(dept){
   };
 
   const projRows=filteredProjects.map(makeRow);
-  const adHoc=hasFilter?(adHocRows[dept]||[]).filter(r=>(!pmFilter||r.pm===pmFilter)):[];
+  const adHoc=hasFilter?(adHocRows[dept]||[]).filter(r=>(!pmFilter||r.pm===pmFilter)&&!(hideCompleted[dept]&&r.status==='Complete')):[];
   const ahRows=adHoc.map((r,i)=>makeAdHocRow(r,adHocRows[dept].indexOf(r)));
 
   const allItems=hasFilter?[...projRows,...ahRows].sort((a,b)=>{
@@ -1947,8 +1956,8 @@ function renderIntake(){
       </div>
       <div class="field"><label>SDM (Service Delivery Manager)</label><input id="i-sdm" placeholder="SDM name"></div>
       <div class="field"><label>Solutions</label><input id="i-solutions" placeholder="Solutions contact"></div>
-      <div class="field"><label>Sales</label><input id="i-sales" placeholder="Sales contact"></div>
-      <div class="field"><label>Account Manager</label><input id="i-am" placeholder="Account Manager name"></div>
+      <div class="field"><label>Sales</label><input id="i-sales" list="i-sales-list" placeholder="Sales contact"><datalist id="i-sales-list">${SALES_LIST.map(s=>`<option>${s}</option>`).join('')}</datalist></div>
+      <div class="field"><label>Account Manager</label><input id="i-am" list="i-am-list" placeholder="Account Manager name"><datalist id="i-am-list">${AM_LIST.map(s=>`<option>${s}</option>`).join('')}</datalist></div>
       <div class="field"><label>Vinyl type</label><select id="i-vinyl-type"><option value="">Select...</option><option>Decal</option><option>Partial Vinyl</option><option>Full Vinyl</option></select></div>
 
       <div class="intake-section-lbl">Key milestone dates</div>
@@ -2102,8 +2111,8 @@ function openEditProj(id){
         </div>
         <div class="field"><label>SDM</label><input id="ep-sdm" value="${proj.sdm||''}" placeholder="SDM name"></div>
         <div class="field"><label>Solutions</label><input id="ep-solutions" value="${proj.solutions||''}" placeholder="Solutions contact"></div>
-        <div class="field"><label>Sales</label><input id="ep-sales" value="${proj.sales||''}" placeholder="Sales contact"></div>
-        <div class="field"><label>Account Manager</label><input id="ep-am" value="${proj.account_manager||''}" placeholder="Account Manager"></div>
+        <div class="field"><label>Sales</label><input id="ep-sales" list="ep-sales-list" value="${proj.sales||''}" placeholder="Sales contact"><datalist id="ep-sales-list">${SALES_LIST.map(s=>`<option>${s}</option>`).join('')}</datalist></div>
+        <div class="field"><label>Account Manager</label><input id="ep-am" list="ep-am-list" value="${proj.account_manager||''}" placeholder="Account Manager"><datalist id="ep-am-list">${AM_LIST.map(s=>`<option>${s}</option>`).join('')}</datalist></div>
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
         <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${proj.naming_convention||''}</textarea></div>
         <div class="field full"><label>Installation address</label><input id="ep-address" value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
@@ -2534,11 +2543,15 @@ function renderProjPageBody(){
     <td class="pp-actions"><button class="pp-del" onclick="ppDelRisk('${r.id}')">✕</button></td>
   </tr>`).join('');
 
-  // Decisions
+  // Decision / Approval Log
   const decHtml=ppData.decisions.map(d=>`<tr data-id="${d.id}">
     <td><input type="date" value="${d.decision_date||''}" style="width:120px" oninput="ppDecChange('${d.id}','decision_date',this.value)"></td>
-    <td><input value="${d.description||''}" placeholder="Decision" oninput="ppDecChange('${d.id}','description',this.value)"></td>
+    <td><input value="${d.description||''}" placeholder="Decision / Approval" oninput="ppDecChange('${d.id}','description',this.value)"></td>
     <td><input value="${d.approved_by||''}" placeholder="Approved by" style="width:110px" oninput="ppDecChange('${d.id}','approved_by',this.value)"></td>
+    <td style="min-width:140px"><div style="display:flex;align-items:center;gap:4px">
+      <input value="${d.link_url||''}" placeholder="https://..." style="font-family:var(--mono);font-size:11px;flex:1;min-width:0" oninput="ppDecChange('${d.id}','link_url',this.value)">
+      ${d.link_url?`<a href="${d.link_url}" target="_blank" style="font-size:12px;color:var(--blue);text-decoration:none;flex-shrink:0">↗</a>`:''}
+    </div></td>
     <td class="pp-actions"><button class="pp-del" onclick="ppDelDec('${d.id}')">✕</button></td>
   </tr>`).join('');
 
@@ -2713,10 +2726,10 @@ function renderProjPageBody(){
 
     <!-- ROW 5: Decision log -->
     <div class="pp-card" style="margin-bottom:12px">
-      <div class="pp-card-head"><span class="pp-card-title">Decision log</span></div>
+      <div class="pp-card-head"><span class="pp-card-title">Decision / Approval log</span></div>
       <div style="overflow-x:auto">
         <table class="pp-table">
-          <thead><tr><th style="width:120px">Date</th><th>Decision</th><th style="width:130px">Approved by</th><th style="width:28px"></th></tr></thead>
+          <thead><tr><th style="width:120px">Date</th><th>Decision / Approval</th><th style="width:130px">Approved by</th><th>Link</th><th style="width:28px"></th></tr></thead>
           <tbody id="pp-decisions">${decHtml}</tbody>
         </table>
       </div>
@@ -2983,6 +2996,8 @@ async function ppDelRisk(id){await sb.from('risks').delete().eq('id',id);ppData.
 // Decision CRUD
 async function ppDecChange(id,field,val){
   await sb.from('decisions').update({[field]:val}).eq('id',id);
+  const d=ppData.decisions.find(x=>x.id===id);if(d){d[field]=val;}
+  if(field==='link_url')renderProjPageBody(ppProjId);
   const item=ppData.decisions.find(d=>d.id===id);if(item)item[field]=val;
   showPPSaved();
 }
@@ -3309,7 +3324,55 @@ function generateDoc(type){
 6. Perform end-to-end hardware and software testing.
 7. Capture installation photos and system validation evidence.
 8. Complete User Acceptance Checklist and obtain sign-off.
-9. Submit installation completion documentation to PM.`;
+9. Submit installation completion documentation to PM.
+
+SCOPE OF WORK — KIOSK INSTALLATION AND VALIDATION
+──────────────────────────────────────────────────
+1. Kiosk Installation and Setup
+   • Unbox and assemble the Kiosk at the designated site.
+   • Make sure all parts and accessories are there.
+   • Set up the kiosk in its assigned spot, following location guidelines and safety rules.
+
+2. Network Connection
+   • Connect the kiosk to the internet using a wireless setup.
+   • Check network status on the kiosk interface to confirm it's connected.
+   • Verify the kiosk can communicate with Signifi servers.
+
+3. End-to-End Technical Test
+   • Power up the kiosk and make sure everything initializes correctly.
+   • Confirm all hardware (screen, card reader, receipt printer, etc.) is working.
+
+4. Troubleshooting (If Needed)
+   • Identify and document any network, hardware, or software issues.
+   • Contact the Signifi Support Team for help troubleshooting.
+   • Apply fixes and re-test to make sure everything's good to go.
+
+5. Planogram Workflow Tests
+   • Verify the planogram setup matches the product inventory.
+   • Run through end-to-end workflow tests.
+   • Validate these workflows on the Vision platform, working with the support team if needed.
+   • Double-check planogram numbers for accuracy.
+
+6. Kiosk Orientation for On-Site Contact / Local Staff
+   • Give local staff a quick rundown of how to operate the kiosk.
+   • Show them how to refill products and handle common issues.
+   • Make sure they're comfortable using the kiosk and can troubleshoot minor problems.
+
+7. Assist Client with Workflow Testing
+   • Help the client run through typical workflow scenarios.
+   • Answer any questions and address concerns during testing.
+   • Ensure the client is satisfied with how everything's working.
+
+8. Get Sign-Off on the User Acceptance Checklist
+   • Go over the checklist with the client, detailing everything that's been tested and validated.
+   • Address any final questions or issues.
+   • Get the client's signature to confirm their approval.
+
+9. Documentation and Reporting
+   • Take clear pictures of the fully installed kiosk.
+   • Snap an image of the signed User Acceptance Checklist.
+   • Attach all images to the installation ticket or send them to the Signifi Support Team.
+   • Send an Installation Completion Letter to the PM or attach it to the ticket.`;
     text=`INSTALLATION TICKET
 ${'─'.repeat(50)}
 Sales Order (SO): ${safeGet('if-so')||proj?.so_number||''}
