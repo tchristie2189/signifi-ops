@@ -1956,8 +1956,8 @@ function renderIntake(){
       </div>
       <div class="field"><label>SDM (Service Delivery Manager)</label><input id="i-sdm" placeholder="SDM name"></div>
       <div class="field"><label>Solutions</label><input id="i-solutions" placeholder="Solutions contact"></div>
-      <div class="field"><label>Sales</label><input id="i-sales" list="i-sales-list" placeholder="Sales contact">${'<datalist id="i-sales-list">'+SALES_LIST.map(s=>'<option>'+s+'</option>').join('')+'</datalist>'}</div>
-      <div class="field"><label>Account Manager</label><input id="i-am" list="i-am-list" placeholder="Account Manager name">${'<datalist id="i-am-list">'+AM_LIST.map(s=>'<option>'+s+'</option>').join('')+'</datalist>'}</div>
+      <div class="field"><label>Sales</label><input id="i-sales" list="i-sales-list" placeholder="Sales contact"><datalist id="i-sales-list"><option>Adnan Aga</option><option>Michael Harrison</option><option>Danny Pack</option><option>Julianna Reynolds</option><option>Michelle Hernandez</option><option>Kevin Bell</option><option>Shoubi Rastegar</option><option>Daniel Nowak</option></datalist></div>
+      <div class="field"><label>Account Manager</label><input id="i-am" list="i-am-list" placeholder="Account Manager name"><datalist id="i-am-list"><option>Ian Harrison</option><option>Daniel Pini</option><option>Michelle Hernandez</option><option>Tyler Stevenson</option><option>Pamela Gilliam</option></datalist></div>
       <div class="field"><label>Vinyl type</label><select id="i-vinyl-type"><option value="">Select...</option><option>Decal</option><option>Partial Vinyl</option><option>Full Vinyl</option></select></div>
 
       <div class="intake-section-lbl">Key milestone dates</div>
@@ -2111,8 +2111,8 @@ function openEditProj(id){
         </div>
         <div class="field"><label>SDM</label><input id="ep-sdm" value="${proj.sdm||''}" placeholder="SDM name"></div>
         <div class="field"><label>Solutions</label><input id="ep-solutions" value="${proj.solutions||''}" placeholder="Solutions contact"></div>
-        <div class="field"><label>Sales</label><input id="ep-sales" list="ep-sales-list" value="${proj.sales||''}" placeholder="Sales contact">${'<datalist id="ep-sales-list">'+SALES_LIST.map(s=>'<option>'+s+'</option>').join('')+'</datalist>'}</div>
-        <div class="field"><label>Account Manager</label><input id="ep-am" list="ep-am-list" value="${proj.account_manager||''}" placeholder="Account Manager">${'<datalist id="ep-am-list">'+AM_LIST.map(s=>'<option>'+s+'</option>').join('')+'</datalist>'}</div>
+        <div class="field"><label>Sales</label><input id="ep-sales" list="ep-sales-list" value="${proj.sales||''}" placeholder="Sales contact"><datalist id="ep-sales-list"><option>Adnan Aga</option><option>Michael Harrison</option><option>Danny Pack</option><option>Julianna Reynolds</option><option>Michelle Hernandez</option><option>Kevin Bell</option><option>Shoubi Rastegar</option><option>Daniel Nowak</option></datalist></div>
+        <div class="field"><label>Account Manager</label><input id="ep-am" list="ep-am-list" value="${proj.account_manager||''}" placeholder="Account Manager"><datalist id="ep-am-list"><option>Ian Harrison</option><option>Daniel Pini</option><option>Michelle Hernandez</option><option>Tyler Stevenson</option><option>Pamela Gilliam</option></datalist></div>
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
         <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${proj.naming_convention||''}</textarea></div>
         <div class="field full"><label>Installation address</label><input id="ep-address" value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
