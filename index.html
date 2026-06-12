@@ -1039,14 +1039,18 @@ async function quickStatusMs(msId,val){
     const existing=milestoneDone[msId];
     if(!existing){
       const pid=milestones.find(m=>m.id===msId)?.project_id;
-      const{data}=await sb.from('milestone_done').insert({milestone_id:msId,project_id:pid,done_by:currentUserName,done_at:new Date().toISOString()}).select().single();
+      const{data,error}=await sb.from('milestone_done').insert({milestone_id:msId,project_id:pid,done_by:currentUserName,done_at:new Date().toISOString()}).select().single();
+      if(error){console.warn('quickStatusMs error',error);showToast('Save failed ✗');return;}
       if(data)milestoneDone[msId]=data;
     }
   } else {
-    await sb.from('milestone_done').delete().eq('milestone_id',msId);
+    const{error}=await sb.from('milestone_done').delete().eq('milestone_id',msId);
+    if(error){console.warn('quickStatusMs error',error);showToast('Save failed ✗');return;}
     delete milestoneDone[msId];
   }
+  // Re-render AFTER DB confirms
   renderWeek();
+  showToast(val==='done'?'Marked done ✓':'Marked pending');
 }
 async function quickUpdateMs(msId,newDate){
   const m=milestones.find(x=>x.id===msId);
@@ -1539,10 +1543,20 @@ function vs(itemId,k,v){
   const item=typeof itemId==='number'?vinylSchedule[itemId]:vinylSchedule.find(x=>x.id===itemId)||vinylSchedule[itemId];
   if(!item)return;
   item[k]=v;
+  const colMap={so:'so',client:'client',name:'name',vinylType:'vinyl_type',shipDate:'ship_date',pm:'pm',formFactor:'form_factor',status:'status'};
+  const col=colMap[k]||k;
   if(item.id){
-    const colMap={so:'so',client:'client',name:'name',vinylType:'vinyl_type',shipDate:'ship_date',pm:'pm',formFactor:'form_factor',status:'status'};
-    const col=colMap[k]||k;
     sb.from('vinyl_schedule').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('vs save error',error);});
+  } else {
+    // Virtual row — insert to DB first
+    sb.from('vinyl_schedule').insert({
+      project_id:item.project_id||null,name:item.name||'',so:item.so||'',
+      client:item.client||'',vinyl_type:item.vinylType||'',pm:item.pm||'',
+      form_factor:item.formFactor||'',status:item.status||'Scheduled',
+      date:item.date||null,ship_date:item.shipDate||null,
+      priority:item.priority||99,is_standalone:false,
+      updated_at:new Date().toISOString(),[col]:v
+    }).select().single().then(({data})=>{if(data)item.id=data.id;});
   }
   // Instantly update row colour for Print Day / Vacation
   if(k==='status'){
@@ -1556,14 +1570,21 @@ function vs(itemId,k,v){
   }
 }
 function ps2(itemId,k,v){
-  // Find by ID not index (index changes after filtering)
   const item=planogramSchedule.find(x=>x.id===itemId)||planogramSchedule[itemId];
   if(!item)return;
   item[k]=v;
+  const colMap={so:'so',client:'client',name:'name',machineType:'machine_type',status:'status',planStart:'plan_start',planEnd:'plan_end',notes:'notes',revisionStatus:'revision_status'};
+  const col=colMap[k]||k;
   if(item.id){
-    const colMap={so:'so',client:'client',name:'name',machineType:'machine_type',status:'status',planStart:'plan_start',planEnd:'plan_end',notes:'notes',revisionStatus:'revision_status'};
-    const col=colMap[k]||k;
     sb.from('planogram_schedule').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('ps2 save error',error);else showToast('Saved ✓');});
+  } else {
+    // Virtual row — insert to DB first
+    sb.from('planogram_schedule').insert({
+      project_id:item.project_id||null,name:item.name||'',so:item.so||'',
+      client:item.client||'',machine_type:item.machineType||'',
+      status:item.status||'Scheduled',pm:item.pm||'',
+      updated_at:new Date().toISOString(),[col]:v
+    }).select().single().then(({data})=>{if(data){item.id=data.id;showToast('Saved ✓');}});
   }
 }
 // Vinyl date sync — updates both the local schedule AND the milestone in Supabase
@@ -1571,9 +1592,23 @@ async function vinylDateSync(i,val,type){
   const field=type==='ship'?'shipDate':'date';
   const dbField=type==='ship'?'ship_date':'date';
   vinylSchedule[i][field]=val;
-  // Save to vinyl_schedule table if this row has a DB id
   const item=vinylSchedule[i];
-  if(item.id){
+  // If no DB row exists yet, insert one first
+  if(!item.id){
+    const{data}=await sb.from('vinyl_schedule').insert({
+      project_id:item.project_id||null,
+      name:item.name||'',so:item.so||'',client:item.client||'',
+      vinyl_type:item.vinylType||'',pm:item.pm||'',
+      form_factor:item.formFactor||'',status:item.status||'Scheduled',
+      [dbField]:val||null,priority:item.priority||99,
+      is_standalone:false,updated_at:new Date().toISOString()
+    }).select().single();
+    if(data){
+      item.id=data.id;
+      // Also update vinylSchedule entry with real id so future saves work
+      vinylSchedule[i].id=data.id;
+    }
+  } else {
     await sb.from('vinyl_schedule').update({[dbField]:val||null,updated_at:new Date().toISOString()}).eq('id',item.id);
   }
   // Also sync back to project milestone
@@ -1585,8 +1620,9 @@ async function vinylDateSync(i,val,type){
     if(existing){await sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id);await logActivity('updated date',msLabel,msLabel,proj.id,existing.date,val);}
     else{await sb.from('milestones').insert({project_id:proj.id,key:msKey,label:msLabel,date:val,changed_by:currentUserName});await logActivity('added milestone',msLabel,msLabel,proj.id,null,val);}
     await loadAll();
+  } else {
+    showToast('Date saved ✓');
   }
-  showToast('Date saved ✓');
 }
 function vsDate(i,field,val,type){
   const data=type==='vinyl'?vinylSchedule:planogramSchedule;
