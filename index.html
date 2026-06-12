@@ -763,10 +763,11 @@ let glanceFilter='active'; // 'active' or 'archived'
 let hideCompleted={glance:false,overview:false,week:false,production:false,quality:false,shipping:false,installation:false,briefing:false,vinyl:false,planogram:false};
 
 // Helper — filters out completed projects based on per-page toggle
-function pmDropdown(renderFn){
-  const PM_LIST=['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'];
+const PM_LIST=['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'];
 const SALES_LIST=['Adnan Aga','Michael Harrison','Danny Pack','Julianna Reynolds','Michelle Hernandez','Kevin Bell','Shoubi Rastegar','Daniel Nowak'];
 const AM_LIST=['Ian Harrison','Daniel Pini','Michelle Hernandez','Tyler Stevenson','Pamela Gilliam'];
+
+function pmDropdown(renderFn){
   const onChange=renderFn.includes('(')?renderFn:renderFn+'()';
   return`<select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pmFilter=this.value;${onChange}">
     <option value="">All PMs</option>
