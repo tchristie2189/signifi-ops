@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Signifi — Quality Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+:root{
+  --accent:#0066FF;--accent-soft:rgba(0,102,255,.07);--accent-border:rgba(0,102,255,.18);
+  --green:#059669;--green-soft:rgba(5,150,105,.07);--green-border:rgba(5,150,105,.2);
+  --red:#DC2626;--red-soft:rgba(220,38,38,.07);--red-border:rgba(220,38,38,.18);
+  --amber:#D97706;--amber-soft:rgba(217,119,6,.07);--amber-border:rgba(217,119,6,.2);
+  --bg:#F8F9FB;--surface:#FFFFFF;--surface2:#F3F4F6;--surface3:#E9EAEC;
+  --border:#E5E7EB;--border2:#D1D3D7;
+  --text:#111827;--text2:#4B5563;--text3:#9CA3AF;
+  --shadow:0 1px 3px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.04);
+  --shadow-md:0 4px 12px rgba(0,0,0,.07),0 2px 4px rgba(0,0,0,.04);
+  --radius:10px;--radius-sm:7px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;min-height:100vh}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--surface3);border-radius:4px}
+
+/* HEADER */
+header{background:#fff;border-bottom:1px solid var(--border);padding:.875rem 2rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;position:sticky;top:0;z-index:200;box-shadow:var(--shadow)}
+.hdr-left{display:flex;align-items:center;gap:1rem}
+.logo-wrap{display:flex;align-items:center;gap:.5rem}
+.logo-mark{width:28px;height:28px;background:#0066FF;border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.logo-mark svg{width:16px;height:16px}
+.logo-text{font-size:.9375rem;font-weight:700;color:var(--text)}
+.hdr-divider{width:1px;height:20px;background:var(--border2)}
+.hdr-meta{}
+.hdr-title{font-size:.875rem;font-weight:700;color:var(--text)}
+.hdr-sub{font-size:.6875rem;color:var(--text3);margin-top:1px;letter-spacing:.04em}
+.hdr-right{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+
+/* STATUS */
+.chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}
+.chip-green{background:var(--green-soft);border:1px solid var(--green-border);color:var(--green)}
+.chip-amber{background:var(--amber-soft);border:1px solid var(--amber-border);color:var(--amber)}
+.chip-blue{background:var(--accent-soft);border:1px solid var(--accent-border);color:var(--accent)}
+.cdot{width:5px;height:5px;border-radius:50%;background:currentColor;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* FILTER BAR */
+.fbar{background:#fff;border-bottom:1px solid var(--border);padding:.625rem 2rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;position:sticky;top:53px;z-index:100;box-shadow:0 1px 0 var(--border)}
+.fl{font-size:.6875rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);white-space:nowrap}
+select{background:#fff;color:var(--text);border:1px solid var(--border2);border-radius:var(--radius-sm);padding:4px 10px;font-size:.8125rem;font-family:'DM Sans',sans-serif;cursor:pointer;outline:none}
+select:focus{border-color:var(--accent)}
+.fdiv{width:1px;height:16px;background:var(--border2)}
+
+/* HERO */
+.hero{background:#fff;border-bottom:1px solid var(--border);padding:1.75rem 2rem;display:grid;grid-template-columns:auto 1px 1fr;gap:0;align-items:center}
+.hero-score-side{padding-right:2.5rem}
+.hero-eyebrow{font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:.4rem}
+.hero-num{font-size:5rem;font-weight:700;font-family:'DM Mono',monospace;line-height:1;color:var(--text)}
+.hero-num span{color:var(--accent)}
+.hero-sub{font-size:.8rem;color:var(--text3);margin-top:.35rem}
+.hero-div{width:1px;height:80px;background:var(--border2)}
+.hero-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.75rem;padding-left:2rem}
+
+/* KPI CARDS */
+.kpi{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.875rem 1rem;position:relative;overflow:hidden}
+.kpi-bar{position:absolute;top:0;left:0;width:3px;height:100%;border-radius:3px 0 0 3px}
+.kpi-lbl{font-size:.65rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);margin-bottom:.3rem}
+.kpi-val{font-size:1.5rem;font-weight:700;font-family:'DM Mono',monospace;line-height:1}
+.kpi-note{font-size:.7rem;color:var(--text3);margin-top:.25rem;line-height:1.3}
+
+/* MAIN */
+main{padding:1.5rem 2rem;display:flex;flex-direction:column;gap:1.5rem;max-width:1400px;margin:0 auto}
+.sec{font-size:.65rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--text3);display:flex;align-items:center;gap:.75rem}
+.sec::after{content:'';flex:1;height:1px;background:var(--border)}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem}
+.g65{display:grid;grid-template-columns:1.65fr 1fr;gap:1rem}
+
+/* PANELS */
+.panel{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;box-shadow:var(--shadow)}
+.ph{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;gap:.5rem;flex-wrap:wrap}
+.pt{font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text3)}
+.pbadge{font-size:10px;font-weight:600;padding:2px 8px;border-radius:4px;background:var(--surface2);color:var(--text3)}
+.pbadge-blue{background:var(--accent-soft);color:var(--accent)}
+
+/* CRITERIA */
+.clist{display:flex;flex-direction:column;gap:3px}
+.cr{display:grid;grid-template-columns:1fr 80px 40px 36px;align-items:center;gap:.5rem;padding:5px 0;border-bottom:1px solid var(--border)}
+.cr:last-child{border:none}
+.crn{font-size:.8rem;color:var(--text2)}
+.bw{height:4px;background:var(--surface2);border-radius:2px;overflow:hidden}
+.bf{height:100%;border-radius:2px}
+.pct{font-size:.8rem;font-weight:700;text-align:right;font-family:'DM Mono',monospace}
+.db{font-size:.65rem;font-weight:700;padding:1px 5px;border-radius:3px;text-align:center;min-width:30px}
+.dbu{background:var(--green-soft);color:var(--green)}
+.dbd{background:var(--red-soft);color:var(--red)}
+.dbn{background:var(--surface2);color:var(--text3)}
+
+/* CLIENT TABLE */
+.ctbl{width:100%;border-collapse:collapse}
+.ctbl th{text-align:left;font-size:.65rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;padding:5px 8px;border-bottom:1px solid var(--border2)}
+.ctbl td{padding:6px 8px;border-bottom:1px solid var(--border);font-size:.8125rem;vertical-align:middle}
+.ctbl tr:last-child td{border:none}
+.ctbl tr:hover td{background:var(--surface2)}
+.mbw{width:50px;height:3px;background:var(--surface2);border-radius:2px;overflow:hidden;display:inline-block;vertical-align:middle;margin-left:4px}
+.mbf{height:100%;border-radius:2px}
+.tag{font-size:.65rem;font-weight:600;padding:2px 7px;border-radius:4px}
+.tg{background:var(--green-soft);color:var(--green)}
+.ta{background:var(--amber-soft);color:var(--amber)}
+.tr_{background:var(--red-soft);color:var(--red)}
+
+/* INSIGHT CARDS */
+.ig{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.75rem}
+.ic{border-radius:var(--radius-sm);padding:.9rem 1rem;border:1px solid}
+.ic-blue{background:var(--accent-soft);border-color:var(--accent-border)}
+.ic-green{background:var(--green-soft);border-color:var(--green-border)}
+.ic-red{background:var(--red-soft);border-color:var(--red-border)}
+.ic-amber{background:var(--amber-soft);border-color:var(--amber-border)}
+.ic-lbl{font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:.3rem}
+.ic-blue .ic-lbl{color:var(--accent)}.ic-green .ic-lbl{color:var(--green)}.ic-red .ic-lbl{color:var(--red)}.ic-amber .ic-lbl{color:var(--amber)}
+.ic-title{font-size:.8rem;font-weight:600;color:var(--text);margin-bottom:.25rem;line-height:1.4}
+.ic-body{font-size:.75rem;color:var(--text2);line-height:1.6}
+
+/* COMPLETION TRACKER */
+.comp-grid{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:.5rem;align-items:center;margin-bottom:.25rem;padding:.25rem .5rem}
+.comp-hdr{font-size:.6rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);text-align:center}
+.comp-row{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.625rem .75rem;display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;align-items:center;gap:.5rem;margin-bottom:.3rem;font-size:.8rem;transition:box-shadow .15s}
+.comp-row:hover{box-shadow:var(--shadow-md)}
+.comp-client{font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.comp-wk{font-size:.72rem;color:var(--text3)}
+.comp-status{display:flex;justify-content:center}
+.cs-done{width:20px;height:20px;border-radius:50%;background:var(--green-soft);color:var(--green);border:1px solid var(--green-border);display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:700}
+.cs-pend{width:20px;height:20px;border-radius:50%;background:var(--surface3);color:var(--text3);border:1px solid var(--border2);display:flex;align-items:center;justify-content:center;font-size:.6rem}
+
+/* RISK ROWS */
+.risk-list{display:flex;flex-direction:column;gap:.4rem}
+.risk-row{display:grid;grid-template-columns:24px 1fr auto auto;align-items:center;gap:.625rem;padding:.6rem .75rem;background:var(--surface2);border-radius:var(--radius-sm);border:1px solid var(--border);transition:box-shadow .15s}
+.risk-row:hover{box-shadow:var(--shadow-md)}
+.risk-n{font-size:.7rem;font-weight:700;color:var(--text3)}
+.risk-t{font-size:.8rem;color:var(--text2);line-height:1.4}
+.risk-t strong{color:var(--text);font-weight:600;display:block;margin-bottom:1px}
+.sev{font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:3px;letter-spacing:.04em}
+.sh{background:var(--red-soft);color:var(--red)}.sm{background:var(--amber-soft);color:var(--amber)}.sl{background:var(--green-soft);color:var(--green)}
+
+/* EMPTY / LOADING */
+.state-msg{text-align:center;padding:3rem 1.5rem;color:var(--text3)}
+.state-msg .si{font-size:2rem;margin-bottom:.625rem}
+.state-msg .st{font-size:.9rem;font-weight:600;color:var(--text2);margin-bottom:.25rem}
+.state-msg .ss{font-size:.8rem;line-height:1.5}
+
+footer{padding:1rem 2rem;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:.72rem;color:var(--text3);flex-wrap:wrap;gap:.5rem}
+
+@media(max-width:900px){.g2,.g3,.g65{grid-template-columns:1fr}.hero{grid-template-columns:1fr}.hero-div{display:none}.hero-kpis{padding-left:0;margin-top:1rem}.hero-score-side{padding-right:0}main{padding:1rem}}
+@media(max-width:600px){header{padding:.75rem 1rem}.fbar{padding:.5rem 1rem;flex-direction:column;align-items:flex-start}main{padding:.75rem}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hdr-left">
+    <div class="logo-wrap">
+      <div class="logo-mark"><svg viewBox="0 0 16 16" fill="none"><polygon points="2,14 8,2 14,14" fill="white" opacity=".9"/></svg></div>
+      <span class="logo-text">Signifi</span>
+    </div>
+    <div class="hdr-divider"></div>
+    <div class="hdr-meta">
+      <div class="hdr-title">Deployment Quality Dashboard</div>
+      <div class="hdr-sub" id="hdrSub">Field &amp; Support Services · Loading…</div>
+    </div>
+  </div>
+  <div class="hdr-right">
+    <div class="chip chip-blue" id="statusChip"><span class="cdot"></span><span id="statusTxt">Connecting…</span></div>
+    <span style="font-size:.75rem;color:var(--text3)" id="hdrMeta"></span>
+  </div>
+</header>
+
+<div class="fbar">
+  <span class="fl">Week</span>
+  <select id="weekFil" onchange="applyFilters()"><option value="all">All weeks</option></select>
+  <div class="fdiv"></div>
+  <span class="fl">Role</span>
+  <select id="roleFil" onchange="applyFilters()">
+    <option value="all">All roles</option>
+    <option value="pm">PM</option>
+    <option value="logistics">Logistics</option>
+    <option value="install">Install</option>
+  </select>
+  <div class="fdiv"></div>
+  <span class="fl">Accountability</span>
+  <select id="accFil" onchange="applyFilters()"><option value="all">All</option></select>
+  <div class="fdiv"></div>
+  <span class="fl">Min score</span>
+  <select id="minFil" onchange="applyFilters()">
+    <option value="0">Any</option>
+    <option value="70">≥70%</option>
+    <option value="90">≥90%</option>
+  </select>
+</div>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-score-side">
+    <div class="hero-eyebrow">Overall deployment quality</div>
+    <div class="hero-num" id="heroNum">—<span>%</span></div>
+    <div class="hero-sub" id="heroSub">—</div>
+  </div>
+  <div class="hero-div"></div>
+  <div class="hero-kpis" id="heroKpis"></div>
+</div>
+
+<main>
+  <div id="insightCards" class="ig"></div>
+
+  <div class="sec">Weekly trend</div>
+  <div class="g65">
+    <div class="panel">
+      <div class="ph"><span class="pt">Score over time</span><span class="pbadge pbadge-blue" id="trendBadge"></span></div>
+      <div style="position:relative;height:200px"><canvas id="trendC"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="ph"><span class="pt">Score distribution</span></div>
+      <div id="distBands"></div>
+    </div>
+  </div>
+
+  <div class="sec">Criteria compliance</div>
+  <div class="g3">
+    <div class="panel"><div class="ph"><span class="pt">Project Management</span><span class="pbadge">PM</span></div><div class="clist" id="pmList"></div></div>
+    <div class="panel"><div class="ph"><span class="pt">Logistics</span><span class="pbadge">Supply chain</span></div><div class="clist" id="logList"></div></div>
+    <div class="panel"><div class="ph"><span class="pt">Installation</span><span class="pbadge">Field execution</span></div><div class="clist" id="instList"></div></div>
+  </div>
+
+  <div class="sec">Submission completion</div>
+  <div class="panel">
+    <div class="ph"><span class="pt">Role completion per deployment</span><span class="pbadge" id="compBadge"></span></div>
+    <div class="comp-grid">
+      <span class="comp-hdr" style="text-align:left">Deployment</span>
+      <span class="comp-hdr">Wk</span>
+      <span class="comp-hdr">PM</span>
+      <span class="comp-hdr">Logistics</span>
+      <span class="comp-hdr">Install</span>
+    </div>
+    <div id="compList"></div>
+  </div>
+
+  <div class="sec">Client breakdown</div>
+  <div class="panel">
+    <div class="ph"><span class="pt">All clients</span><span class="pbadge" id="clientBadge"></span></div>
+    <div style="overflow-x:auto">
+      <table class="ctbl">
+        <thead><tr><th>Client</th><th>Deployments</th><th>Avg score</th><th>PM</th><th>Logistics</th><th>Install</th><th>Status</th></tr></thead>
+        <tbody id="clientTbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="sec">Accountability breakdown</div>
+  <div class="g2">
+    <div class="panel"><div class="ph"><span class="pt">Score by accountability</span></div><div style="position:relative;height:220px"><canvas id="accC"></canvas></div></div>
+    <div class="panel"><div class="ph"><span class="pt">Risk flags</span></div><div class="risk-list" id="riskList"></div></div>
+  </div>
+</main>
+
+<footer>
+  <span>Signifi Solutions &nbsp;·&nbsp; Field &amp; Support Services &nbsp;·&nbsp; Quality Dashboard</span>
+  <span id="footerCount"></span>
+</footer>
+
+<script>
+const SB_URL = 'https://oykgpkolliqjeznblavy.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95a2dwa29sbGlxamV6bmJsYXl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNTI3ODgsImV4cCI6MjA5NTYyODc4OH0.kkOBhxyaqLG7PLPNI0SwPNwQSWmbpFjDoP2VQp33_X4';
+const SB_ON  = SB_URL !== 'https://YOUR_PROJECT.supabase.co';
+
+const QUESTIONS = {
+  pm:['site_survey','badge_payment','product_received','no_so_changes','no_surprises'],
+  logistics:['shipped_schedule','pickup_ontime','equipment_arrived','no_vinyl_damage','no_equip_damage'],
+  install:['tech_ontime','install_4hrs','no_revisit','no_parts','network_ready','no_sw_issues','no_hw_issues','worked_first_time','planogram_done','latest_ui','no_repeat_visits'],
+};
+const Q_LABELS = {
+  site_survey:'Site survey accurate',badge_payment:'Badge/payment configured',product_received:'Product received',no_so_changes:'No SO changes',no_surprises:'No survey surprises',
+  shipped_schedule:'Shipped on schedule',pickup_ontime:'Picked up on time',equipment_arrived:'Equipment arrived',no_vinyl_damage:'No vinyl damage',no_equip_damage:'No equipment damage',
+  tech_ontime:'Tech on time',install_4hrs:'Install ≤4 hrs',no_revisit:'No revisit',no_parts:'No parts needed',network_ready:'Network ready',no_sw_issues:'No SW issues',no_hw_issues:'No HW issues',worked_first_time:'First time success',planogram_done:'Planogram configured',latest_ui:'Latest UI shipped',no_repeat_visits:'No repeat visits',
+};
+const ROLES = ['pm','logistics','install'];
+
+let allDeployments = [];
+let allScores = [];
+let filteredScores = [];
+let CH = {};
+
+function sbFetch(path){return fetch(SB_URL+path,{headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY}})}
+function sc(v){return v>=90?'var(--green)':v>=70?'var(--amber)':'var(--red)'}
+function scTag(v){return v>=90?'tg':v>=70?'ta':'tr_'}
+function avg(arr){return arr.length?arr.reduce((s,v)=>s+v,0)/arr.length:0}
+function r1(v){return Math.round(v*10)/10}
+
+async function init(){
+  document.getElementById('statusTxt').textContent = SB_ON ? 'Loading…' : 'Demo mode';
+  if(SB_ON){
+    try{
+      const [depRes,scRes] = await Promise.all([
+        sbFetch('/rest/v1/deployments?select=*&order=week_no.desc'),
+        sbFetch('/rest/v1/quality_scores?select=*')
+      ]);
+      if(!depRes.ok||!scRes.ok) throw new Error('Fetch failed');
+      allDeployments = await depRes.json();
+      allScores = await scRes.json();
+    }catch(e){
+      console.error(e);
+      document.getElementById('statusTxt').textContent = 'Connection error';
+      useDemoData();
+    }
+  } else {
+    useDemoData();
+  }
+  buildFilters();
+  applyFilters();
+  document.getElementById('statusTxt').textContent = SB_ON ? 'Live' : 'Demo data';
+  document.getElementById('statusChip').className = 'chip chip-green';
+}
+
+function useDemoData(){
+  // Minimal demo so the dashboard renders without Supabase
+  const clients = ['SAP','OpenAI','Southwest Airlines','Lowe\'s','NVIDIA','Capgemini/Ingram','Google','Amazon/Blue Origin','Marks','BASF'];
+  const weeks = [20,21,22,23,24];
+  let depId = 1;
+  allDeployments = [];allScores = [];
+  clients.forEach(c=>{
+    weeks.forEach(w=>{
+      if(Math.random()<.6){
+        const id = 'demo-'+depId++;
+        allDeployments.push({id,client:c,parent_ticket:'TKT-'+id,kiosk_id:c.substring(0,4).toUpperCase()+'-'+w+'-01',week_no:w,activity_type:Math.random()<.2?'Revisit':'New Installation',tech:'Tech '+Math.ceil(Math.random()*5)});
+        ROLES.forEach(role=>{
+          if(Math.random()<.75){
+            const qs=QUESTIONS[role];
+            const answers={};let yes=0,na=0;
+            qs.forEach(q=>{const r=Math.random();if(r<.7){answers[q]=1;yes++;}else if(r<.85){answers[q]=0;}else{answers[q]=null;na++;}});
+            const scorable=qs.filter(q=>answers[q]!==null);
+            const score=scorable.length?Math.round(scorable.reduce((s,q)=>s+(answers[q]||0),0)/scorable.length*100):0;
+            const accs=['Success','Client','PM','Logistics','QC','Production','Solutioning'];
+            allScores.push({id:'s-'+Math.random(),deployment_id:id,role,score,answers,accountability:accs[Math.floor(Math.random()*accs.length)],submitted_by:'Demo User',submitted_at:new Date().toISOString()});
+          }
+        });
+      }
+    });
+  });
+}
+
+function buildFilters(){
+  const weeks=[...new Set(allDeployments.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>b-a);
+  const wSel=document.getElementById('weekFil');
+  weeks.forEach(w=>{const o=document.createElement('option');o.value=w;o.textContent='Week '+w;wSel.appendChild(o)});
+  const accs=[...new Set(allScores.map(s=>s.accountability).filter(Boolean))].sort();
+  const aSel=document.getElementById('accFil');
+  accs.forEach(a=>{const o=document.createElement('option');o.value=a;o.textContent=a;aSel.appendChild(o)});
+}
+
+function applyFilters(){
+  const week=document.getElementById('weekFil').value;
+  const role=document.getElementById('roleFil').value;
+  const acc=document.getElementById('accFil').value;
+  const minS=parseInt(document.getElementById('minFil').value)||0;
+
+  let deps=allDeployments;
+  if(week!=='all') deps=deps.filter(d=>d.week_no===parseInt(week));
+
+  let scores=allScores.filter(s=>{
+    const dep=allDeployments.find(d=>d.id===s.deployment_id);
+    if(!dep)return false;
+    if(week!=='all'&&dep.week_no!==parseInt(week))return false;
+    if(role!=='all'&&s.role!==role)return false;
+    if(acc!=='all'&&s.accountability!==acc)return false;
+    if(s.score<minS)return false;
+    return true;
+  });
+
+  filteredScores=scores;
+  renderAll(deps,scores);
+}
+
+function renderAll(deps,scores){
+  const n=scores.length;
+  const overallAvg=n?r1(avg(scores.map(s=>s.score))):0;
+  const color=sc(overallAvg);
+
+  document.getElementById('heroNum').innerHTML=overallAvg+'<span>%</span>';
+  document.getElementById('heroNum').style.color=color;
+  document.getElementById('heroSub').textContent=n+' scored sections across '+deps.length+' deployments';
+  document.getElementById('hdrSub').textContent='Field & Support Services · '+n+' sections scored';
+  document.getElementById('hdrMeta').textContent=deps.length+' deployments · '+ [...new Set(deps.map(d=>d.client))].length+' clients';
+  document.getElementById('footerCount').textContent=deps.length+' deployments';
+
+  // KPIs
+  const pmS=scores.filter(s=>s.role==='pm');
+  const logS=scores.filter(s=>s.role==='logistics');
+  const instS=scores.filter(s=>s.role==='install');
+  const successRate=n?Math.round(scores.filter(s=>s.score>=90).length/n*100):0;
+  document.getElementById('heroKpis').innerHTML=[
+    {lbl:'PM score',val:pmS.length?r1(avg(pmS.map(s=>s.score)))+'%':'—',note:pmS.length+' sections',color:'var(--accent)'},
+    {lbl:'Logistics score',val:logS.length?r1(avg(logS.map(s=>s.score)))+'%':'—',note:logS.length+' sections',color:'var(--green)'},
+    {lbl:'Install score',val:instS.length?r1(avg(instS.map(s=>s.score)))+'%':'—',note:instS.length+' sections',color:'var(--amber)'},
+    {lbl:'≥90% rate',val:successRate+'%',note:scores.filter(s=>s.score>=90).length+' sections',color:sc(successRate)},
+  ].map(k=>`<div class="kpi"><div class="kpi-bar" style="background:${k.color}"></div><div class="kpi-lbl">${k.lbl}</div><div class="kpi-val" style="color:${k.color}">${k.val}</div><div class="kpi-note">${k.note}</div></div>`).join('');
+
+  renderInsights(scores,deps);
+  renderTrend(deps,scores);
+  renderDist(scores);
+  renderCriteria(scores);
+  renderCompletion(deps);
+  renderClients(deps,scores);
+  renderAccountability(scores);
+  renderRisks(deps,scores);
+}
+
+function renderInsights(scores,deps){
+  const el=document.getElementById('insightCards');
+  if(!scores.length){el.innerHTML='';return}
+  const instS=scores.filter(s=>s.role==='install');
+  const noRevisit=instS.filter(s=>s.answers&&s.answers.no_revisit===0).length;
+  const noNet=instS.filter(s=>s.answers&&s.answers.network_ready===0).length;
+  const noSurv=scores.filter(s=>s.role==='pm'&&s.answers&&s.answers.site_survey===0).length;
+  const cards=[];
+  if(noRevisit>0) cards.push({type:'ic-red',lbl:'Revisits',title:`${noRevisit} deployment${noRevisit>1?'s':''} required a revisit`,body:'Check install quality and site readiness to reduce return trips.'});
+  if(noNet>0) cards.push({type:'ic-amber',lbl:'Network',title:`${noNet} network issue${noNet>1?'s':''} flagged`,body:'Client network readiness is a recurring theme — consider pre-install checklist.'});
+  if(noSurv>0) cards.push({type:'ic-amber',lbl:'Site Survey',title:`${noSurv} site survey${noSurv>1?'s':''} had issues`,body:'Inaccurate surveys lead to day-of surprises — review survey process.'});
+  const top=scores.filter(s=>s.score>=90);
+  if(top.length) cards.push({type:'ic-green',lbl:'Win',title:`${top.length} section${top.length>1?'s':''} scored 90%+`,body:'Strong performers this period — share what\'s working across teams.'});
+  el.innerHTML=cards.map(c=>`<div class="ic ${c.type}"><div class="ic-lbl">${c.lbl}</div><div class="ic-title">${c.title}</div><div class="ic-body">${c.body}</div></div>`).join('');
+}
+
+function renderTrend(deps,scores){
+  const weekMap={};
+  deps.forEach(d=>{if(!d.week_no)return;if(!weekMap[d.week_no])weekMap[d.week_no]={n:0,scores:[]};weekMap[d.week_no].n++;});
+  scores.forEach(s=>{const dep=allDeployments.find(d=>d.id===s.deployment_id);if(!dep||!dep.week_no)return;if(!weekMap[dep.week_no])weekMap[dep.week_no]={n:0,scores:[]};weekMap[dep.week_no].scores.push(s.score);});
+  const wks=Object.keys(weekMap).map(Number).sort((a,b)=>a-b);
+  const avgs=wks.map(w=>weekMap[w].scores.length?r1(avg(weekMap[w].scores)):null);
+  if(CH.trend)CH.trend.destroy();
+  CH.trend=new Chart(document.getElementById('trendC'),{
+    type:'line',
+    data:{labels:wks.map(w=>'Wk '+w),datasets:[{data:avgs,borderColor:'#0066FF',backgroundColor:'rgba(0,102,255,.08)',borderWidth:2,tension:.35,pointBackgroundColor:'#0066FF',pointRadius:4,pointHoverRadius:6,fill:true,spanGaps:true}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed.y+'%'}}},scales:{y:{min:0,max:100,ticks:{color:'#9CA3AF',font:{size:10},callback:v=>v+'%'},grid:{color:'rgba(0,0,0,.05)'}},x:{ticks:{color:'#9CA3AF',font:{size:10}},grid:{display:false}}}},
+  });
+  const last=avgs.filter(v=>v!==null);
+  if(last.length>=2){const delta=r1(last[last.length-1]-last[last.length-2]);document.getElementById('trendBadge').textContent=(delta>=0?'+':'')+delta+'% vs prev wk';document.getElementById('trendBadge').style.color=delta>=0?'var(--green)':'var(--red)';}
+}
+
+function renderDist(scores){
+  const bands=[{lbl:'90–100%',min:90,max:100,color:'var(--green)'},{lbl:'70–89%',min:70,max:90,color:'var(--amber)'},{lbl:'<70%',min:0,max:70,color:'var(--red)'}];
+  const el=document.getElementById('distBands');
+  el.innerHTML=bands.map(b=>{
+    const n=scores.filter(s=>s.score>=b.min&&s.score<b.max+(b.max===100?1:0)).length;
+    const pct=scores.length?Math.round(n/scores.length*100):0;
+    return `<div style="margin-bottom:.6rem"><div style="display:flex;justify-content:space-between;font-size:.75rem;margin-bottom:.25rem"><span style="color:var(--text2);font-weight:500">${b.lbl}</span><span style="font-weight:700;font-family:'DM Mono',monospace;color:var(--text)">${pct}% <span style="color:var(--text3);font-weight:400">(${n})</span></span></div><div style="height:8px;background:var(--surface2);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${b.color};border-radius:4px;transition:width .4s ease"></div></div></div>`;
+  }).join('');
+}
+
+function renderCriteria(scores){
+  ROLES.forEach(role=>{
+    const rs=scores.filter(s=>s.role===role&&s.answers);
+    const qs=QUESTIONS[role];
+    const el=document.getElementById({pm:'pmList',logistics:'logList',install:'instList'}[role]);
+    if(!rs.length){el.innerHTML='<div style="color:var(--text3);font-size:.8rem;padding:.5rem 0">No data for selected filters</div>';return}
+    el.innerHTML=qs.map(q=>{
+      const vals=rs.map(s=>s.answers[q]).filter(v=>v!==null&&v!==undefined);
+      const pct=vals.length?Math.round(avg(vals)*100):null;
+      const color=pct!==null?(pct>=90?'var(--green)':pct>=70?'var(--amber)':'var(--red)'):'var(--surface3)';
+      return `<div class="cr">
+        <div class="crn">${Q_LABELS[q]||q}</div>
+        <div class="bw"><div class="bf" style="width:${pct||0}%;background:${color}"></div></div>
+        <div class="pct" style="color:${color}">${pct!==null?pct+'%':'—'}</div>
+        <div class="db ${pct===null?'dbn':pct>=90?'dbu':pct>=70?'dbn':'dbd'}">${pct===null?'—':pct>=90?'↑':pct>=70?'~':'↓'}</div>
+      </div>`;
+    }).join('');
+  });
+}
+
+function renderCompletion(deps){
+  const shown=deps.slice(0,20);
+  const complete=deps.filter(d=>ROLES.every(r=>allScores.some(s=>s.deployment_id===d.id&&s.role===r))).length;
+  document.getElementById('compBadge').textContent=complete+' of '+deps.length+' fully complete';
+  document.getElementById('compList').innerHTML=shown.map(d=>{
+    return `<div class="comp-row">
+      <div><div class="comp-client">${d.client}</div><div class="comp-wk">${d.parent_ticket||d.kiosk_id||'—'}</div></div>
+      <div style="font-size:.75rem;color:var(--text3);text-align:center">${d.week_no||'—'}</div>
+      ${ROLES.map(r=>{const done=allScores.some(s=>s.deployment_id===d.id&&s.role===r);return `<div class="comp-status"><div class="${done?'cs-done':'cs-pend'}">${done?'✓':'–'}</div></div>`}).join('')}
+    </div>`;
+  }).join('')+(deps.length>20?`<div style="font-size:.75rem;color:var(--text3);padding:.5rem">+ ${deps.length-20} more deployments</div>`:'');
+}
+
+function renderClients(deps,scores){
+  const clientMap={};
+  deps.forEach(d=>{if(!clientMap[d.client])clientMap[d.client]={n:0,scores:[],roleScores:{pm:[],logistics:[],install:[]}};clientMap[d.client].n++;});
+  scores.forEach(s=>{const dep=allDeployments.find(d=>d.id===s.deployment_id);if(!dep||!clientMap[dep.client])return;clientMap[dep.client].scores.push(s.score);if(clientMap[dep.client].roleScores[s.role])clientMap[dep.client].roleScores[s.role].push(s.score);});
+  document.getElementById('clientBadge').textContent=Object.keys(clientMap).length+' clients';
+  const rows=Object.entries(clientMap).sort((a,b)=>avg(b[1].scores)-avg(a[1].scores));
+  document.getElementById('clientTbody').innerHTML=rows.map(([c,d])=>{
+    const a=d.scores.length?r1(avg(d.scores)):null;
+    const pm=d.roleScores.pm.length?r1(avg(d.roleScores.pm)):null;
+    const lg=d.roleScores.logistics.length?r1(avg(d.roleScores.logistics)):null;
+    const ins=d.roleScores.install.length?r1(avg(d.roleScores.install)):null;
+    const bar=(v)=>v!==null?`<div class="mbw"><div class="mbf" style="width:${v}%;background:${sc(v)}"></div></div>`:'';
+    return `<tr>
+      <td style="font-weight:600">${c}</td>
+      <td style="color:var(--text3)">${d.n}</td>
+      <td><span style="font-weight:700;color:${a!==null?sc(a):'var(--text3)'};">${a!==null?a+'%':'—'}</span>${bar(a)}</td>
+      <td><span style="color:${pm!==null?sc(pm):'var(--text3)'}">${pm!==null?pm+'%':'—'}</span></td>
+      <td><span style="color:${lg!==null?sc(lg):'var(--text3)'}">${lg!==null?lg+'%':'—'}</span></td>
+      <td><span style="color:${ins!==null?sc(ins):'var(--text3)'}">${ins!==null?ins+'%':'—'}</span></td>
+      <td><span class="tag ${a!==null?scTag(a):'tr_'}">${a!==null?(a>=90?'Strong':a>=70?'OK':'Needs work'):'No data'}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderAccountability(scores){
+  const accMap={};
+  scores.filter(s=>s.accountability).forEach(s=>{if(!accMap[s.accountability])accMap[s.accountability]=[];accMap[s.accountability].push(s.score);});
+  const labels=Object.keys(accMap);
+  const data=labels.map(l=>r1(avg(accMap[l])));
+  const colors=data.map(v=>v>=90?'rgba(5,150,105,.7)':v>=70?'rgba(217,119,6,.7)':'rgba(220,38,38,.7)');
+  if(CH.acc)CH.acc.destroy();
+  CH.acc=new Chart(document.getElementById('accC'),{
+    type:'bar',
+    data:{labels,datasets:[{data,backgroundColor:colors,borderRadius:5,borderSkipped:false}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed.x+'%'}}},scales:{x:{min:0,max:100,ticks:{color:'#9CA3AF',font:{size:10},callback:v=>v+'%'},grid:{color:'rgba(0,0,0,.04)'}},y:{ticks:{color:'#4B5563',font:{size:10}},grid:{display:false}}}},
+  });
+}
+
+function renderRisks(deps,scores){
+  const risks=[];
+  // Low scoring deployments
+  const byDep={};
+  scores.forEach(s=>{if(!byDep[s.deployment_id])byDep[s.deployment_id]=[];byDep[s.deployment_id].push(s.score);});
+  Object.entries(byDep).forEach(([id,sc_arr])=>{
+    const a=avg(sc_arr);
+    if(a<60){const dep=allDeployments.find(d=>d.id===id);if(dep)risks.push({sev:'sh',title:dep.client,body:`Avg score ${r1(a)}% — needs attention`,owner:dep.tech||'—'});}
+  });
+  // Criteria specific risks
+  const instS=scores.filter(s=>s.role==='install'&&s.answers);
+  const netFail=instS.filter(s=>s.answers.network_ready===0).length;
+  const hwFail=instS.filter(s=>s.answers.no_hw_issues===0).length;
+  if(netFail>2)risks.push({sev:'sm',title:'Network readiness',body:`${netFail} installs flagged network not ready`,owner:'PM / Client'});
+  if(hwFail>2)risks.push({sev:'sm',title:'Hardware issues',body:`${hwFail} installs had hardware challenges`,owner:'QC / Production'});
+  const survFail=scores.filter(s=>s.role==='pm'&&s.answers&&s.answers.site_survey===0).length;
+  if(survFail>1)risks.push({sev:'sm',title:'Site survey accuracy',body:`${survFail} surveys had issues — review process`,owner:'PM'});
+  const el=document.getElementById('riskList');
+  if(!risks.length){el.innerHTML='<div style="color:var(--text3);font-size:.8rem;padding:.5rem 0">No risk flags for current filters 👍</div>';return}
+  el.innerHTML=risks.slice(0,6).map((r,i)=>`<div class="risk-row"><div class="risk-n">${i+1}</div><div class="risk-t"><strong>${r.title}</strong>${r.body}</div><div style="font-size:.7rem;color:var(--text3);white-space:nowrap">${r.owner}</div><div class="sev ${r.sev}">${r.sev==='sh'?'HIGH':'MED'}</div></div>`).join('');
+}
+
+init();
+</script>
+</body>
+</html>

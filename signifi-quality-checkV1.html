@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<title>Signifi — Deployment Quality Check</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+:root{
+  --accent:#0066FF;--accent-soft:rgba(0,102,255,.08);--accent-border:rgba(0,102,255,.2);
+  --green:#059669;--green-soft:rgba(5,150,105,.08);--green-border:rgba(5,150,105,.25);
+  --red:#DC2626;--red-soft:rgba(220,38,38,.08);--red-border:rgba(220,38,38,.2);
+  --amber:#D97706;--amber-soft:rgba(217,119,6,.08);--amber-border:rgba(217,119,6,.2);
+  --bg:#F8F9FB;--surface:#FFFFFF;--surface2:#F3F4F6;--surface3:#E9EAEC;
+  --border:#E5E7EB;--border2:#D1D3D7;
+  --text:#111827;--text2:#4B5563;--text3:#9CA3AF;
+  --radius:10px;--radius-sm:7px;
+  --shadow:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.04);
+  --shadow-md:0 4px 12px rgba(0,0,0,.08),0 2px 4px rgba(0,0,0,.04);
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;min-height:100vh}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--surface3);border-radius:4px}
+
+/* HEADER */
+header{background:#fff;border-bottom:1px solid var(--border);padding:.875rem 1.5rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;position:sticky;top:0;z-index:200;box-shadow:var(--shadow)}
+.hdr-left{display:flex;align-items:center;gap:1rem}
+.logo-wrap{display:flex;align-items:center;gap:.5rem}
+.logo-mark{width:28px;height:28px;background:#0066FF;border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.logo-mark svg{width:16px;height:16px}
+.logo-text{font-size:.9375rem;font-weight:700;color:var(--text);letter-spacing:-.01em}
+.hdr-divider{width:1px;height:20px;background:var(--border2)}
+.hdr-title{font-size:.8125rem;font-weight:600;color:var(--text2)}
+.hdr-right{display:flex;align-items:center;gap:.625rem}
+
+/* CHIPS */
+.chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:.02em}
+.chip-blue{background:var(--accent-soft);border:1px solid var(--accent-border);color:var(--accent)}
+.chip-green{background:var(--green-soft);border:1px solid var(--green-border);color:var(--green)}
+.chip-amber{background:var(--amber-soft);border:1px solid var(--amber-border);color:var(--amber)}
+.cdot{width:5px;height:5px;border-radius:50%;background:currentColor}
+
+/* VIEWS */
+.view{display:none;min-height:calc(100vh - 53px)}
+.view.active{display:block}
+
+/* SHARED */
+.sec-label{font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);margin-bottom:.625rem}
+.panel{background:#fff;border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
+.btn{display:flex;align-items:center;justify-content:center;gap:.4rem;width:100%;padding:.75rem 1.25rem;border-radius:var(--radius-sm);font-size:.875rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;border:none;transition:all .15s}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:#0052CC}
+.btn-primary:disabled{background:var(--surface3);color:var(--text3);cursor:not-allowed}
+.btn-ghost{background:#fff;color:var(--text2);border:1px solid var(--border2)}
+.btn-ghost:hover{border-color:var(--border);color:var(--text)}
+.btn-danger{background:var(--red-soft);color:var(--red);border:1px solid var(--red-border)}
+
+/* HOME */
+.home-wrap{max-width:520px;margin:0 auto;padding:2rem 1.25rem 3rem}
+.home-eyebrow{font-size:.6875rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:.5rem}
+.home-title{font-size:1.625rem;font-weight:700;color:var(--text);line-height:1.25;margin-bottom:.5rem}
+.home-sub{font-size:.875rem;color:var(--text2);line-height:1.6;margin-bottom:1.75rem}
+
+/* Upload */
+.upload-zone{border:1.5px dashed var(--border2);border-radius:var(--radius);padding:2rem 1.5rem;text-align:center;cursor:pointer;transition:all .2s;background:#fff;position:relative;margin-bottom:.625rem}
+.upload-zone:hover,.upload-zone.drag{border-color:var(--accent);background:var(--accent-soft)}
+.upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.upload-icon{font-size:1.5rem;margin-bottom:.5rem}
+.upload-title{font-size:.875rem;font-weight:600;color:var(--text);margin-bottom:.2rem}
+.upload-hint{font-size:.75rem;color:var(--text3)}
+.upload-ok{display:none;align-items:center;gap:.75rem;background:var(--green-soft);border:1px solid var(--green-border);border-radius:var(--radius-sm);padding:.75rem 1rem;margin-bottom:1.5rem}
+.upload-ok.show{display:flex}
+.uo-name{font-size:.875rem;font-weight:600;color:var(--green)}
+.uo-count{font-size:.75rem;color:var(--text2);margin-top:1px}
+
+/* Role cards */
+.role-grid{display:grid;gap:.5rem;margin-bottom:1.25rem}
+.role-card{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:1rem 1.1rem;cursor:pointer;transition:all .15s;display:flex;align-items:center;gap:.875rem;box-shadow:var(--shadow)}
+.role-card:hover{border-color:var(--accent-border);box-shadow:var(--shadow-md)}
+.role-card.selected{border-color:var(--accent);background:var(--accent-soft)}
+.rc-icon-wrap{width:38px;height:38px;border-radius:8px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0;transition:background .15s}
+.role-card.selected .rc-icon-wrap{background:rgba(0,102,255,.12)}
+.rc-info{flex:1}
+.rc-name{font-size:.875rem;font-weight:700;color:var(--text);margin-bottom:2px}
+.rc-desc{font-size:.72rem;color:var(--text3);line-height:1.4}
+.rc-badge{font-size:.65rem;font-weight:700;letter-spacing:.06em;background:var(--surface2);color:var(--text3);padding:2px 8px;border-radius:4px;white-space:nowrap}
+.role-card.selected .rc-badge{background:rgba(0,102,255,.12);color:var(--accent)}
+
+/* LIST */
+.list-wrap{max-width:620px;margin:0 auto;padding:1.5rem 1.25rem}
+.list-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;gap:1rem;flex-wrap:wrap}
+.list-title{font-size:1.125rem;font-weight:700;color:var(--text)}
+.list-sub{font-size:.75rem;color:var(--text3);margin-top:2px}
+
+.filter-bar{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.875rem}
+.fl{font-size:.6875rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text3)}
+select{background:#fff;color:var(--text);border:1px solid var(--border2);border-radius:var(--radius-sm);padding:5px 10px;font-size:.8125rem;font-family:'DM Sans',sans-serif;cursor:pointer;outline:none;box-shadow:var(--shadow)}
+select:focus{border-color:var(--accent)}
+.search-box{width:100%;background:#fff;color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.6rem .875rem;font-size:.875rem;font-family:'DM Sans',sans-serif;outline:none;margin-bottom:.75rem;box-shadow:var(--shadow);transition:border-color .15s}
+.search-box:focus{border-color:var(--accent)}
+.search-box::placeholder{color:var(--text3)}
+
+.dep-list{display:flex;flex-direction:column;gap:.4rem}
+.dep-card{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:.875rem 1rem;cursor:pointer;transition:all .15s;display:flex;align-items:center;gap:.875rem;box-shadow:var(--shadow)}
+.dep-card:hover{border-color:var(--border2);box-shadow:var(--shadow-md);transform:translateY(-1px)}
+.dep-card.scored{border-left:3px solid var(--green)}
+.dep-card.pending{border-left:3px solid var(--surface3)}
+.dep-client{font-size:.875rem;font-weight:600;color:var(--text);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dep-ticket{font-size:.7rem;color:var(--text3);margin-bottom:.35rem}
+.dep-tags{display:flex;gap:.3rem;flex-wrap:wrap}
+.tag{font-size:.65rem;font-weight:600;padding:2px 7px;border-radius:4px;letter-spacing:.03em}
+.t-blue{background:var(--accent-soft);color:var(--accent)}
+.t-amber{background:var(--amber-soft);color:var(--amber)}
+.t-green{background:var(--green-soft);color:var(--green)}
+.t-gray{background:var(--surface2);color:var(--text3)}
+.dep-dot{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;flex-shrink:0}
+.dd-done{background:var(--green-soft);color:var(--green)}
+.dd-pending{background:var(--surface2);color:var(--text3)}
+
+.empty{text-align:center;padding:2.5rem 1.5rem}
+.empty-icon{font-size:2rem;margin-bottom:.5rem}
+.empty-title{font-size:.9rem;font-weight:600;color:var(--text2);margin-bottom:.25rem}
+.empty-sub{font-size:.8rem;color:var(--text3);line-height:1.5}
+
+/* SUPERVISOR */
+.sup-wrap{max-width:800px;margin:0 auto;padding:1.5rem 1.25rem}
+.sup-grid{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:.5rem;align-items:center}
+.sup-hdr{font-size:.65rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);padding:.5rem .875rem}
+.sup-row{background:#fff;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.75rem .875rem;display:grid;grid-template-columns:2fr 1fr 1fr 1fr;align-items:center;gap:.5rem;box-shadow:var(--shadow);margin-bottom:.35rem;transition:all .15s}
+.sup-row:hover{border-color:var(--border2);box-shadow:var(--shadow-md)}
+.sup-client{font-size:.875rem;font-weight:600;color:var(--text)}
+.sup-ticket{font-size:.7rem;color:var(--text3);margin-top:1px}
+.role-status{display:flex;align-items:center;justify-content:center}
+.rs-done{width:22px;height:22px;border-radius:50%;background:var(--green-soft);color:var(--green);border:1px solid var(--green-border);display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700}
+.rs-pending{width:22px;height:22px;border-radius:50%;background:var(--surface2);color:var(--text3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:.65rem}
+
+/* FORM */
+.form-wrap{max-width:520px;margin:0 auto;padding:1.5rem 1.25rem}
+.form-back{display:flex;align-items:center;gap:.35rem;font-size:.8125rem;font-weight:500;color:var(--text3);cursor:pointer;margin-bottom:1.25rem;width:fit-content;transition:color .15s}
+.form-back:hover{color:var(--accent)}
+
+.dep-banner{background:#fff;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:0 var(--radius) var(--radius) 0;padding:.875rem 1.1rem;margin-bottom:1.25rem;box-shadow:var(--shadow)}
+.db-client{font-size:1rem;font-weight:700;color:var(--text);margin-bottom:2px}
+.db-ticket{font-size:.72rem;color:var(--text3);margin-bottom:.5rem}
+.db-tags{display:flex;gap:.3rem;flex-wrap:wrap}
+
+.field-group{margin-bottom:1rem}
+.field-label{font-size:.6875rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);margin-bottom:.4rem}
+.field-input{width:100%;background:#fff;color:var(--text);border:1px solid var(--border2);border-radius:var(--radius-sm);padding:.65rem .875rem;font-size:.875rem;font-family:'DM Sans',sans-serif;outline:none;transition:border-color .15s;box-shadow:var(--shadow)}
+.field-input:focus{border-color:var(--accent)}
+.field-input::placeholder{color:var(--text3)}
+.field-select{width:100%;background:#fff;color:var(--text);border:1px solid var(--border2);border-radius:var(--radius-sm);padding:.65rem .875rem;font-size:.875rem;font-family:'DM Sans',sans-serif;outline:none;cursor:pointer;transition:border-color .15s;box-shadow:var(--shadow)}
+.field-select:focus{border-color:var(--accent)}
+textarea.field-input{resize:vertical;min-height:72px;font-family:'DM Sans',sans-serif;line-height:1.5}
+
+/* Progress */
+.progress-wrap{margin-bottom:1.25rem}
+.progress-hdr{display:flex;justify-content:space-between;margin-bottom:.35rem}
+.progress-lbl{font-size:.8rem;color:var(--text2)}
+.progress-pct{font-size:.8rem;font-weight:700;color:var(--accent)}
+.progress-bar{height:4px;background:var(--surface3);border-radius:2px;overflow:hidden}
+.progress-fill{height:100%;background:var(--accent);border-radius:2px;transition:width .3s ease}
+
+/* Questions */
+.q-list{display:flex;flex-direction:column;gap:.4rem;margin-bottom:1rem}
+.q-row{background:#fff;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.8rem .9rem;display:flex;align-items:center;justify-content:space-between;gap:.875rem;transition:border-color .15s;box-shadow:var(--shadow)}
+.q-row.answered{border-color:var(--border2)}
+.q-text{font-size:.8125rem;font-weight:500;color:var(--text);line-height:1.45;flex:1}
+.q-btns{display:flex;gap:.25rem;flex-shrink:0}
+.qa{width:40px;height:30px;border-radius:5px;border:1px solid var(--border2);background:var(--surface2);color:var(--text3);font-size:.7rem;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .15s}
+.qa:hover{border-color:var(--border);color:var(--text2)}
+.qa.yes.sel{border-color:var(--green);background:var(--green-soft);color:var(--green)}
+.qa.no.sel{border-color:var(--red);background:var(--red-soft);color:var(--red)}
+.qa.na.sel{border-color:var(--border2);background:var(--surface3);color:var(--text2)}
+
+.score-bar{display:flex;align-items:center;justify-content:space-between;background:var(--surface2);border-radius:var(--radius-sm);padding:.65rem .9rem;margin-bottom:.875rem}
+.sb-lbl{font-size:.72rem;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em}
+.sb-score{font-size:1.25rem;font-weight:700;font-family:'DM Mono',monospace}
+
+/* COMPLETE */
+.complete-wrap{max-width:400px;margin:0 auto;padding:3rem 1.25rem;text-align:center}
+.complete-circle{width:72px;height:72px;border-radius:50%;background:var(--green-soft);border:2px solid var(--green-border);display:flex;align-items:center;justify-content:center;font-size:2rem;margin:0 auto 1.25rem}
+.complete-title{font-size:1.375rem;font-weight:700;color:var(--text);margin-bottom:.4rem}
+.complete-sub{font-size:.875rem;color:var(--text2);line-height:1.6;margin-bottom:1.75rem}
+.score-big{font-size:4rem;font-weight:700;font-family:'DM Mono',monospace;line-height:1;margin-bottom:.2rem}
+.score-lbl{font-size:.7rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);margin-bottom:2rem}
+
+/* SCHEMA MODAL */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:500;align-items:center;justify-content:center;padding:1.25rem}
+.modal-overlay.show{display:flex}
+.modal{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem;max-width:540px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow-md)}
+.modal-title{font-size:1rem;font-weight:700;color:var(--text);margin-bottom:.5rem}
+.schema-block{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.875rem;margin-bottom:.875rem;font-size:.7rem;color:var(--text2);line-height:1.8;font-family:'DM Mono',monospace;white-space:pre;overflow-x:auto}
+
+/* TOAST */
+.toast{position:fixed;bottom:1.25rem;left:50%;transform:translateX(-50%) translateY(80px);background:var(--text);color:#fff;border-radius:var(--radius-sm);padding:.6rem 1.1rem;font-size:.8125rem;font-weight:600;z-index:999;transition:transform .25s ease;white-space:nowrap;box-shadow:var(--shadow-md)}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.ok{background:var(--green)}
+
+/* NAV TABS */
+.nav-tabs{display:flex;gap:.25rem;background:var(--surface2);border-radius:var(--radius-sm);padding:3px;margin-bottom:1.25rem}
+.nav-tab{flex:1;padding:.45rem .75rem;border-radius:5px;font-size:.8125rem;font-weight:600;cursor:pointer;border:none;background:transparent;color:var(--text3);font-family:'DM Sans',sans-serif;transition:all .15s;text-align:center}
+.nav-tab.on{background:#fff;color:var(--text);box-shadow:var(--shadow)}
+
+@media(max-width:600px){
+  header{padding:.75rem 1rem}
+  .hdr-title,.hdr-divider{display:none}
+  .home-wrap,.list-wrap,.form-wrap,.sup-wrap{padding:1rem}
+  .q-row{flex-direction:column;align-items:flex-start;gap:.5rem}
+  .q-btns{align-self:flex-end}
+  .sup-grid,.sup-row{grid-template-columns:1fr 1fr 1fr}
+  .sup-hdr:first-child{display:none}
+  .sup-row > .sup-client-wrap{display:none}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hdr-left">
+    <div class="logo-wrap">
+      <div class="logo-mark">
+        <svg viewBox="0 0 16 16" fill="none"><polygon points="2,14 8,2 14,14" fill="white" opacity=".9"/></svg>
+      </div>
+      <span class="logo-text">Signifi</span>
+    </div>
+    <div class="hdr-divider"></div>
+    <span class="hdr-title" id="hdrTitle">Deployment Quality Check</span>
+  </div>
+  <div class="hdr-right">
+    <div class="chip chip-blue" id="roleChip" style="display:none"></div>
+    <button class="btn btn-ghost" style="width:auto;padding:.4rem .875rem;font-size:.8rem" onclick="showSchema()">Schema ↗</button>
+  </div>
+</header>
+
+<!-- HOME -->
+<div class="view active" id="view-home">
+<div class="home-wrap">
+  <div class="home-eyebrow">Field & Support Services</div>
+  <div class="home-title">Deployment Quality Check</div>
+  <p class="home-sub">Upload the Odoo export, select your role, and fill in your section's quality checks — takes about 2 minutes per deployment.</p>
+
+  <div class="sec-label">1 · Upload Odoo export</div>
+  <div class="upload-zone" id="uploadZone">
+    <input type="file" id="fileInput" accept=".csv,.xlsx,.xls">
+    <div class="upload-icon">📂</div>
+    <div class="upload-title">Drop Odoo CSV or Excel here</div>
+    <div class="upload-hint">or tap to browse</div>
+  </div>
+  <div class="upload-ok" id="uploadOk">
+    <div>
+      <div class="uo-name" id="uploadFileName"></div>
+      <div class="uo-count" id="uploadCount"></div>
+    </div>
+  </div>
+
+  <div class="sec-label" style="margin-top:1.5rem">2 · Select your role</div>
+  <div class="role-grid">
+    <div class="role-card" onclick="selectRole('pm',this)">
+      <div class="rc-icon-wrap">📋</div>
+      <div class="rc-info">
+        <div class="rc-name">Project Management</div>
+        <div class="rc-desc">Site survey · badge/payment config · SO changes · product received · surprises</div>
+      </div>
+      <div class="rc-badge">5 CHECKS</div>
+    </div>
+    <div class="role-card" onclick="selectRole('logistics',this)">
+      <div class="rc-icon-wrap">🚚</div>
+      <div class="rc-info">
+        <div class="rc-name">Logistics</div>
+        <div class="rc-desc">Shipping schedule · pickup · equipment arrival · vinyl & equipment damage</div>
+      </div>
+      <div class="rc-badge">5 CHECKS</div>
+    </div>
+    <div class="role-card" onclick="selectRole('install',this)">
+      <div class="rc-icon-wrap">🔧</div>
+      <div class="rc-info">
+        <div class="rc-name">Install / Tech</div>
+        <div class="rc-desc">Arrival · install time · network · SW/HW issues · planogram · UI version · revisits</div>
+      </div>
+      <div class="rc-badge">11 CHECKS</div>
+    </div>
+    <div class="role-card" onclick="selectRole('supervisor',this)">
+      <div class="rc-icon-wrap">👁</div>
+      <div class="rc-info">
+        <div class="rc-name">Supervisor View</div>
+        <div class="rc-desc">See completion status across all roles for every deployment</div>
+      </div>
+      <div class="rc-badge">READ-ONLY</div>
+    </div>
+  </div>
+
+  <button class="btn btn-primary" id="goBtn" onclick="goNext()" disabled>Continue →</button>
+</div>
+</div>
+
+<!-- LIST -->
+<div class="view" id="view-list">
+<div class="list-wrap">
+  <div class="list-hdr">
+    <div>
+      <div class="list-title" id="listTitle">Deployments</div>
+      <div class="list-sub" id="listSub"></div>
+    </div>
+  </div>
+  <div class="filter-bar">
+    <span class="fl">Week</span>
+    <select id="weekSel" onchange="renderList()"><option value="all">All</option></select>
+    <span class="fl">Status</span>
+    <select id="statusSel" onchange="renderList()">
+      <option value="all">All</option>
+      <option value="pending">Pending</option>
+      <option value="done">Done</option>
+    </select>
+  </div>
+  <input class="search-box" id="searchBox" placeholder="Search client, ticket or kiosk…" oninput="renderList()">
+  <div class="dep-list" id="depList"></div>
+  <div style="margin-top:1.25rem"><button class="btn btn-ghost" onclick="goHome()">← Change role</button></div>
+</div>
+</div>
+
+<!-- SUPERVISOR -->
+<div class="view" id="view-supervisor">
+<div class="sup-wrap">
+  <div class="list-hdr">
+    <div>
+      <div class="list-title">Supervisor View</div>
+      <div class="list-sub">All deployments · completion status per role</div>
+    </div>
+  </div>
+  <div class="filter-bar">
+    <span class="fl">Week</span>
+    <select id="supWeekSel" onchange="renderSupervisor()"><option value="all">All</option></select>
+    <span class="fl">Show</span>
+    <select id="supStatusSel" onchange="renderSupervisor()">
+      <option value="all">All</option>
+      <option value="incomplete">Incomplete only</option>
+      <option value="complete">Fully complete</option>
+    </select>
+  </div>
+  <input class="search-box" id="supSearch" placeholder="Search client or ticket…" oninput="renderSupervisor()">
+  <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;padding:.25rem .875rem;margin-bottom:.25rem">
+    <span class="fl">Deployment</span>
+    <span class="fl" style="text-align:center">PM</span>
+    <span class="fl" style="text-align:center">Logistics</span>
+    <span class="fl" style="text-align:center">Install</span>
+  </div>
+  <div id="supList"></div>
+  <div style="margin-top:1.25rem"><button class="btn btn-ghost" onclick="goHome()">← Back</button></div>
+</div>
+</div>
+
+<!-- FORM -->
+<div class="view" id="view-form">
+<div class="form-wrap">
+  <div class="form-back" onclick="goToList()">← Back to list</div>
+
+  <div class="dep-banner">
+    <div class="db-client" id="formClient"></div>
+    <div class="db-ticket" id="formTicket"></div>
+    <div class="db-tags" id="formTags"></div>
+  </div>
+
+  <div class="field-group">
+    <div class="field-label">Your name</div>
+    <input class="field-input" id="submitterName" placeholder="e.g. Sarah K." autocomplete="name">
+  </div>
+
+  <div class="field-group">
+    <div class="field-label">Accountability</div>
+    <select class="field-select" id="accountabilityField">
+      <option value="">Select…</option>
+      <option>Success</option>
+      <option>Client</option>
+      <option>PM</option>
+      <option>Logistics</option>
+      <option>QC</option>
+      <option>QA</option>
+      <option>Production</option>
+      <option>Technician</option>
+      <option>Tech Error</option>
+      <option>Software</option>
+      <option>Solutioning</option>
+      <option>Support Agent</option>
+      <option>Client / PM</option>
+      <option>QA / PM</option>
+      <option>QC / Client</option>
+      <option>Other</option>
+    </select>
+  </div>
+
+  <div class="progress-wrap">
+    <div class="progress-hdr">
+      <span class="progress-lbl" id="progressLbl">0 of 0 answered</span>
+      <span class="progress-pct" id="progressPct">0%</span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+  </div>
+
+  <div class="sec-label" id="formRoleLabel"></div>
+  <div class="q-list" id="qList"></div>
+
+  <div class="field-group">
+    <div class="field-label">Comments / notes (optional)</div>
+    <textarea class="field-input" id="commentsField" placeholder="Any issues, context or follow-up notes…"></textarea>
+  </div>
+
+  <div class="score-bar" id="scoreBar" style="display:none">
+    <span class="sb-lbl">Section score</span>
+    <span class="sb-score" id="sbScore">—</span>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:.5rem">
+    <button class="btn btn-primary" id="submitBtn" onclick="submitForm()" disabled>Submit section</button>
+    <button class="btn btn-ghost" onclick="goToList()">Cancel</button>
+  </div>
+</div>
+</div>
+
+<!-- COMPLETE -->
+<div class="view" id="view-complete">
+<div class="complete-wrap">
+  <div class="complete-circle">✓</div>
+  <div class="complete-title">Section submitted</div>
+  <p class="complete-sub">Your quality check is saved. Other team members can fill in their sections independently.</p>
+  <div class="score-big" id="bigScore">—</div>
+  <div class="score-lbl">Section score</div>
+  <button class="btn btn-primary" onclick="goToList()" style="margin-bottom:.5rem">Score another deployment</button>
+  <button class="btn btn-ghost" onclick="goHome()">Change role</button>
+</div>
+</div>
+
+<!-- SCHEMA MODAL -->
+<div class="modal-overlay" id="schemaModal">
+<div class="modal">
+  <div class="modal-title">Supabase Schema</div>
+  <p style="font-size:.8rem;color:var(--text2);margin-bottom:1rem;line-height:1.6">Run these in your Supabase SQL editor, then add your credentials to the top of the script.</p>
+  <div class="schema-block">-- 1. Deployments (from Odoo CSV)
+CREATE TABLE deployments (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_id       text UNIQUE,
+  parent_ticket text,
+  display_name  text,
+  client        text,
+  kiosk_id      text,
+  location      text,
+  stage         text,
+  activity_type text,
+  tech          text,
+  week_no       integer,
+  install_date  date,
+  uploaded_at   timestamptz DEFAULT now()
+);</div>
+  <div class="schema-block">-- 2. Quality scores (one per role per deployment)
+CREATE TABLE quality_scores (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  deployment_id   uuid REFERENCES deployments(id) ON DELETE CASCADE,
+  role            text CHECK (role IN ('pm','logistics','install')),
+  submitted_by    text,
+  accountability  text,
+  comments        text,
+  submitted_at    timestamptz DEFAULT now(),
+  answers         jsonb,
+  score           numeric(5,2),
+  UNIQUE (deployment_id, role)
+);</div>
+  <p style="font-size:.72rem;color:var(--text3);line-height:1.6;margin-bottom:1rem">Enable RLS on both tables and add your anon key policy as needed.</p>
+  <button class="btn btn-ghost" onclick="document.getElementById('schemaModal').classList.remove('show')">Close</button>
+</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── CONFIG ──
+const SB_URL = 'https://oykgpkolliqjeznblavy.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95a2dwa29sbGlxamV6bmJsYXl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNTI3ODgsImV4cCI6MjA5NTYyODc4OH0.kkOBhxyaqLG7PLPNI0SwPNwQSWmbpFjDoP2VQp33_X4';
+const SB_ON  = SB_URL !== 'https://YOUR_PROJECT.supabase.co';
+
+// ── QUESTIONS ──
+const QUESTIONS = {
+  pm:[
+    {id:'site_survey',     text:'Was the facility site survey completed accurately with no issues?'},
+    {id:'badge_payment',   text:'Was payment activation or badge access configured before install?'},
+    {id:'product_received',text:'Was the product received from the client as expected?'},
+    {id:'no_so_changes',   text:'Were there no changes to the SO after the PO was issued?'},
+    {id:'no_surprises',    text:'Were there no site survey surprises on install day?'},
+  ],
+  logistics:[
+    {id:'shipped_schedule', text:'Was the unit shipped on the original schedule?'},
+    {id:'pickup_ontime',    text:'Was the unit picked up on time with no penalty?'},
+    {id:'equipment_arrived',text:'Did the equipment arrive on time?'},
+    {id:'no_vinyl_damage',  text:'Was there no vinyl damage on arrival?'},
+    {id:'no_equip_damage',  text:'Did the unit arrive with no equipment damage, uncrated in its final resting spot?'},
+  ],
+  install:[
+    {id:'tech_ontime',        text:'Did the technician arrive on time without causing issues?'},
+    {id:'install_4hrs',       text:'Was the install completed in 4 hours or less?'},
+    {id:'no_revisit',         text:'Was no revisit required?'},
+    {id:'no_parts',           text:'Were no additional parts required on site?'},
+    {id:'network_ready',      text:'Was the network ready and configured correctly?'},
+    {id:'no_sw_issues',       text:'Were there no software challenges?'},
+    {id:'no_hw_issues',       text:'Were there no hardware challenges?'},
+    {id:'worked_first_time',  text:'Did it work right the first time?'},
+    {id:'planogram_done',     text:'Was the planogram / merchandising configured?'},
+    {id:'latest_ui',          text:'Was the latest UI version installed before ship?'},
+    {id:'no_repeat_visits',   text:'Were there no repeat visits within 30 days?'},
+  ],
+};
+const ROLE_LABELS = {pm:'Project Management', logistics:'Logistics', install:'Install / Tech'};
+const ROLES = ['pm','logistics','install'];
+
+// ── STATE ──
+let deployments = [];
+let scores      = {};  // key: depId_role -> {answers, score, submitted_by, accountability, comments}
+let selectedRole = null;
+let currentDep   = null;
+let currentAnswers = {};
+
+// ── HELPERS ──
+function showView(id){document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));document.getElementById('view-'+id).classList.add('active');window.scrollTo(0,0)}
+function toast(msg,type=''){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show'+(type?' '+type:'');setTimeout(()=>t.classList.remove('show'),2800)}
+function sbFetch(path,opts={}){return fetch(SB_URL+path,{...opts,headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json',...(opts.headers||{})}})}
+function showSchema(){document.getElementById('schemaModal').classList.add('show')}
+
+// ── THEME / ROLE ──
+function selectRole(role,el){
+  selectedRole=role;
+  document.querySelectorAll('.role-card').forEach(c=>c.classList.remove('selected'));
+  el.classList.add('selected');
+  document.getElementById('goBtn').disabled=!(role&&deployments.length>0)||(role==='supervisor'&&deployments.length===0);
+  if(role==='supervisor') document.getElementById('goBtn').disabled=false;
+  else document.getElementById('goBtn').disabled=!deployments.length;
+}
+function goHome(){showView('home')}
+
+// ── UPLOAD ──
+const uz=document.getElementById('uploadZone');
+uz.addEventListener('dragover',e=>{e.preventDefault();uz.classList.add('drag')});
+uz.addEventListener('dragleave',()=>uz.classList.remove('drag'));
+uz.addEventListener('drop',e=>{e.preventDefault();uz.classList.remove('drag');handleFile(e.dataTransfer.files[0])});
+document.getElementById('fileInput').addEventListener('change',e=>handleFile(e.target.files[0]));
+
+function handleFile(file){
+  if(!file)return;
+  const n=file.name.toLowerCase();
+  if(n.endsWith('.csv')){Papa.parse(file,{header:true,skipEmptyLines:true,complete:r=>processRows(r.data,file.name)});}
+  else if(n.endsWith('.xlsx')||n.endsWith('.xls')){
+    toast('Parsing Excel…');
+    const s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload=()=>{const r=new FileReader();r.onload=e=>{const wb=XLSX.read(e.target.result,{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];processRows(XLSX.utils.sheet_to_json(ws,{defval:''}),file.name)};r.readAsArrayBuffer(file)};
+    document.head.appendChild(s);
+  } else toast('Please upload CSV or Excel');
+}
+
+function processRows(rows,fileName){
+  deployments=rows.filter(r=>{const a=(r['Requested Activity']||'').toLowerCase();return a.includes('install')||a.includes('revisit')||a.includes('go live');})
+    .map((r,i)=>{
+      const display=stripHtml(String(r['Display Name']||r['display_name']||''));
+      const loc=r['Service location']||r['service_location']||'';
+      return {
+        id:stripHtml(String(r['Task ID']||r['task_id']||i)),
+        parent_ticket:String(r['Parent Ticket #']||r['parent_ticket']||''),
+        display_name:display,client:extractClient(display,loc),
+        kiosk_id:r['Kiosk ID']||r['kiosk_id']||'',
+        location:loc,stage:r['Project Stage']||'',
+        activity_type:r['Requested Activity']||'',
+        tech:r['Dispatch Tech']||r['dispatch_tech']||'',
+        week_no:parseInt(r['Confirmed Week No.']||r['week_no'])||0,
+      };
+    });
+  const weeks=[...new Set(deployments.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>b-a);
+  ['weekSel','supWeekSel'].forEach(id=>{
+    const s=document.getElementById(id);
+    s.innerHTML='<option value="all">All</option>';
+    weeks.forEach(w=>{const o=document.createElement('option');o.value=w;o.textContent='Wk '+w;s.appendChild(o)});
+    if(weeks.length)s.value=weeks[0];
+  });
+  document.getElementById('uploadOk').classList.add('show');
+  document.getElementById('uploadFileName').textContent=fileName;
+  document.getElementById('uploadCount').textContent=deployments.length+' installation tickets loaded';
+  document.getElementById('goBtn').disabled=!selectedRole&&selectedRole!=='supervisor';
+  if(selectedRole&&selectedRole!=='supervisor') document.getElementById('goBtn').disabled=false;
+  toast('✓ '+deployments.length+' tickets loaded','ok');
+  if(SB_ON) loadScoresFromSupabase();
+}
+
+function stripHtml(s){return String(s).replace(/<[^>]*>/g,'').trim()}
+function extractClient(display,loc){
+  if(loc){const n=loc.split(/\s{2,}|\d/)[0].trim().replace(/[,.]$/,'');if(n.length>2&&n.length<60)return n}
+  const p=display.split(' - ');if(p.length>=3)return p[2].split(' ')[0];
+  return display.split(' ').slice(0,3).join(' ');
+}
+
+// ── LOAD FROM SUPABASE ──
+async function loadScoresFromSupabase(){
+  if(!SB_ON)return;
+  try{
+    const depIds=deployments.map(d=>d.id);
+    const res=await sbFetch(`/rest/v1/quality_scores?deployment_id=in.(${depIds.join(',')})&select=*`,{method:'GET',headers:{'Prefer':'return=representation'}});
+    if(!res.ok)return;
+    const rows=await res.json();
+    rows.forEach(r=>{scores[r.deployment_id+'_'+r.role]={answers:r.answers,score:r.score,submitted_by:r.submitted_by,accountability:r.accountability,comments:r.comments}});
+    toast('✓ Previous scores loaded','ok');
+  }catch(e){console.error('Load scores failed',e)}
+}
+
+// ── NAVIGATE ──
+function goNext(){
+  if(selectedRole==='supervisor'){
+    document.getElementById('hdrTitle').textContent='Supervisor View';
+    renderSupervisor();showView('supervisor');
+  } else {
+    goToList();
+  }
+}
+function goToList(){
+  if(!selectedRole)return;
+  const chip=document.getElementById('roleChip');chip.style.display='inline-flex';chip.textContent=ROLE_LABELS[selectedRole]||selectedRole;
+  document.getElementById('listTitle').textContent=ROLE_LABELS[selectedRole]||selectedRole;
+  document.getElementById('listSub').textContent=QUESTIONS[selectedRole].length+' checks per deployment';
+  document.getElementById('hdrTitle').textContent=ROLE_LABELS[selectedRole]||selectedRole;
+  renderList();showView('list');
+}
+
+// ── LIST ──
+function isScored(id,role){return !!(scores[id+'_'+(role||selectedRole)])}
+function renderList(){
+  const week=document.getElementById('weekSel').value;
+  const status=document.getElementById('statusSel').value;
+  const q=document.getElementById('searchBox').value.toLowerCase();
+  let f=deployments.filter(d=>{
+    if(week!=='all'&&d.week_no!==parseInt(week))return false;
+    if(q&&!d.client.toLowerCase().includes(q)&&!d.display_name.toLowerCase().includes(q)&&!d.parent_ticket.includes(q)&&!d.kiosk_id.toLowerCase().includes(q))return false;
+    const done=isScored(d.id);
+    if(status==='pending'&&done)return false;
+    if(status==='done'&&!done)return false;
+    return true;
+  });
+  const el=document.getElementById('depList');
+  if(!f.length){el.innerHTML=`<div class="empty"><div class="empty-icon">📭</div><div class="empty-title">No deployments found</div><div class="empty-sub">Try adjusting the week or search filter.</div></div>`;return}
+  el.innerHTML=f.map(d=>{
+    const done=isScored(d.id);
+    const rev=d.activity_type.toLowerCase().includes('revisit');
+    return `<div class="dep-card ${done?'scored':'pending'}" onclick="openForm('${d.id}')">
+      <div style="flex:1;min-width:0">
+        <div class="dep-client">${d.client}</div>
+        <div class="dep-ticket">${d.parent_ticket}${d.kiosk_id?' · '+d.kiosk_id:''}</div>
+        <div class="dep-tags">
+          ${rev?'<span class="tag t-amber">Revisit</span>':'<span class="tag t-blue">New Install</span>'}
+          ${d.week_no?`<span class="tag t-gray">Wk ${d.week_no}</span>`:''}
+          ${d.tech?`<span class="tag t-gray">${d.tech}</span>`:''}
+          ${done?'<span class="tag t-green">✓ Done</span>':''}
+        </div>
+      </div>
+      <div class="dep-dot ${done?'dd-done':'dd-pending'}">${done?'✓':'·'}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── SUPERVISOR ──
+function renderSupervisor(){
+  const week=document.getElementById('supWeekSel').value;
+  const status=document.getElementById('supStatusSel').value;
+  const q=document.getElementById('supSearch').value.toLowerCase();
+  let f=deployments.filter(d=>{
+    if(week!=='all'&&d.week_no!==parseInt(week))return false;
+    if(q&&!d.client.toLowerCase().includes(q)&&!d.parent_ticket.includes(q))return false;
+    const allDone=ROLES.every(r=>isScored(d.id,r));
+    const anyDone=ROLES.some(r=>isScored(d.id,r));
+    if(status==='complete'&&!allDone)return false;
+    if(status==='incomplete'&&allDone)return false;
+    return true;
+  });
+  const el=document.getElementById('supList');
+  if(!f.length){el.innerHTML=`<div class="empty"><div class="empty-icon">📭</div><div class="empty-title">No deployments found</div></div>`;return}
+  el.innerHTML=f.map(d=>{
+    const allDone=ROLES.every(r=>isScored(d.id,r));
+    const roleStatuses=ROLES.map(r=>{
+      const sc=scores[d.id+'_'+r];
+      return sc?`<div class="role-status"><div class="rs-done" title="Score: ${sc.score}%">✓</div></div>`:`<div class="role-status"><div class="rs-pending">–</div></div>`;
+    }).join('');
+    return `<div class="sup-row" style="${allDone?'border-left:3px solid var(--green)':'border-left:3px solid var(--surface3)'}">
+      <div><div class="sup-client">${d.client}</div><div class="sup-ticket">${d.parent_ticket}${d.kiosk_id?' · '+d.kiosk_id:''} ${d.week_no?'· Wk '+d.week_no:''}</div></div>
+      ${roleStatuses}
+    </div>`;
+  }).join('');
+}
+
+// ── FORM ──
+function openForm(depId){
+  currentDep=deployments.find(d=>d.id===depId);if(!currentDep)return;
+  currentAnswers={};
+  const existing=scores[currentDep.id+'_'+selectedRole];
+  if(existing){currentAnswers={...existing.answers};if(existing.submitted_by)document.getElementById('submitterName').value=existing.submitted_by;if(existing.accountability)document.getElementById('accountabilityField').value=existing.accountability;if(existing.comments)document.getElementById('commentsField').value=existing.comments;}
+  document.getElementById('formClient').textContent=currentDep.client;
+  document.getElementById('formTicket').textContent=currentDep.parent_ticket+(currentDep.kiosk_id?' · '+currentDep.kiosk_id:'');
+  const rev=currentDep.activity_type.toLowerCase().includes('revisit');
+  document.getElementById('formTags').innerHTML=`${rev?'<span class="tag t-amber">Revisit</span>':'<span class="tag t-blue">New Install</span>'}${currentDep.week_no?`<span class="tag t-gray">Week ${currentDep.week_no}</span>`:''}${currentDep.tech?`<span class="tag t-gray">${currentDep.tech}</span>`:''}`;
+  document.getElementById('formRoleLabel').textContent=ROLE_LABELS[selectedRole]+' checks';
+  renderQs();showView('form');
+}
+
+function renderQs(){
+  const qs=QUESTIONS[selectedRole];
+  document.getElementById('qList').innerHTML=qs.map((q,i)=>{
+    const val=currentAnswers[q.id];const hasVal=currentAnswers.hasOwnProperty(q.id);
+    return `<div class="q-row ${hasVal?'answered':''}" id="qr-${q.id}">
+      <div class="q-text"><span style="color:var(--text3);font-size:.72rem;margin-right:.4rem">${i+1}.</span>${q.text}</div>
+      <div class="q-btns">
+        <button class="qa yes ${val===1?'sel':''}" onclick="setAns('${q.id}',1,this)">YES</button>
+        <button class="qa no ${val===0?'sel':''}" onclick="setAns('${q.id}',0,this)">NO</button>
+        <button class="qa na ${(hasVal&&val===null)?'sel':''}" onclick="setAns('${q.id}',null,this)">N/A</button>
+      </div>
+    </div>`;
+  }).join('');
+  updateProgress();
+}
+
+function setAns(qId,val,btn){
+  document.querySelectorAll(`#qr-${qId} .qa`).forEach(b=>b.classList.remove('sel'));
+  btn.classList.add('sel');
+  document.getElementById('qr-'+qId).classList.add('answered');
+  currentAnswers[qId]=val;
+  updateProgress();
+}
+
+function updateProgress(){
+  const qs=QUESTIONS[selectedRole];
+  const ans=qs.filter(q=>currentAnswers.hasOwnProperty(q.id)).length;
+  const pct=Math.round(ans/qs.length*100);
+  document.getElementById('progressLbl').textContent=`${ans} of ${qs.length} answered`;
+  document.getElementById('progressPct').textContent=pct+'%';
+  document.getElementById('progressFill').style.width=pct+'%';
+  const sc=calcScore();
+  if(sc!==null){
+    const color=sc>=90?'var(--green)':sc>=70?'var(--amber)':'var(--red)';
+    document.getElementById('scoreBar').style.display='flex';
+    document.getElementById('sbScore').textContent=sc+'%';
+    document.getElementById('sbScore').style.color=color;
+  } else document.getElementById('scoreBar').style.display='none';
+  document.getElementById('submitBtn').disabled=ans<qs.length;
+}
+
+function calcScore(){
+  const qs=QUESTIONS[selectedRole];
+  const sc=qs.filter(q=>currentAnswers.hasOwnProperty(q.id)&&currentAnswers[q.id]!==null);
+  if(!sc.length)return null;
+  return Math.round(sc.reduce((s,q)=>s+(currentAnswers[q.id]||0),0)/sc.length*100);
+}
+
+async function submitForm(){
+  const name=document.getElementById('submitterName').value.trim();
+  if(!name){toast('Enter your name before submitting');document.getElementById('submitterName').focus();return}
+  const score=calcScore();
+  const answers={};QUESTIONS[selectedRole].forEach(q=>{if(currentAnswers.hasOwnProperty(q.id))answers[q.id]=currentAnswers[q.id]});
+  const acc=document.getElementById('accountabilityField').value;
+  const comments=document.getElementById('commentsField').value.trim();
+  const payload={deployment_id:currentDep.id,role:selectedRole,submitted_by:name,accountability:acc,comments,submitted_at:new Date().toISOString(),answers,score};
+  scores[currentDep.id+'_'+selectedRole]={answers,score,submitted_by:name,accountability:acc,comments};
+  if(SB_ON){
+    try{
+      const res=await sbFetch('/rest/v1/quality_scores',{method:'POST',body:JSON.stringify(payload),headers:{'Prefer':'resolution=merge-duplicates,return=minimal'}});
+      if(!res.ok)throw new Error(res.status);
+    }catch(e){console.error(e);toast('Saved locally — Supabase sync failed')}
+  }
+  const color=score>=90?'var(--green)':score>=70?'var(--amber)':'var(--red)';
+  document.getElementById('bigScore').textContent=score+'%';
+  document.getElementById('bigScore').style.color=color;
+  showView('complete');
+}
+</script>
+</body>
+</html>
