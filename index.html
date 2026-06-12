@@ -1280,6 +1280,7 @@ function renderDeptView(dept){
 
   // Build all data rows as objects for unified sorting
   const makeRow=(p)=>{
+    let extraAfterStatus='';
     const sd=getMsDate(p.id,c.startKey);const ed=c.endKey!==c.startKey?getMsDate(p.id,c.endKey):null;const st=stageStatus(sd,ed||sd);
     let extra='';
     if(dept==='production'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td>';}
@@ -1287,7 +1288,8 @@ function renderDeptView(dept){
     else if(dept==='shipping'){
       const sTicketUrl=p.install_ticket_url||'';
       const sTicketCell=sTicketUrl?'<a href="'+sTicketUrl+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
-      extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'delivery'))+'</td><td class="date-cell">'+sTicketCell+'</td>';
+      extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'delivery'))+'</td>';
+      extraAfterStatus='<td class="date-cell">'+sTicketCell+'</td>';
     }
     else if(dept==='installation'){
       const trainMs=milestones.find(m=>m.project_id===p.id&&m.key==='training');
@@ -1299,7 +1301,7 @@ function renderDeptView(dept){
       const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>`:`<input type="text" value="" placeholder="Paste URL..." data-proj="${p.id}" style="font-size:10px;padding:2px 6px;border:1px solid var(--gray-200);border-radius:4px;width:110px;font-family:var(--font)" onchange="saveInstallTicketUrl('${p.id}',this.value)">`;
       extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';
     }
-    const html='<tr><td style="font-weight:500">'+p.name+'<button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td></tr>';
+    const html='<tr><td style="font-weight:500">'+p.name+'<button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+extraAfterStatus+'</tr>';
     return{_d:sd||'',html};
   };
 
@@ -1309,7 +1311,8 @@ function renderDeptView(dept){
     if(dept==='shipping'){
       const shipTicket=r.install_ticket_url||'';
       const shipTicketCell=shipTicket?'<a href="'+shipTicket+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
-      extra='<td class="date-cell">'+fmt(r.shipDate||r.ship_date)+'</td><td class="date-cell">'+fmt(r.deliveryDate||r.delivery_date)+'</td><td class="date-cell">'+shipTicketCell+'</td>';
+      extra='<td class="date-cell">'+fmt(r.shipDate||r.ship_date)+'</td><td class="date-cell">'+fmt(r.deliveryDate||r.delivery_date)+'</td>';
+      extraAfterStatus='<td class="date-cell">'+shipTicketCell+'</td>';
     }
     else if(dept==='installation'){
       const adTicket=r.install_ticket_url||'';
@@ -1319,7 +1322,7 @@ function renderDeptView(dept){
     else{extra='<td class="date-cell">'+fmt(r.trainingDate||r.training_date)+'</td><td class="date-cell">'+fmt(r.installDate||r.install_date)+'</td>';}
     const editOC='openEditAdHoc(&quot;'+dept+'&quot;,'+origIdx+')';
     const delOC='removeAdHoc(&quot;'+dept+'&quot;,'+origIdx+')';
-    const html='<tr style="background:var(--blue-bg)"><td style="font-weight:500">'+r.name+' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px">Ad hoc</span></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+(r.so||'—')+'</td><td>'+(r.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(r.pm||'—')+'</td>'+extra+'<td><span class="status-chip chip-future">'+(r.status||'Scheduled')+'</span></td><td><button onclick="'+editOC+'" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer">Edit</button> <button onclick="'+delOC+'" style="background:none;border:none;cursor:pointer;color:var(--gray-400)">✕</button></td></tr>';
+    const html='<tr style="background:var(--blue-bg)"><td style="font-weight:500">'+r.name+' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px">Ad hoc</span></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+(r.so||'—')+'</td><td>'+(r.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(r.pm||'—')+'</td>'+extra+'<td><span class="status-chip chip-future">'+(r.status||'Scheduled')+'</span></td>'+extraAfterStatus+'<td><button onclick="'+editOC+'" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer">Edit</button> <button onclick="'+delOC+'" style="background:none;border:none;cursor:pointer;color:var(--gray-400)">✕</button></td></tr>';
     return{_d:sd,html};
   };
 
