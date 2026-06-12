@@ -1039,7 +1039,7 @@ async function quickStatusMs(msId,val){
     const existing=milestoneDone[msId];
     if(!existing){
       const pid=milestones.find(m=>m.id===msId)?.project_id;
-      const{data,error}=await sb.from('milestone_done').insert({milestone_id:msId,project_id:pid,done_by:currentUserName,done_at:new Date().toISOString()}).select().single();
+      const{data,error}=await sb.from('milestone_done').insert({milestone_id:msId,project_id:pid,marked_by:currentUserName}).select().single();
       if(error){console.warn('quickStatusMs error',error);showToast('Save failed ✗');return;}
       if(data)milestoneDone[msId]=data;
     }
@@ -3368,17 +3368,8 @@ function generateDoc(type){
   const safeDate=id=>{const el=document.getElementById(id);if(!el||!el.value)return'';try{return fmt(el.value);}catch(e){return el.value;}};
   let text='';
   if(type==='install'){
-    const scope=g('if-scope')||`1. Deliver and install ${g('if-kiosk')} at ${g('if-client')} location.
-2. Position unit per approved layout.
-3. Connect unit to power and network.
-4. Validate UI load and product display.
-5. Configure and validate payment workflow (if credentials available).
-6. Perform end-to-end hardware and software testing.
-7. Capture installation photos and system validation evidence.
-8. Complete User Acceptance Checklist and obtain sign-off.
-9. Submit installation completion documentation to PM.
-
-SCOPE OF WORK — KIOSK INSTALLATION AND VALIDATION
+    const scope=g('if-scope')||`SCOPE OF WORK — KIOSK INSTALLATION AND VALIDATION
+──────────────────────────────────────────────────
 ──────────────────────────────────────────────────
 1. Kiosk Installation and Setup
    • Unbox and assemble the Kiosk at the designated site.
