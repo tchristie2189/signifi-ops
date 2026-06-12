@@ -1446,7 +1446,7 @@ function renderVinyl(){
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vinylDateSync(${origIdx},this.value,'vinyl')" title="Syncs with project overview"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vinylDateSync(${origIdx},this.value,'ship')" title="Syncs with project overview"></td>
       <td style="${readStyle}">${item.pm||'—'}</td>
-      <td><select class="sched-select" style="min-width:130px" onchange="vs('${item.id || origIdx}','formFactor',this.value)"><option value="">—</option>${getProductTypes().map(t=>`<option${t===item.formFactor?' selected':''}>` +t+`</option>`).join('')}</select></td>
+      <td><select class="sched-select" multiple style="min-width:140px;height:58px;font-size:11px" title="Hold Ctrl/Cmd to select multiple" onchange="vsMulti('${item.id || origIdx}','formFactor',this)">${getProductTypes().map(t=>'<option'+((','+item.formFactor+',').includes(','+t+',')?' selected':'')+'>'+t+'</option>').join('')}</select></td>
       <td><select class="sched-select" onchange="vs('${item.id || origIdx}','status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
       <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">✕</button></td>
     </tr>`;
@@ -1564,6 +1564,10 @@ function renderPlanogram(){
 function sortPlan(key){
   planogramSchedule.sort((a,b)=>{const av=a[key]||'';const bv=b[key]||'';return av.localeCompare(bv);});
   renderPlanogram();showToast('Sorted by '+key);
+}
+function vsMulti(itemId,k,selectEl){
+  const selected=[...selectEl.selectedOptions].map(o=>o.value).filter(Boolean).join(', ');
+  vs(itemId,k,selected);
 }
 function vs(itemId,k,v){
   const item=typeof itemId==='number'?vinylSchedule[itemId]:vinylSchedule.find(x=>x.id===itemId)||vinylSchedule[itemId];
