@@ -1284,7 +1284,11 @@ function renderDeptView(dept){
     let extra='';
     if(dept==='production'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td>';}
     else if(dept==='quality'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'vinyl'))+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'uat'))+'</td>';}
-    else if(dept==='shipping'){extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'delivery'))+'</td>';}
+    else if(dept==='shipping'){
+      const sTicketUrl=p.install_ticket_url||'';
+      const sTicketCell=sTicketUrl?'<a href="'+sTicketUrl+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
+      extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'delivery'))+'</td><td class="date-cell">'+sTicketCell+'</td>';
+    }
     else if(dept==='installation'){
       const trainMs=milestones.find(m=>m.project_id===p.id&&m.key==='training');
       const instMs=milestones.find(m=>m.project_id===p.id&&m.key==='installation');
@@ -1295,7 +1299,7 @@ function renderDeptView(dept){
       const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>`:`<input type="text" value="" placeholder="Paste URL..." data-proj="${p.id}" style="font-size:10px;padding:2px 6px;border:1px solid var(--gray-200);border-radius:4px;width:110px;font-family:var(--font)" onchange="saveInstallTicketUrl('${p.id}',this.value)">`;
       extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';
     }
-    const html='<tr><td style="font-weight:500"><span style="cursor:pointer;color:var(--blue);text-decoration:underline" onclick="goToProjPage(\"'+p.id+'\")">'+p.name+'</span></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+(hasFilter?'<td></td>':'')+'</tr>';
+    const html='<tr><td style="font-weight:500">'+p.name+'<button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td></tr>';
     return{_d:sd||'',html};
   };
 
