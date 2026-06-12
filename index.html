@@ -427,7 +427,7 @@ const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end',uat:'UAT',installation:'Installation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','po-release':'PO Release','mo-release':'MO Release',other:'Other'};
 const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa',uat:'ev-uat',installation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
-const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date','Print Day'];
+const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date','Print Day','Vacation'];
 
 let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={};
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
@@ -1270,7 +1270,7 @@ function renderDeptView(dept){
   const f=hasFilter?deptFilter[dept]:null;
   const mainKey=dept==='shipping'?'shipping':'installation';
 
-  let filteredProjects=filterBySales(filterBySales(filterByPM(activeProjects(dept))));
+  let filteredProjects=filterBySales(filterByPM(activeProjects(dept)));
   if(hasFilter&&f){
     if(f.search){const q=f.search.toLowerCase();filteredProjects=filteredProjects.filter(p=>(p.name||'').toLowerCase().includes(q)||(p.so_number||'').toLowerCase().includes(q)||(p.client||'').toLowerCase().includes(q));}
     if(f.dateFrom){filteredProjects=filteredProjects.filter(p=>{const d=getMsDate(p.id,mainKey);return!d||d>=f.dateFrom;});}
@@ -1303,7 +1303,7 @@ function renderDeptView(dept){
     const sd=dept==='shipping'?(r.shipDate||r.ship_date||''):(r.installDate||r.install_date||'');
     let extra='';
     if(dept==='shipping'){
-      const shipTicket=p.install_ticket_url||'';
+      const shipTicket=r.install_ticket_url||'';
       const shipTicketCell=shipTicket?'<a href="'+shipTicket+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
       extra='<td class="date-cell">'+fmt(r.shipDate||r.ship_date)+'</td><td class="date-cell">'+fmt(r.deliveryDate||r.delivery_date)+'</td><td class="date-cell">'+shipTicketCell+'</td>';
     }
@@ -1399,7 +1399,7 @@ function renderVinyl(){
   const rows=filtered.map((item,i)=>{
     const origIdx=vinylSchedule.indexOf(item);
     const readStyle='font-size:12px;color:var(--gray-700);padding:4px 2px;';
-    return`<tr draggable="true" data-idx="${origIdx}" data-type="vinyl" ondragstart="dragStart(event,${origIdx},'vinyl')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'vinyl')" ondragleave="dragLeave(event)" style="${item.status==='Print Day'?'background:#fff0f0;color:#991b1b;font-weight:600;':''}">
+    return`<tr draggable="true" data-idx="${origIdx}" data-type="vinyl" ondragstart="dragStart(event,${origIdx},'vinyl')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'vinyl')" ondragleave="dragLeave(event)" style="${item.status==='Print Day'?'background:#fff0f0;color:#991b1b;font-weight:600;':item.status==='Vacation'?'background:#fefce8;color:#854d0e;font-weight:600;':''}">
       <td><span class="drag-handle">⠿</span></td>
       <td><span class="priority-num">${item.priority}</span></td>
       <td style="${readStyle}">${item.so||'—'}</td>
@@ -1472,7 +1472,7 @@ function renderPlanogram(){
   const activeFilters=[planFilter.status,planFilter.search,planFilter.dateFrom,planFilter.dateTo].filter(Boolean).length;
   const rows=filtered.map((item,i)=>{
     const origIdx=planogramSchedule.indexOf(item);
-    return`<tr draggable="true" data-idx="${origIdx}" data-type="planogram" ondragstart="dragStart(event,${origIdx},'planogram')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'planogram')" ondragleave="dragLeave(event)">
+    return`<tr draggable="true" data-idx="${origIdx}" data-type="planogram" style="${item.status==='Vacation'?'background:#fefce8;color:#854d0e;font-weight:600;':''}" ondragstart="dragStart(event,${origIdx},'planogram')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'planogram')" ondragleave="dragLeave(event)">
       <td><span class="drag-handle">⠿</span></td><td><span class="priority-num">${item.priority||i+1}</span></td>
       <td><input class="sched-input" value="${item.so||''}" style="width:100px" onchange="ps2('${item.id}','so',this.value)"></td>
       <td><input class="sched-input" value="${item.client||''}" onchange="ps2('${item.id}','client',this.value)"></td>
@@ -1533,10 +1533,19 @@ function vs(itemId,k,v){
   if(!item)return;
   item[k]=v;
   if(item.id){
-    // Map local keys to DB column names
     const colMap={so:'so',client:'client',name:'name',vinylType:'vinyl_type',shipDate:'ship_date',pm:'pm',formFactor:'form_factor',status:'status'};
     const col=colMap[k]||k;
     sb.from('vinyl_schedule').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('vs save error',error);});
+  }
+  // Instantly update row colour for Print Day / Vacation
+  if(k==='status'){
+    const idx=vinylSchedule.indexOf(item);
+    const row=document.querySelector('tr[data-idx="'+idx+'"][data-type="vinyl"]');
+    if(row){
+      row.style.background=v==='Print Day'?'#fff0f0':v==='Vacation'?'#fefce8':'';
+      row.style.color=v==='Print Day'?'#991b1b':v==='Vacation'?'#854d0e':'';
+      row.style.fontWeight=(v==='Print Day'||v==='Vacation')?'600':'';
+    }
   }
 }
 function ps2(itemId,k,v){
@@ -1644,7 +1653,7 @@ function addSchedRow(type){
           `}
           <div class="field"><label>Status</label>
             <select id="asr-status">
-              ${['Scheduled','In progress','Complete','On hold','Needs date'].map(s=>`<option>${s}</option>`).join('')}
+              ${STATUS_OPTS.map(s=>`<option>${s}</option>`).join('')}
             </select>
           </div>
         </div>
