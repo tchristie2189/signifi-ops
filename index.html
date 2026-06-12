@@ -706,18 +706,21 @@ async function loadAll(){
 
   // Build vinyl schedule: saved rows + any projects not yet in the table
   const vinylProjectIds=new Set(savedVinyl.map(v=>v.project_id).filter(Boolean));
-  const newVinylRows=projects.filter(p=>!vinylProjectIds.has(p.id)).map((p,i)=>{
+  const newVinylRows=projects.filter(p=>!vinylProjectIds.has(p.id)).flatMap((p,i)=>{
     const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl');
     const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping');
-    return{id:null,project_id:p.id,name:p.name,so:p.so_number,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+1,is_standalone:false};
+    const soList=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+    // One row per SO if multiple, otherwise one row with full SO string
+    const entries=soList.length>1?soList:[p.so_number||''];
+    return entries.map((so,j)=>({id:null,project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),so,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+j+1,is_standalone:false}));
   });
-  // Merge saved rows with fresh project data (dates/pm/type always from project)
+  // Merge saved rows with fresh project data
   vinylSchedule=savedVinyl.map(v=>{
     if(v.is_standalone)return{...v,id:v.id,vinylType:v.vinyl_type,shipDate:v.ship_date,formFactor:v.form_factor};
     const p=projects.find(x=>x.id===v.project_id);
     const vm=p?milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'):null;
     const sh=p?milestones.find(m=>m.project_id===p.id&&m.key==='shipping'):null;
-    return{...v,vinylType:p?.vinyl_type||v.vinyl_type||'',date:vm?.date||v.date||'',shipDate:sh?.date||v.ship_date||'',pm:p?.pm||v.pm||'',formFactor:p?.form_factor||v.form_factor||'',name:p?.name||v.name,so:p?.so_number||v.so,client:p?.client||v.client};
+    return{...v,vinylType:p?.vinyl_type||v.vinyl_type||'',date:vm?.date||v.date||'',shipDate:sh?.date||v.ship_date||'',pm:p?.pm||v.pm||'',formFactor:v.form_factor||p?.form_factor||'',name:v.name||p?.name||'',so:v.so||p?.so_number||'',client:v.client||p?.client||''};
   }).concat(newVinylRows)
   // Sort: rows with dates first (by date asc), missing dates at bottom
   .sort((a,b)=>{
@@ -962,9 +965,12 @@ function renderOverview(){
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
   const proj=activeProjects('overview').find(p=>p.id===selectedProjId)||projects.find(p=>p.id===selectedProjId);
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
-  // Group milestones by SO if project has multiple SOs
+  // Check if milestones are already split by SO
   const soList=(proj?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
-  const buildMsHtml=(ms)=>ms.map(m=>{
+  const hasSoTags=projMs.some(m=>m.so_tag);
+  const canSplit=soList.length>1&&!hasSoTags;
+
+  const buildMsHtml=(ms,soLabel='')=>ms.map(m=>{
     const isDone=isMilestoneEffectivelyDone(m);
     const isManualDone=isMilestoneDone(m);
     const isOverdue=isMilestoneOverdue(m);
@@ -980,19 +986,37 @@ function renderOverview(){
         <div class="ms-type">${TYPE_LBL[m.key]||m.key}</div>
         <button onclick="toggleMilestoneDone('${m.id}','${m.project_id}',event)" style="background:${isManualDone?'var(--success)':'transparent'};border:1px solid ${isManualDone?'var(--success)':'var(--gray-300)'};border-radius:10px;padding:1px 7px;font-size:10px;cursor:pointer;color:${isManualDone?'white':'var(--gray-500)'};font-family:var(--font);flex-shrink:0">${isManualDone?'✓ Done':'Mark done'}</button>
       </div>
-      <div class="ms-label" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')" style="cursor:pointer">${m.label}${slDot}${slippageTag}</div>
-      <div class="ms-date" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')" style="cursor:pointer">${fmtFull(m.date)}</div>
+      <div class="ms-label" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}','${m.so_tag||''}','${m.project_id||''}')" style="cursor:pointer">${m.label}${slDot}${slippageTag}</div>
+      <div class="ms-date" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}','${m.so_tag||''}','${m.project_id||''}')" style="cursor:pointer">${fmtFull(m.date)}</div>
       <div class="ms-days ${st.dcls}">${st.txt}</div>
       ${hist.length&&origDate?`<div style="font-size:9px;color:var(--gray-400);margin-top:1px">Orig: ${fmt(origDate)}</div>`:''}
     </div>`;
   }).join('');
-  // If multiple SOs, group milestones under each SO header
-  const msHtml=soList.length>1
-    ?soList.map(so=>{
-        const soMs=projMs.filter(m=>(m.so_number||proj?.so_number||'').includes(so)||true);
-        return`<div style="grid-column:1/-1;margin:8px 0 4px"><div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em;padding:4px 8px;background:var(--gray-50);border-radius:4px;border-left:3px solid var(--red)">SO: ${so}</div></div>`+buildMsHtml(soMs);
-      }).join('')
-    :buildMsHtml(projMs);
+  // SO grouping: use so_tag if split, otherwise show split button
+  const splitBtnHtml=canSplit?`<div style="grid-column:1/-1;margin:4px 0 12px">
+    <div style="background:#fffbeb;border:1px solid #d97706;border-radius:8px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div>
+        <div style="font-size:12px;font-weight:600;color:#92400e">This project has ${soList.length} SOs (${soList.join(', ')})</div>
+        <div style="font-size:11px;color:#a16207;margin-top:2px">Split milestones by SO to manage each independently — dates start identical but can deviate</div>
+      </div>
+      <button onclick="splitMilestonesBySO('${proj.id}')" style="font-size:12px;padding:7px 16px;border-radius:var(--radius);border:none;background:#d97706;color:white;cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">⚡ Split by SO</button>
+    </div>
+  </div>`:'';
+
+  let msHtml='';
+  if(hasSoTags){
+    // Milestones are split — group by so_tag
+    msHtml=soList.map(so=>{
+      const soMs=projMs.filter(m=>m.so_tag===so);
+      const soHeader=`<div style="grid-column:1/-1;margin:10px 0 4px"><div style="display:flex;align-items:center;justify-content:space-between;padding:5px 10px;background:var(--gray-50);border-radius:6px;border-left:3px solid var(--red)">
+        <span style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em">SO: ${so}</span>
+        <button onclick="pushSODatesToAll('${proj.id}','${so}')" style="font-size:10px;padding:2px 10px;border-radius:8px;border:1px solid var(--gray-300);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font)">📅 Push to all SOs</button>
+      </div></div>`;
+      return soHeader+buildMsHtml(soMs,so);
+    }).join('');
+  } else {
+    msHtml=splitBtnHtml+buildMsHtml(projMs,'');
+  }
   const pillsHtml=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
     <div class="proj-pills" style="margin-bottom:0;flex:1">${filterBySales(filterByPM(activeProjects('overview'))).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
@@ -1422,7 +1446,7 @@ function renderVinyl(){
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vinylDateSync(${origIdx},this.value,'vinyl')" title="Syncs with project overview"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vinylDateSync(${origIdx},this.value,'ship')" title="Syncs with project overview"></td>
       <td style="${readStyle}">${item.pm||'—'}</td>
-      <td><input class="sched-input" value="${item.formFactor||''}" placeholder="Form factor" style="width:110px" onchange="vs('${item.id || origIdx}','formFactor',this.value)"></td>
+      <td><select class="sched-select" style="min-width:130px" onchange="vs('${item.id || origIdx}','formFactor',this.value)"><option value="">—</option>${getProductTypes().map(t=>`<option${t===item.formFactor?' selected':''}>` +t+`</option>`).join('')}</select></td>
       <td><select class="sched-select" onchange="vs('${item.id || origIdx}','status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
       <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">✕</button></td>
     </tr>`;
@@ -2242,7 +2266,53 @@ async function saveEditProj(id){
   if(newPm)await sb.from('vinyl_schedule').update({pm:newPm}).eq('project_id',id).eq('is_standalone',false);
   closeModal();showToast('Saved ✓');await loadAll();
 }
-function openEditMs(id,label,date){
+// ── SO SPLITTING ────────────────────────────────────────────
+async function splitMilestonesBySO(projId){
+  const proj=projects.find(p=>p.id===projId);
+  if(!proj)return;
+  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  if(soList.length<2){showToast('Project needs multiple SOs to split');return;}
+  if(!confirm('Split milestones into '+soList.length+' groups ('+soList.join(', ')+')? This will create a copy of all milestones for each SO.'))return;
+  const existingMs=milestones.filter(m=>m.project_id===projId);
+  const newMs=[];
+  for(const so of soList){
+    for(const m of existingMs){
+      newMs.push({project_id:projId,key:m.key,label:m.label,date:m.date,
+        original_date:m.original_date||m.date,so_tag:so,changed_by:currentUserName});
+    }
+  }
+  await sb.from('milestones').delete().eq('project_id',projId);
+  if(newMs.length){
+    const{error}=await sb.from('milestones').insert(newMs);
+    if(error){alert('Error splitting: '+error.message);return;}
+  }
+  showToast('Split into '+soList.length+' SO groups ✓');
+  await loadAll();
+}
+async function pushSODatesToAll(projId,fromSO){
+  const proj=projects.find(p=>p.id===projId);
+  if(!proj)return;
+  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const otherSOs=soList.filter(s=>s!==fromSO);
+  if(!otherSOs.length)return;
+  if(!confirm('Push all dates from SO '+fromSO+' to '+otherSOs.join(', ')+'? This overwrites their dates.'))return;
+  const sourceMs=milestones.filter(m=>m.project_id===projId&&m.so_tag===fromSO);
+  let updated=0;
+  for(const so of otherSOs){
+    const targetMs=milestones.filter(m=>m.project_id===projId&&m.so_tag===so);
+    for(const src of sourceMs){
+      if(!src.date)continue;
+      const tgt=targetMs.find(m=>m.key===src.key);
+      if(tgt){
+        await sb.from('milestones').update({date:src.date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',tgt.id);
+        tgt.date=src.date;updated++;
+      }
+    }
+  }
+  showToast('Pushed '+updated+' dates to '+otherSOs.length+' other SOs ✓');
+  renderOverview();
+}
+function openEditMs(id,label,date,soTag,projId){
   const ms=milestones.find(m=>m.id===id);
   const history=milestoneHistory[id]||[];
   const originalDate=ms?.original_date||null;
@@ -2279,31 +2349,63 @@ async function saveEditMs(id,oldLabel,oldDate){
   const ms=milestones.find(m=>m.id===id);
   const proj=ms?projects.find(p=>p.id===ms.project_id):null;
 
-  // Build update payload
   const update={label:newLabel,date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()};
-
-  // Set original_date if this is the first time a date is being set
-  if(!ms?.original_date&&newDate){
-    update.original_date=newDate;
-  }
+  if(!ms?.original_date&&newDate)update.original_date=newDate;
 
   const{error}=await sb.from('milestones').update(update).eq('id',id);
   if(error){alert('Error: '+error.message);return;}
 
-  // Record history if date actually changed
+  // Update local state
+  if(ms){ms.date=newDate;ms.label=newLabel;}
+
+  // Record history if date changed
   if(oldDate&&newDate&&oldDate!==newDate){
-    await sb.from('milestone_history').insert({
-      milestone_id:id,
-      project_id:proj?.id||null,
-      old_date:oldDate,
-      new_date:newDate,
-      changed_by:currentUserName,
-      reason:reason||null,
-    });
+    await sb.from('milestone_history').insert({milestone_id:id,project_id:proj?.id||null,old_date:oldDate,new_date:newDate,changed_by:currentUserName,reason:reason||null});
     await logActivity('updated date',newLabel,newLabel,proj?.id||null,oldDate,newDate);
   }
 
+  // If this milestone has a so_tag and date changed, offer to push to all SOs
+  if(ms?.so_tag&&newDate&&oldDate!==newDate&&proj){
+    const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const otherSOs=soList.filter(s=>s!==ms.so_tag);
+    if(otherSOs.length){
+      closeModal();
+      // Show push prompt
+      document.getElementById('modal-root').innerHTML=`
+      <div class="modal-backdrop">
+        <div class="modal" style="width:420px" onclick="event.stopPropagation()">
+          <div class="modal-head"><span class="modal-title">📅 Push to other SOs?</span><button class="modal-close" onclick="closeModal();loadAll()">×</button></div>
+          <div style="padding:16px;font-size:13px;color:var(--gray-600)">
+            <strong>${newLabel}</strong> changed to <strong>${fmt(newDate)}</strong> on <strong>SO ${ms.so_tag}</strong>.<br><br>
+            Push this date to the other ${otherSOs.length} SO${otherSOs.length>1?'s':''}: <strong>${otherSOs.join(', ')}</strong>?
+          </div>
+          <div class="modal-actions">
+            <button class="btn" onclick="closeModal();loadAll()">Just this SO</button>
+            <button class="btn btn-primary" onclick="pushSODateToOthers('${proj.id}','${ms.so_tag}','${ms.key}','${newDate}','${newLabel}')">Push to all SOs →</button>
+          </div>
+        </div>
+      </div>`;
+      return;
+    }
+  }
+
   closeModal();showToast('Updated ✓');await loadAll();
+}
+
+async function pushSODateToOthers(projId,fromSO,msKey,newDate,msLabel){
+  const proj=projects.find(p=>p.id===projId);
+  if(!proj)return;
+  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const otherSOs=soList.filter(s=>s!==fromSO);
+  let updated=0;
+  for(const so of otherSOs){
+    const tgt=milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.key===msKey);
+    if(tgt){
+      await sb.from('milestones').update({date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',tgt.id);
+      tgt.date=newDate;updated++;
+    }
+  }
+  closeModal();showToast('Pushed to '+updated+' other SOs ✓');await loadAll();
 }
 async function deleteMs(id){if(!confirm('Remove this milestone?'))return;const ms=milestones.find(m=>m.id===id);await sb.from('milestones').delete().eq('id',id);await logActivity('removed milestone',ms?.label||'',ms?.label||'',ms?.project_id||null,ms?.date,null);closeModal();showToast('Removed');await loadAll();}
 async function deleteProj(id){if(!confirm('Delete this project? Cannot be undone.'))return;const proj=projects.find(p=>p.id===id);await sb.from('milestones').delete().eq('project_id',id);await sb.from('projects').delete().eq('id',id);await logActivity('deleted project',proj?.name||'',proj?.so_number||'',null,null,null);selectedProjId=null;closeModal();showToast('Deleted');await loadAll();}
@@ -2529,9 +2631,12 @@ function renderProjPageBody(){
     <td class="pp-actions"><button class="pp-del" onclick="ppDelTeam('${m.id}')">✕</button></td>
   </tr>`).join('');
 
-  // Milestones from hub — show ALL milestones not just preset keys
+  // Milestones from hub — group by SO if split
   const ppProj=projects.find(p=>p.id===ppProjId);
-  const msHtml=pMs.sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(m=>{
+  const ppHasSoTags=pMs.some(m=>m.so_tag);
+  const ppSoList=(ppProj?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+
+  const buildPPMsRow=(m)=>{
     const isDone=isMilestoneEffectivelyDone(m);
     const isManualDone=isMilestoneDone(m);
     const isOverdue=isMilestoneOverdue(m);
@@ -2548,19 +2653,34 @@ function renderProjPageBody(){
     else if(d<=7){chip='chip-atrisk';lbl='In '+d+'d';}
     else{chip='chip-future';lbl=fmt(m.date);}
     const slDot=ci?.stoplight?`<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${ci.stoplight==='green'?'#22c55e':ci.stoplight==='yellow'?'#eab308':'#ef4444'};margin-left:4px" title="Dept: ${ci.stoplight}"></span>`:'';
-    // Deviation indicator for children
     const dev=ppProj?.parent_project_id?milestoneDeviations[ppProjId]?.[m.key]:null;
-    const devTag=dev?`<span style="font-size:9px;padding:1px 5px;border-radius:8px;background:#ede9fe;color:#7c3aed;font-weight:600;margin-left:4px" title="Deviated from master (was ${dev.master_date?fmt(dev.master_date):'unknown'})">🔀 deviated</span>`:'';
+    const devTag=dev?`<span style="font-size:9px;padding:1px 5px;border-radius:8px;background:#ede9fe;color:#7c3aed;font-weight:600;margin-left:4px" title="Deviated from master">🔀 deviated</span>`:'';
     return`<tr>
       <td style="font-weight:500">${m.label}${slDot}${devTag}</td>
       <td class="date-cell">${fmt(m.date)}</td>
       <td><span class="status-chip ${chip}">${lbl}</span></td>
       <td style="display:flex;gap:4px;align-items:center">
-        <button class="pp-del" style="color:var(--blue);font-size:11px" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}')">edit</button>
+        <button class="pp-del" style="color:var(--blue);font-size:11px" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}','${m.so_tag||''}','${ppProjId}')">edit</button>
         <button onclick="toggleMilestoneDone('${m.id}','${ppProjId}',event)" style="background:${isManualDone?'var(--success)':'transparent'};border:1px solid ${isManualDone?'var(--success)':'var(--gray-300)'};border-radius:10px;padding:1px 6px;font-size:10px;cursor:pointer;color:${isManualDone?'white':'var(--gray-500)'};font-family:var(--font)">${isManualDone?'✓':'done'}</button>
       </td>
     </tr>`;
-  }).join('');
+  };
+
+  let msHtml='';
+  if(ppHasSoTags&&ppSoList.length>1){
+    // Group by SO with headers + push button
+    msHtml=ppSoList.map(so=>{
+      const soMs=pMs.filter(m=>m.so_tag===so).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+      return`<tr><td colspan="4" style="padding:6px 8px 2px;background:var(--gray-50)">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em;border-left:3px solid var(--red);padding-left:6px">SO: ${so}</span>
+          <button onclick="pushSODatesToAll('${ppProjId}','${so}')" style="font-size:10px;padding:2px 8px;border-radius:6px;border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font)">📅 Push to all</button>
+        </div>
+      </td></tr>`+soMs.map(buildPPMsRow).join('');
+    }).join('');
+  } else {
+    msHtml=pMs.sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(buildPPMsRow).join('');
+  }
 
   // Action items
   const aiHtml=ppData.actions.map(a=>`<tr data-id="${a.id}">
@@ -3157,7 +3277,7 @@ function renderGenDocs(){
           <input list="gd-proj-list" id="gd-proj-search" placeholder="Type to search..." value="${selectedDocProjId?projects.find(p=>p.id===selectedDocProjId)?.name||'':''}"
             style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);flex:1;min-width:0"
             oninput="onDocProjSearch(this.value)">
-          <datalist id="gd-proj-list">${projects.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(p=>`<option value="${(p.name+(p.so_number?' — '+p.so_number:'')).replace(/"/g,'&quot;')}">`).join('')}</datalist>
+          <datalist id="gd-proj-list">${projects.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(p=>'<option value="'+(p.name+(p.so_number?' — '+p.so_number:'')).replace(/"/g,'&quot;')+'">' ).join('')}</datalist>
           <select style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);max-width:260px"
             onchange="selectedDocProjId=this.value;loadDocState(this.value).then(()=>renderGenDocs())">
             <option value="">Select project...</option>
