@@ -2771,7 +2771,7 @@ function renderProjPageBody(){
   const LINK_CATS=[
     {cat:'Meetings',items:[{label:'Kickoff deck',key:'kickoff_deck'},{label:'Kickoff recording',key:'kickoff_rec'},{label:'Meeting minutes',key:'meeting_min'}]},
     {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Installation Ticket',key:'install_ticket'},{label:'Vision Training',key:'vision_training'}]},
-    {cat:'Custom',items:[{label:'Custom link 1',key:'custom_1'},{label:'Custom link 2',key:'custom_2'},{label:'Custom link 3',key:'custom_3'}]},
+    {cat:'Custom',items:[{label:'Custom link 1',key:'custom_1'},{label:'Custom link 2',key:'custom_2'},{label:'Custom link 3',key:'custom_3'},{label:'Custom link 4',key:'custom_4'},{label:'Custom link 5',key:'custom_5'}]},
     {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira / UI Task',key:'jira'},{label:'QA Task',key:'qa_task'},{label:'Product Template',key:'product_template'},{label:'Badge Reader',key:'badge_reader'},{label:'Employee List',key:'employee_list'},{label:'Facility Site Survey',key:'facility_survey'},{label:'IT Site Survey',key:'it_survey'},{label:'Odoo Task',key:'odoo'},{label:'Vinyl Render Odoo',key:'vinyl_odoo'},{label:'Client Portal',key:'client_portal'}]},
   ];
   // Start with anything saved in project_links table
@@ -2788,15 +2788,18 @@ function renderProjPageBody(){
     <div style="margin-bottom:10px">
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">${cat.cat}</div>
       ${cat.items.map(item=>{
-        const entries=linkMap[item.label]||[];
+        const isCustom=cat.cat==='Custom';
+        const labelDisplay=isCustom
+          ?`<input class="pp-link-label" value="${item.label}" placeholder="Name this link..." style="cursor:text;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;font-size:11px;color:var(--gray-600);width:105px;font-family:var(--font)" onblur="renamePPLink('${item.label}',this.value)">`
+          :`<span class="pp-link-label">${item.label}</span>`;
         const rows=entries.length?entries.map((e,i)=>`
           <div class="pp-link-item" style="padding-left:${i>0?'110px':'0'}">
-            ${i===0?`<span class="pp-link-label">${item.label}</span>`:'<span class="pp-link-label" style="opacity:0"> </span>'}
+            ${i===0?labelDisplay:'<span class="pp-link-label" style="opacity:0"> </span>'}
             <input class="pp-link-input" value="${e.url.replace(/"/g,'&quot;')}" placeholder="https://..." onchange="updatePPLink('${item.label}',${i},this.value)" onblur="updatePPLink('${item.label}',${i},this.value)" data-link="${item.label}">
             <a href="${e.url}" target="_blank" class="pp-link-go" title="Open">↗</a>
             <button onclick="removePPLink('${item.label}',${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px" title="Remove">✕</button>
           </div>`).join(''):`<div class="pp-link-item">
-            <span class="pp-link-label">${item.label}</span>
+            ${labelDisplay}
             <input class="pp-link-input" value="" placeholder="https://..." onchange="savePPLink('${item.label}',this.value)" onblur="if(this.value)savePPLink('${item.label}',this.value)" data-link="${item.label}">
             <span class="pp-link-go"> </span>
           </div>`;
@@ -4520,13 +4523,20 @@ async function saveProjInstDates(projId){
 }
 async function renamePPLink(oldLabel,newLabel){
   if(!newLabel.trim()||newLabel===oldLabel)return;
-  // Update all project_links rows with this label
   const entries=(ppData.links||[]).filter(l=>l.label===oldLabel);
-  for(const e of entries){
-    await sb.from('project_links').update({label:newLabel.trim()}).eq('id',e.id);
-    e.label=newLabel.trim();
+  if(entries.length){
+    // Update existing rows
+    for(const e of entries){
+      await sb.from('project_links').update({label:newLabel.trim()}).eq('id',e.id);
+      e.label=newLabel.trim();
+    }
+  } else {
+    // No row yet — insert a placeholder so the name persists
+    const{data}=await sb.from('project_links').insert({project_id:ppProjId,label:newLabel.trim(),url:'',category:'custom',sort_order:ppData.links.length}).select().single();
+    if(data)ppData.links.push(data);
   }
   showPPSaved();
+  showToast('Link name saved ✓');
 }
 function openLinksPopout(){
   const proj=projects.find(p=>p.id===ppProjId)||{};
