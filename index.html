@@ -2235,28 +2235,94 @@ function openEditProj(id){
         <div class="field full"><label>Notes</label><textarea id="ep-notes" style="min-height:55px">${proj.notes||''}</textarea></div>
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">🔗 Links — auto-populate into Generate Docs</div>
+      <div style="font-size:11px;color:var(--blue);background:var(--blue-bg);border:1px solid #bfdbfe;border-radius:var(--radius);padding:8px 12px;margin-bottom:8px">
+        💡 Use <strong>✕ Clear</strong> to fully remove a link. Clearing saves it as blank so it won't reappear.
+      </div>
       <div class="form-grid" style="margin-bottom:12px">
-        <div class="field full"><label>Odoo task URL</label><input id="ep-odoo" value="${proj.odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..."></div>
-        <div class="field full"><label>Jira / UI task URL</label><input id="ep-jira" value="${proj.ui_task_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..."></div>
-        <div class="field full"><label>QA task URL</label><input id="ep-qa" value="${proj.qa_task_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..."></div>
-        <div class="field full"><label>Product template URL</label><input id="ep-product" value="${proj.product_template_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..."></div>
-        <div class="field full"><label>Badge reader URL</label><input id="ep-badge" value="${proj.badge_reader_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..."></div>
-        <div class="field full"><label>Employee list URL</label><input id="ep-employee" value="${proj.employee_list_url||''}" placeholder="SharePoint or Jira link..."></div>
-        <div class="field full"><label>Facility Site Survey Review URL</label><input id="ep-facility-survey" value="${proj.facility_survey_url||''}" placeholder="https://..."></div>
-        <div class="field full"><label>IT Site Survey Review URL</label><input id="ep-it-survey" value="${proj.it_survey_url||''}" placeholder="https://..."></div>
+        <div class="field full">
+          <label style="display:flex;align-items:center;justify-content:space-between">Odoo task URL
+            <button type="button" onclick="clearEpField('ep-odoo')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
+          </label>
+          <input id="ep-odoo" value="${proj.odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..." style="font-family:var(--mono);font-size:12px">
+        </div>
+        <div class="field full">
+          <label style="display:flex;align-items:center;justify-content:space-between">Jira / UI task URL
+            <button type="button" onclick="clearEpField('ep-jira')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
+          </label>
+          <input id="ep-jira" value="${proj.ui_task_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px">
+        </div>
+        <div class="field full">
+          <label style="display:flex;align-items:center;justify-content:space-between">QA task URL
+            <button type="button" onclick="clearEpField('ep-qa')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
+          </label>
+          <input id="ep-qa" value="${proj.qa_task_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px">
+        </div>
+        <div class="field full">
+          <label style="display:flex;align-items:center;justify-content:space-between">Product template URL
+            <button type="button" onclick="clearEpField('ep-product')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
+          </label>
+          <input id="ep-product" value="${proj.product_template_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px">
+        </div>
+        <div class="field full">
+          <label style="display:flex;align-items:center;justify-content:space-between">Badge reader URL
+            <button type="button" onclick="clearEpField('ep-badge')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
+          </label>
+          <input id="ep-badge" value="${proj.badge_reader_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px">
+        </div>
+        <div class="field full">
+          <label style="display:flex;align-items:center;justify-content:space-between">Employee list URL
+            <button type="button" onclick="clearEpField('ep-employee')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
+          </label>
+          <input id="ep-employee" value="${proj.employee_list_url||''}" placeholder="SharePoint or Jira link..." style="font-family:var(--mono);font-size:12px">
+        </div>
+        <div class="field full">
+          <label style="display:flex;align-items:center;justify-content:space-between">Facility Site Survey Review URL
+            <button type="button" onclick="clearEpField('ep-facility-survey')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
+          </label>
+          <input id="ep-facility-survey" value="${proj.facility_survey_url||''}" placeholder="https://..." style="font-family:var(--mono);font-size:12px">
+        </div>
+        <div class="field full">
+          <label style="display:flex;align-items:center;justify-content:space-between">IT Site Survey Review URL
+            <button type="button" onclick="clearEpField('ep-it-survey')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
+          </label>
+          <input id="ep-it-survey" value="${proj.it_survey_url||''}" placeholder="https://..." style="font-family:var(--mono);font-size:12px">
+        </div>
         <div class="field"><label>Naming convention</label><input id="ep-naming" value="${proj.naming_convention||''}" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono)"></div>
         <div class="field full"><label>Installation Address</label><input id="ep-address" value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
-        <div class="field full"><label>Kickoff Deck URL</label><input id="ep-kickoff-deck" value="${proj.kickoff_deck_url||''}" placeholder="https://..."></div>
-        <div class="field full"><label>Installation Ticket URL</label><input id="ep-install-ticket" value="${proj.install_ticket_url||''}" placeholder="https://..."></div>
-        <div class="field full"><label>Vision Training URL</label><input id="ep-vision-training" value="${proj.vision_training_url||''}" placeholder="https://..."></div>
-        <div class="field full"><label>Vinyl Render Odoo URL</label><input id="ep-vinyl-odoo" value="${proj.vinyl_odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..."></div>
-
+        <div class="field full">
+          <label style="display:flex;align-items:center;justify-content:space-between">Kickoff Deck URL
+            <button type="button" onclick="clearEpField('ep-kickoff-deck')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
+          </label>
+          <input id="ep-kickoff-deck" value="${proj.kickoff_deck_url||''}" placeholder="https://..." style="font-family:var(--mono);font-size:12px">
+        </div>
+        <div class="field full">
+          <label style="display:flex;align-items:center;justify-content:space-between">Installation Ticket URL
+            <button type="button" onclick="clearEpField('ep-install-ticket')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
+          </label>
+          <input id="ep-install-ticket" value="${proj.install_ticket_url||''}" placeholder="https://..." style="font-family:var(--mono);font-size:12px">
+        </div>
+        <div class="field full">
+          <label style="display:flex;align-items:center;justify-content:space-between">Vision Training URL
+            <button type="button" onclick="clearEpField('ep-vision-training')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
+          </label>
+          <input id="ep-vision-training" value="${proj.vision_training_url||''}" placeholder="https://..." style="font-family:var(--mono);font-size:12px">
+        </div>
+        <div class="field full">
+          <label style="display:flex;align-items:center;justify-content:space-between">Vinyl Render Odoo URL
+            <button type="button" onclick="clearEpField('ep-vinyl-odoo')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
+          </label>
+          <input id="ep-vinyl-odoo" value="${proj.vinyl_odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..." style="font-family:var(--mono);font-size:12px">
+        </div>
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">Milestone dates</div>
       ${msRows}
     </div>
     <div class="modal-actions"><button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="deleteProj('${id}')">Delete</button><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditProj('${id}')">Save</button></div>
   </div></div>`;
+}
+function clearEpField(id){
+  const el=document.getElementById(id);
+  if(el){el.value='';el.focus();el.style.borderColor='var(--red)';setTimeout(()=>{el.style.borderColor='';},1500);}
 }
 async function saveEditProj(id){
   const proj=projects.find(p=>p.id===id);
