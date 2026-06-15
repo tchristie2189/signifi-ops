@@ -2736,31 +2736,117 @@ function toggleAllSOView(){
   const modal=document.getElementById('modal-root');
   const proj=projects.find(p=>p.id===ppProjId);
   if(!proj)return;
+
+  // Support both SO-split (so_tag on milestones) and campaign children (separate projects per SO)
   const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const children=getChildren(ppProjId); // campaign children
+
+  // Determine mode: so_tag split or campaign children
   const pMs=milestones.filter(m=>m.project_id===ppProjId&&m.so_tag);
-  // Build side-by-side table: rows = milestone keys, cols = SOs
-  const keys=[...new Set(pMs.map(m=>m.key))];
-  const labels=Object.fromEntries(pMs.map(m=>[m.key,m.label]));
-  const msMap={};
-  pMs.forEach(m=>{if(!msMap[m.key])msMap[m.key]={};msMap[m.key][m.so_tag]=m;});
-  const thead='<tr><th style="text-align:left;padding:6px 10px;font-size:11px;color:var(--gray-500)">Milestone</th>'+soList.map(so=>'<th style="padding:6px 10px;font-size:11px;color:var(--red);font-weight:700">'+so+'</th>').join('')+'</tr>';
+  const isSoSplit=pMs.length>0;
+  const isCampaign=children.length>0;
+
+  if(!isSoSplit&&!isCampaign){showToast('No SO split or child projects found');return;}
+
+  let soHeaders=[];
+  let getMsForSO; // fn(key) → {so:milestone} map
+
+  if(isSoSplit){
+    soHeaders=soList;
+    const msMap={};
+    pMs.forEach(m=>{if(!msMap[m.key])msMap[m.key]={};msMap[m.key][m.so_tag]=m;});
+    getMsForSO=(key)=>msMap[key]||{};
+  } else {
+    // Campaign: each child is one SO
+    soHeaders=children.map(c=>c.so_number||c.name);
+    const msMap={};
+    children.forEach(c=>{
+      const so=c.so_number||c.name;
+      milestones.filter(m=>m.project_id===c.id).forEach(m=>{
+        if(!msMap[m.key])msMap[m.key]={};
+        msMap[m.key][so]={...m,_childId:c.id};
+      });
+    });
+    getMsForSO=(key)=>msMap[key]||{};
+  }
+
+  // Collect all unique milestone keys in order
+  const allMs=isSoSplit?pMs:milestones.filter(m=>children.some(c=>c.id===m.project_id));
+  const keys=[...new Set(allMs.map(m=>m.key))];
+  const labels=Object.fromEntries(allMs.map(m=>[m.key,m.label]));
+
+  const thead='<tr>'
+    +'<th style="text-align:left;padding:8px 10px;font-size:11px;color:var(--gray-500);background:var(--gray-50)">Milestone</th>'
+    +soHeaders.map(so=>'<th style="padding:8px 10px;font-size:11px;color:var(--red);font-weight:700;background:var(--gray-50);text-align:center">'+so+'</th>').join('')
+    +'<th style="padding:8px 10px;font-size:11px;color:var(--gray-500);background:var(--gray-50);text-align:center">Push all</th>'
+    +'</tr>';
+
   const tbody=keys.map(key=>{
-    const row=msMap[key]||{};
+    const row=getMsForSO(key);
+    const firstSo=soHeaders.find(so=>row[so]?.date);
+    const firstDate=firstSo?row[firstSo].date:'';
     return'<tr style="border-bottom:1px solid var(--gray-100)">'
       +'<td style="padding:6px 10px;font-size:12px;font-weight:500;white-space:nowrap">'+( labels[key]||key)+'</td>'
-      +soList.map(so=>{
+      +soHeaders.map(so=>{
         const m=row[so];
         const d=m?.date?daysDiff(m.date):null;
-        const chip=!m?'color:var(--gray-300)':isMilestoneEffectivelyDone(m)?'color:var(--success);font-weight:600':d!==null&&d<0?'color:var(--red);font-weight:600':d!==null&&d<=7?'color:#d97706':'color:var(--gray-700)';
-        return'<td style="padding:6px 10px;font-size:11px;text-align:center;'+chip+'">'+( m?.date?fmt(m.date)+'<br><span style="font-size:10px;opacity:0.7">'+(isMilestoneEffectivelyDone(m)?'Done ✓':d===0?'Today':d!==null?( d<0?Math.abs(d)+'d ago':'in '+d+'d'):'')+'</span>':'—')+'</td>';
+        const clr=!m?'color:var(--gray-300)':isMilestoneEffectivelyDone(m)?'color:var(--success);font-weight:600':d!==null&&d<0?'color:var(--red);font-weight:600':d!==null&&d<=7?'color:#d97706':'color:var(--gray-700)';
+        const dateStr=m?.date?'<div style="font-size:12px">'+fmt(m.date)+'</div><div style="font-size:10px;opacity:0.7">'+(isMilestoneEffectivelyDone(m)?'Done ✓':d===0?'Today':d!==null?(d<0?Math.abs(d)+'d ago':'in '+d+'d'):'')+'</div>':'<span style="color:var(--gray-300)">—</span>';
+        return'<td style="padding:6px 10px;text-align:center;'+clr+'">'+dateStr+'</td>';
       }).join('')
+      // Push to all button — uses first SO's date as source
+      +'<td style="padding:4px 8px;text-align:center">'+(firstDate?'<button onclick="pushMsKeyToAllSOs(\''+key+'\',\''+firstDate+'\',\''+ppProjId+'\')" style="font-size:10px;padding:3px 8px;border-radius:6px;border:1px solid var(--gray-200);background:white;color:var(--blue);cursor:pointer;font-family:var(--font)" title="Match all SOs to '+fmt(firstDate)+'">Match all</button>':'')+'</td>'
       +'</tr>';
   }).join('');
-  modal.innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:min(90vw,900px);max-height:80vh;overflow-y:auto" onclick="event.stopPropagation()">
-    <div class="modal-head"><span class="modal-title">📊 All SO Milestones — ${proj.name}</span><button class="modal-close" onclick="closeModal()">×</button></div>
-    <div style="overflow-x:auto;padding:12px"><table style="width:100%;border-collapse:collapse"><thead style="background:var(--gray-50)">${thead}</thead><tbody>${tbody}</tbody></table></div>
-    <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>
-  </div></div>`;
+
+  modal.innerHTML='<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:min(95vw,1000px);max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">'
+    +'<div class="modal-head"><span class="modal-title">📊 All SO Milestones — '+proj.name+'</span><button class="modal-close" onclick="closeModal()">×</button></div>'
+    +'<div style="font-size:11px;color:var(--blue);background:var(--blue-bg);border-bottom:1px solid #bfdbfe;padding:8px 16px">💡 Click <strong>Match all</strong> on any row to push that milestone\'s date to all SOs</div>'
+    +'<div style="overflow-x:auto;padding:0"><table style="width:100%;border-collapse:collapse"><thead>'+thead+'</thead><tbody>'+tbody+'</tbody></table></div>'
+    +'<div class="modal-actions"><button onclick="pushAllMilestoneKeysToAllSOs(\''+ppProjId+'\')" style="font-size:12px;padding:6px 14px;border-radius:var(--radius);border:none;background:var(--red);color:white;cursor:pointer;font-family:var(--font);font-weight:600">⚡ Match ALL milestones to first SO</button><button class="btn" onclick="closeModal()">Close</button></div>'
+    +'</div></div>';
+}
+
+async function pushMsKeyToAllSOs(key,date,projId){
+  const proj=projects.find(p=>p.id===projId);
+  if(!proj)return;
+  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const children=getChildren(projId);
+  let updated=0;
+  if(milestones.some(m=>m.project_id===projId&&m.so_tag)){
+    // SO split — update all so_tag variants
+    for(const so of soList){
+      const m=milestones.find(x=>x.project_id===projId&&x.key===key&&x.so_tag===so);
+      if(m){await sb.from('milestones').update({date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);m.date=date;updated++;}
+    }
+  } else {
+    // Campaign children
+    for(const c of children){
+      const m=milestones.find(x=>x.project_id===c.id&&x.key===key);
+      if(m){await sb.from('milestones').update({date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);m.date=date;updated++;}
+    }
+  }
+  showToast('Pushed to '+updated+' SOs ✓');
+  toggleAllSOView(); // refresh modal
+}
+
+async function pushAllMilestoneKeysToAllSOs(projId){
+  if(!confirm('Match ALL milestones across all SOs to the first SO\'s dates?\n\nThis overwrites all SO dates.'))return;
+  const proj=projects.find(p=>p.id===projId);
+  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const firstSO=soList[0];
+  const sourceMilestones=milestones.filter(m=>m.project_id===projId&&m.so_tag===firstSO);
+  let updated=0;
+  for(const src of sourceMilestones){
+    if(!src.date)continue;
+    for(const so of soList.slice(1)){
+      const tgt=milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.key===src.key);
+      if(tgt){await sb.from('milestones').update({date:src.date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',tgt.id);tgt.date=src.date;updated++;}
+    }
+  }
+  showToast('Matched '+updated+' milestones across all SOs ✓');
+  closeModal();
+  await loadAll();
 }
 
 async function unlinkFromMaster(childId){
@@ -2996,7 +3082,7 @@ function renderProjPageBody(){
       </div>
       <div style="display:flex;flex-direction:column;gap:7px;align-items:flex-end;flex-shrink:0" class="no-print">
         <button onclick="openLinksPopout()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #3b82f6;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🔗 Quick links</button>
-        ${ppHasSoTags?`<button onclick="toggleAllSOView()" id="btn-show-all-so" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #16a34a;background:#14532d;color:#86efac;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📊 All SO milestones</button>`:''}
+        ${(ppHasSoTags||isMaster(proj))?`<button onclick="toggleAllSOView()" id="btn-show-all-so" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #16a34a;background:#14532d;color:#86efac;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📊 All SO milestones</button>`:''}
         ${isChild(proj)?`<button onclick="unlinkFromMaster('${proj.id}')" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #dc2626;background:#450a0a;color:#fca5a5;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🔗 Unlink from master</button>`:''}
         <button onclick="exportProjPageExcel()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #2d6a4f;background:#1a4a35;color:#4ade80;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">⬇ Excel</button>
         <button onclick="openClientExport()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #1d4ed8;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📤 Client export</button>
@@ -5164,4 +5250,3 @@ loadAll();
 </script>
 </body>
 </html>
-
