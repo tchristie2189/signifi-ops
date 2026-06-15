@@ -970,7 +970,9 @@ function renderOverview(){
   const hasSoTags=projMs.some(m=>m.so_tag);
   const canSplit=soList.length>1&&!hasSoTags;
 
-  const buildMsHtml=(ms,soLabel='')=>ms.map(m=>{
+  const buildMsHtml=(ms,soLabel='')=>{
+    const filtered=hideCompleted['overview']?ms.filter(m=>!isMilestoneEffectivelyDone(m)):ms;
+    return filtered.map(m=>{
     const isDone=isMilestoneEffectivelyDone(m);
     const isManualDone=isMilestoneDone(m);
     const isOverdue=isMilestoneOverdue(m);
@@ -991,7 +993,8 @@ function renderOverview(){
       <div class="ms-days ${st.dcls}">${st.txt}</div>
       ${hist.length&&origDate?`<div style="font-size:9px;color:var(--gray-400);margin-top:1px">Orig: ${fmt(origDate)}</div>`:''}
     </div>`;
-  }).join('');
+    }).join('');
+  };
   // SO grouping: use so_tag if split, otherwise show split button
   const splitBtnHtml=canSplit?`<div style="grid-column:1/-1;margin:4px 0 12px">
     <div style="background:#fffbeb;border:1px solid #d97706;border-radius:8px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px">
