@@ -2785,15 +2785,34 @@ function renderProjPageBody(){
   // Keep backward compat for things that still use linkVals
   const linkVals=Object.fromEntries(Object.entries(linkMap).map(([k,v])=>[k,v[0]?.url||'']));
 
+  // Resolve custom link labels — check if user has renamed any from defaults
+  const DEFAULT_CUSTOM=['Custom link 1','Custom link 2','Custom link 3','Custom link 4','Custom link 5'];
+  // Custom links saved in project_links with category='custom' or matching default names
+  const savedCustomLinks=ppData.links.filter(l=>l.category==='custom'||DEFAULT_CUSTOM.some(d=>d===l.label));
+  // Build a slot→label map: slot 0 = Custom link 1, etc.
+  // Non-default labels saved against a default slot key
+  const customSlotLabels={};
+  ppData.links.forEach(l=>{
+    const slotIdx=DEFAULT_CUSTOM.indexOf(l.label);
+    if(slotIdx>=0)customSlotLabels[DEFAULT_CUSTOM[slotIdx]]=l.label; // still default name
+    else if(l.category==='custom'&&l.url===''&&!Object.keys(projLinkOverrides).includes(l.label)){
+      // This is a renamed custom placeholder — match to a slot by order
+      const usedSlots=Object.keys(customSlotLabels).length;
+      if(usedSlots<DEFAULT_CUSTOM.length)customSlotLabels[DEFAULT_CUSTOM[usedSlots]]=l.label;
+    }
+  });
+
   const linksHtml=LINK_CATS.map(cat=>`
     <div style="margin-bottom:10px">
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">${cat.cat}</div>
       ${cat.items.map(item=>{
         const entries=linkMap[item.label]||[];
         const isCustomCat=cat.cat==='Custom';
+        // Use saved name if this slot was renamed
+        const displayLabel=isCustomCat?(customSlotLabels[item.label]||item.label):item.label;
         const labelHtml=isCustomCat
-          ?'<input class="pp-link-label" value="'+item.label+'" placeholder="Name this link..." style="cursor:text;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;font-size:11px;color:var(--gray-600);width:105px;font-family:var(--font)" onblur="renamePPLink(\''+item.label+'\',this.value)">'
-          :'<span class="pp-link-label">'+item.label+'</span>';
+          ?'<input class="pp-link-label" value="'+displayLabel+'" placeholder="Name this link..." style="cursor:text;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;font-size:11px;color:var(--gray-600);width:105px;font-family:var(--font)" onblur="renamePPLink(\''+item.label+'\',this.value)">'
+          :'<span class="pp-link-label">'+displayLabel+'</span>';
         const rows=entries.length?entries.map((e,i)=>
           '<div class="pp-link-item" style="padding-left:'+(i>0?'110px':'0')+'">'
           +(i===0?labelHtml:'<span class="pp-link-label" style="opacity:0"> </span>')
