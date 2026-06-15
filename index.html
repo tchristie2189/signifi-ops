@@ -2785,43 +2785,30 @@ function renderProjPageBody(){
   // Keep backward compat for things that still use linkVals
   const linkVals=Object.fromEntries(Object.entries(linkMap).map(([k,v])=>[k,v[0]?.url||'']));
 
-  // Resolve custom link labels — check if user has renamed any from defaults
-  const DEFAULT_CUSTOM=['Custom link 1','Custom link 2','Custom link 3','Custom link 4','Custom link 5'];
-  // Custom links saved in project_links with category='custom' or matching default names
-  const savedCustomLinks=ppData.links.filter(l=>l.category==='custom'||DEFAULT_CUSTOM.some(d=>d===l.label));
-  // Build a slot→label map: slot 0 = Custom link 1, etc.
-  // Non-default labels saved against a default slot key
-  const customSlotLabels={};
-  ppData.links.forEach(l=>{
-    const slotIdx=DEFAULT_CUSTOM.indexOf(l.label);
-    if(slotIdx>=0)customSlotLabels[DEFAULT_CUSTOM[slotIdx]]=l.label; // still default name
-    else if(l.category==='custom'&&l.url===''&&!Object.keys(projLinkOverrides).includes(l.label)){
-      // This is a renamed custom placeholder — match to a slot by order
-      const usedSlots=Object.keys(customSlotLabels).length;
-      if(usedSlots<DEFAULT_CUSTOM.length)customSlotLabels[DEFAULT_CUSTOM[usedSlots]]=l.label;
-    }
-  });
-
   const linksHtml=LINK_CATS.map(cat=>`
     <div style="margin-bottom:10px">
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">${cat.cat}</div>
       ${cat.items.map(item=>{
-        const entries=linkMap[item.label]||[];
         const isCustomCat=cat.cat==='Custom';
-        // Use saved name if this slot was renamed
-        const displayLabel=isCustomCat?(customSlotLabels[item.label]||item.label):item.label;
-        const labelHtml=isCustomCat
-          ?'<input class="pp-link-label" value="'+displayLabel+'" placeholder="Name this link..." style="cursor:text;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;font-size:11px;color:var(--gray-600);width:105px;font-family:var(--font)" onblur="renamePPLink(\''+item.label+'\',this.value)">'
-          :'<span class="pp-link-label">'+displayLabel+'</span>';
+        if(isCustomCat){
+          const savedRow=ppData.links.find(l=>l.category===item.key);
+          const savedName=savedRow?(savedRow.label||item.label):item.label;
+          const savedUrl=savedRow?(savedRow.url||''):'';
+          const nameInput='<input class="pp-link-label" value="'+savedName.replace(/"/g,'&quot;')+'" placeholder="Name this link..." style="cursor:text;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;font-size:11px;color:var(--gray-600);width:105px;font-family:var(--font)" onblur="saveCustomLink(\''+item.key+'\',this.value,null)">';
+          const urlInput='<input class="pp-link-input" value="'+savedUrl.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="saveCustomLink(\''+item.key+'\',null,this.value)" onblur="saveCustomLink(\''+item.key+'\',null,this.value)">'+(savedUrl?'<a href="'+savedUrl+'" target="_blank" class="pp-link-go">↗</a>':'<span class="pp-link-go"> </span>');
+          return '<div class="pp-link-item">'+nameInput+urlInput+'</div>';
+        }
+        const entries=linkMap[item.label]||[];
+        const labelHtml='<span class="pp-link-label">'+item.label+'</span>';
         const rows=entries.length?entries.map((e,i)=>
           '<div class="pp-link-item" style="padding-left:'+(i>0?'110px':'0')+'">'
           +(i===0?labelHtml:'<span class="pp-link-label" style="opacity:0"> </span>')
-          +'<input class="pp-link-input" value="'+e.url.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="updatePPLink(\''+displayLabel+'\','+i+',this.value)" onblur="updatePPLink(\''+displayLabel+'\','+i+',this.value)" data-link="'+displayLabel+'">'
-          +(e.url?'<a href="'+e.url+'" target="_blank" class="pp-link-go" title="Open">↗</a>':'<span class="pp-link-go"> </span>')
-          +'<button onclick="removePPLink(\''+displayLabel+'\','+i+')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px" title="Remove">✕</button>'
+          +'<input class="pp-link-input" value="'+e.url.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="updatePPLink(\''+item.label+'\','+i+',this.value)" onblur="updatePPLink(\''+item.label+'\','+i+',this.value)">'
+          +(e.url?'<a href="'+e.url+'" target="_blank" class="pp-link-go">↗</a>':'<span class="pp-link-go"> </span>')
+          +'<button onclick="removePPLink(\''+item.label+'\','+i+')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px">✕</button>'
           +'</div>').join('')
-        :'<div class="pp-link-item">'+labelHtml+'<input class="pp-link-input" value="" placeholder="https://..." onchange="savePPLink(\''+displayLabel+'\',this.value)" onblur="if(this.value)savePPLink(\''+displayLabel+'\',this.value)" data-link="'+displayLabel+'"><span class="pp-link-go"> </span></div>';
-        return rows+'<div style="padding-left:110px;margin-top:2px"><button onclick="addPPLink(\''+displayLabel+'\')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>';
+        :'<div class="pp-link-item">'+labelHtml+'<input class="pp-link-input" value="" placeholder="https://..." onchange="savePPLink(\''+item.label+'\',this.value)" onblur="if(this.value)savePPLink(\''+item.label+'\',this.value)"><span class="pp-link-go"> </span></div>';
+        return rows+'<div style="padding-left:110px;margin-top:2px"><button onclick="addPPLink(\''+item.label+'\')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>';
       }).join('')}
     </div>`).join('');
 
@@ -4551,6 +4538,32 @@ async function saveProjInstDates(projId){
   const p=projects.find(x=>x.id===projId);
   if(p)Object.assign(p,updates);
   showToast('Installation dates saved ✓');
+}
+async function saveCustomLink(key,newName,newUrl){
+  // key = 'custom_1'..'custom_5' — stable slot identifier stored in category field
+  let row=ppData.links.find(l=>l.category===key);
+  if(row){
+    // Update only the field that changed
+    const update={};
+    if(newName!==null)update.label=newName.trim()||row.label;
+    if(newUrl!==null)update.url=newUrl.trim();
+    await sb.from('project_links').update(update).eq('id',row.id);
+    if(newName!==null)row.label=update.label;
+    if(newUrl!==null)row.url=update.url;
+  } else {
+    // Insert new row with both fields
+    const DEFAULT_CUSTOM=['Custom link 1','Custom link 2','Custom link 3','Custom link 4','Custom link 5'];
+    const defaultLabel=DEFAULT_CUSTOM[parseInt(key.split('_')[1])-1]||key;
+    const{data}=await sb.from('project_links').insert({
+      project_id:ppProjId,
+      label:newName?.trim()||defaultLabel,
+      url:newUrl?.trim()||'',
+      category:key,
+      sort_order:ppData.links.length
+    }).select().single();
+    if(data)ppData.links.push(data);
+  }
+  showPPSaved();
 }
 async function renamePPLink(oldLabel,newLabel){
   if(!newLabel.trim()||newLabel===oldLabel)return;
