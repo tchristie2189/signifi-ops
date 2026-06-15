@@ -2572,6 +2572,23 @@ function exportToExcel(){
   (adHocRows.installation||[]).forEach(r=>r7.push(['Installation',r.name,r.so||'',r.client||'',r.pm||'','','',r.trainingDate||r.training_date||'',r.installDate||r.install_date||'',r.status||'',r.notes||'',r.created_by||'']));
   const ws7=XLSX.utils.aoa_to_sheet(r7);ws7['!cols']=[{wch:14},{wch:28},{wch:12},{wch:22},{wch:12},{wch:12},{wch:14},{wch:14},{wch:14},{wch:30},{wch:16}];
   XLSX.utils.book_append_sheet(wb,ws7,'Ad Hoc Schedule');
+  // Sheet 8: Shipping Schedule (projects + ad hoc combined, sorted by ship date)
+  const r8=[['PROJECT','SO','CLIENT','PM','PACK & SHIP','DELIVERY','INSTALL TICKET','STATUS']];
+  const shipRows=[];
+  exportProjects.forEach(p=>{
+    const sd=getMsDate(p.id,'shipping');
+    const dd=getMsDate(p.id,'delivery');
+    const st=stageStatus(sd,null);
+    shipRows.push({_d:sd||'zzz',row:[p.name,p.so_number||'',p.client||'',p.pm||'',sd||'',dd||'',p.install_ticket_url||'',st.label]});
+  });
+  (adHocRows.shipping||[]).forEach(r=>{
+    const sd=r.shipDate||r.ship_date||'';
+    shipRows.push({_d:sd||'zzz',row:[r.name+' [Ad hoc]',r.so||'',r.client||'',r.pm||'',sd,r.deliveryDate||r.delivery_date||'',r.install_ticket_url||'',r.status||'']});
+  });
+  shipRows.sort((a,b)=>a._d.localeCompare(b._d)).forEach(x=>r8.push(x.row));
+  const ws8=XLSX.utils.aoa_to_sheet(r8);
+  ws8['!cols']=[{wch:32},{wch:18},{wch:22},{wch:12},{wch:14},{wch:14},{wch:40},{wch:14}];
+  XLSX.utils.book_append_sheet(wb,ws8,'Shipping Schedule');
   XLSX.writeFile(wb,'Signifi_Ops_'+new Date().toISOString().split('T')[0]+'.xlsx');showToast('Excel downloaded ✓');
 }
 
