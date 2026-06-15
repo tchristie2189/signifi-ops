@@ -714,13 +714,24 @@ async function loadAll(){
     const entries=soList.length>1?soList:[p.so_number||''];
     return entries.map((so,j)=>({id:null,project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),so,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+j+1,is_standalone:false}));
   });
-  // Merge saved rows with fresh project data
+  // Merge saved rows with fresh project data — saved row dates take priority over milestone dates
   vinylSchedule=savedVinyl.map(v=>{
     if(v.is_standalone)return{...v,id:v.id,vinylType:v.vinyl_type,shipDate:v.ship_date,formFactor:v.form_factor};
     const p=projects.find(x=>x.id===v.project_id);
-    const vm=p?milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'):null;
-    const sh=p?milestones.find(m=>m.project_id===p.id&&m.key==='shipping'):null;
-    return{...v,vinylType:p?.vinyl_type||v.vinyl_type||'',date:vm?.date||v.date||'',shipDate:sh?.date||v.ship_date||'',pm:p?.pm||v.pm||'',formFactor:v.form_factor||p?.form_factor||'',name:v.name||p?.name||'',so:v.so||p?.so_number||'',client:v.client||p?.client||''};
+    // Find milestone matching this SO (so_tag) if split, otherwise untagged
+    const vm=p?milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'&&(v.so?m.so_tag===v.so:!m.so_tag)):null;
+    const sh=p?milestones.find(m=>m.project_id===p.id&&m.key==='shipping'&&(v.so?m.so_tag===v.so:!m.so_tag)):null;
+    // Saved vinyl row date takes priority — only fall back to milestone if vinyl row has no date
+    return{...v,
+      vinylType:p?.vinyl_type||v.vinyl_type||'',
+      date:v.date||vm?.date||'',
+      shipDate:v.ship_date||sh?.date||'',
+      pm:p?.pm||v.pm||'',
+      formFactor:v.form_factor||p?.form_factor||'',
+      name:v.name||p?.name||'',
+      so:v.so||p?.so_number||'',
+      client:v.client||p?.client||''
+    };
   }).concat(newVinylRows)
   // Sort: rows with dates first (by date asc), missing dates at bottom
   .sort((a,b)=>{
