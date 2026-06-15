@@ -924,7 +924,7 @@ function renderGlance(){
           ${h?healthRing(p.id):''}
           <button onclick="goToProjPage('${p.id}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)" title="Open project page">↗ Project page</button>
           <button onclick="toggleArchive('${p.id}','${p.status}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)">${isComplete?'↩ Restore':'✓ Complete'}</button>
-          ${!isChild(p)?`<button onclick="openCampaignModal('${p.id}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid #7c3aed;background:transparent;color:#7c3aed;cursor:pointer;font-family:var(--font)" title="Campaign / child projects">🏛 Campaign</button>`:''}
+
         </div>
       </div>
       <div class="cycle-track"><div class="cycle-stages">${stagesHtml}</div></div>
@@ -1356,7 +1356,34 @@ function renderDeptView(dept){
     return{_d:sd,html};
   };
 
-  const projRows=filteredProjects.map(makeRow);
+  const projRows=filteredProjects.flatMap(p=>{
+    const soList=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const pMs=milestones.filter(m=>m.project_id===p.id);
+    const hasSoTags=pMs.some(m=>m.so_tag);
+    // If single SO or no SO tags — one row as normal
+    if(soList.length<=1||!hasSoTags) return[makeRow(p)];
+    // Multi-SO with tags — one row per SO, each using that SO's milestone dates
+    return soList.map(so=>{
+      // Create a proxy object that returns this SO's milestone dates
+      const soMs=pMs.filter(m=>m.so_tag===so);
+      const getMsDateForSO=(pid,key)=>soMs.find(m=>m.key===key)?.date||null;
+      // Temporarily override getMsDate for this row
+      const origGetMsDate=getMsDate;
+      const pProxy={...p,so_number:so,name:p.name+' ('+so+')'};
+      // Build row with SO-specific dates
+      let extraAfterStatus='';
+      const sd=getMsDateForSO(p.id,c.startKey);
+      const ed=c.endKey!==c.startKey?getMsDateForSO(p.id,c.endKey):null;
+      const st=stageStatus(sd,ed||sd);
+      let extra='';
+      if(dept==='production'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td>';}
+      else if(dept==='quality'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'vinyl'))+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'uat'))+'</td>';}
+      else if(dept==='shipping'){const sTicketUrl=p.install_ticket_url||'';const sTicketCell=sTicketUrl?'<a href="'+sTicketUrl+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'delivery'))+'</td>';extraAfterStatus='<td class="date-cell">'+sTicketCell+'</td>';}
+      else if(dept==='installation'){const trainMs=soMs.find(m=>m.key==='training');const instMs=soMs.find(m=>m.key==='installation');const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)">`:'—';const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)">`:'—';const confirmed=p.install_date_confirmed?`<span style="font-size:11px;color:var(--success);font-weight:600">✓ ${fmt(p.install_date_confirmed)}</span>`:'<span style="font-size:10px;color:var(--gray-400)">Pending</span>';const ticketUrl=p.install_ticket_url||'';const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>`:'-';extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';}
+      const html='<tr><td style="font-weight:500">'+p.name+' <span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:700">'+so+'</span><button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--red);font-weight:600">'+so+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+extraAfterStatus+'</tr>';
+      return{_d:sd||'',html};
+    });
+  });
   const adHoc=hasFilter?(adHocRows[dept]||[]).filter(r=>(!pmFilter||r.pm===pmFilter)&&!(hideCompleted[dept]&&r.status==='Complete')):[];
   const ahRows=adHoc.map((r,i)=>makeAdHocRow(r,adHocRows[dept].indexOf(r)));
 
@@ -2180,16 +2207,31 @@ async function saveIntake(){
     {id:'i-care',key:'other',label:'Customer care start'},
   ];
   const ins=msFields.map(f=>{const v=document.getElementById(f.id).value;return v?{project_id:proj.id,key:f.key,label:f.label,date:v,changed_by:currentUserName}:null;}).filter(Boolean);
-  if(ins.length)await sb.from('milestones').insert(ins);
+
+  // Auto-split milestones by SO if multiple SOs entered
+  const soList=so.split(',').map(s=>s.trim()).filter(Boolean);
+  if(soList.length>1&&ins.length){
+    // Create one set of milestones per SO, each tagged with so_tag
+    const splitIns=[];
+    for(const soTag of soList){
+      for(const m of ins){
+        splitIns.push({...m,so_tag:soTag});
+      }
+    }
+    await sb.from('milestones').insert(splitIns);
+    showToast('"'+name+'" added with milestones split across '+soList.length+' SOs ✓');
+  } else {
+    if(ins.length)await sb.from('milestones').insert(ins);
+  }
+
   await logActivity('created project',name,so,proj.id,null,client);
-  // Auto-create vinyl_schedule row
+  // Auto-create vinyl_schedule row — one per SO if multiple
   const vinylDate=document.getElementById('i-vinyl')?.value;
   if(vinylDate||vinylType){
-    await sb.from('vinyl_schedule').insert({
-      project_id:proj.id,name,so,client,
-      date:vinylDate||null,vinyl_type:vinylType||null,
-      pm:pm||null,status:'Scheduled',priority:0,is_standalone:false
-    });
+    const vinylRows=soList.length>1
+      ?soList.map((soTag,i)=>({project_id:proj.id,name:name+' ('+soTag+')',so:soTag,client,date:vinylDate||null,vinyl_type:vinylType||null,pm:pm||null,status:'Scheduled',priority:i,is_standalone:false}))
+      :[{project_id:proj.id,name,so,client,date:vinylDate||null,vinyl_type:vinylType||null,pm:pm||null,status:'Scheduled',priority:0,is_standalone:false}];
+    await sb.from('vinyl_schedule').insert(vinylRows);
   }
   // Auto-create planogram_schedule row if planogram dates were entered
   const planStartDate=document.getElementById('i-plan-start')?.value;
@@ -2202,7 +2244,10 @@ async function saveIntake(){
       status:'Scheduled',priority:0,is_standalone:false
     });
   }
-  selectedProjId=proj.id;showToast('"'+name+'" added ✓');await loadAll();setTab('glance');
+  selectedProjId=proj.id;
+  const toastMsg=soList.length>1?'"'+name+'" added · milestones auto-split across '+soList.length+' SOs ✓':'"'+name+'" added ✓';
+  showToast(toastMsg);
+  await loadAll();setTab('glance');
 }
 function clearIntake(){document.querySelectorAll('#tab-intake input,#tab-intake select,#tab-intake textarea').forEach(e=>{e.value='';});}
 
@@ -2575,9 +2620,11 @@ function exportToExcel(){
   // Sheet 8: Shipping Schedule (projects + ad hoc combined, sorted by ship date)
   const r8=[['PROJECT','SO','CLIENT','PM','PACK & SHIP','DELIVERY','INSTALL TICKET','STATUS']];
   const shipRows=[];
-  exportProjects.forEach(p=>{
+  // Use ALL active projects for shipping (including masters) not just exportProjects which may filter them
+  projects.filter(p=>p.status!=='complete').forEach(p=>{
     const sd=getMsDate(p.id,'shipping');
     const dd=getMsDate(p.id,'delivery');
+    if(!sd&&!dd)return; // skip projects with no shipping dates at all
     const st=stageStatus(sd,null);
     shipRows.push({_d:sd||'zzz',row:[p.name,p.so_number||'',p.client||'',p.pm||'',sd||'',dd||'',p.install_ticket_url||'',st.label]});
   });
@@ -2684,16 +2731,18 @@ function onProjPageSearch(val){
   }
 }
 function switchProjPageBySO(so){
-  // Find a child project with this SO, or filter current project to this SO
-  const child=projects.find(p=>p.so_number&&p.so_number.trim()===so&&p.id!==ppProjId);
+  // Find a child project whose so_number exactly matches this SO
+  const child=projects.find(p=>p.id!==ppProjId&&p.so_number&&p.so_number.split(',').map(s=>s.trim()).includes(so));
   if(child){
     switchProjPage(child.id);
-  } else {
-    // Same project — scroll to that SO's milestone group
-    const soHeader=document.querySelector('td span[style*="SO: '+so+'"]');
-    if(soHeader)soHeader.closest('tr')?.scrollIntoView({behavior:'smooth',block:'start'});
-    else showToast('SO '+so+' — milestones shown in tracker below');
+    return;
   }
+  // Same project — scroll to that SO's milestone group in the tracker
+  // Try to find the SO header row in the milestone table
+  const allTds=[...document.querySelectorAll('td')];
+  const soTd=allTds.find(td=>td.textContent.includes('SO: '+so));
+  if(soTd){soTd.scrollIntoView({behavior:'smooth',block:'center'});soTd.style.background='#fef9c3';setTimeout(()=>{soTd.style.background='';},1500);}
+  else showToast('SO '+so+' — viewing milestones in tracker below');
 }
 async function switchProjPage(id){
   ppProjId=id;
@@ -2899,7 +2948,7 @@ function renderProjPageBody(){
         <button onclick="exportProjPageExcel()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #2d6a4f;background:#1a4a35;color:#4ade80;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">⬇ Excel</button>
         <button onclick="openClientExport()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #1d4ed8;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📤 Client export</button>
         <button onclick="openClientDeliverables()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #d97706;background:#3f2200;color:#fbbf24;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📋 Edit deliverables</button>
-        <button onclick="openCampaignModal('${proj.id}')" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #7c3aed;background:#2e1065;color:#c4b5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🏛 Campaign${getChildren(proj.id).length?' · '+getChildren(proj.id).length:''}</button>
+
         <button onclick="window.print()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #555;background:#1a1a1a;color:#aaa;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🖨 Print / PDF</button>
       </div>
     </div>
