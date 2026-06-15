@@ -1478,7 +1478,7 @@ function renderVinyl(){
       <th onclick="sortVinyl('status')" style="cursor:pointer">Status ↕</th>
       <th style="width:28px"></th>
     </tr></thead><tbody>${rows||'<tr><td colspan="12" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
-    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('vinyl')">+ Add vinyl job</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
+    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('vinyl')">+ Add vinyl job</button><button onclick="syncVinylFromProjects()" style="font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--blue);background:var(--blue-bg);color:var(--blue);cursor:pointer;font-family:var(--font);font-weight:500;margin-left:8px">↻ Sync from projects</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
   </div>`;
 }
 function sortVinyl(key){
@@ -1564,6 +1564,39 @@ function renderPlanogram(){
 function sortPlan(key){
   planogramSchedule.sort((a,b)=>{const av=a[key]||'';const bv=b[key]||'';return av.localeCompare(bv);});
   renderPlanogram();showToast('Sorted by '+key);
+}
+async function syncVinylFromProjects(){
+  // SAFE: this function ONLY inserts — it never deletes, updates, or touches
+  // standalone/ad hoc rows (is_standalone:true). Ad hoc entries are always preserved.
+  const today_str=isoD(today());
+  const toAdd=[];
+  for(const p of projects.filter(p=>p.status!=='complete')){
+    const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'&&m.date&&m.date>=today_str);
+    const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping');
+    if(!vm)continue;
+    const soList=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const entries=soList.length>1?soList:[p.so_number||''];
+    for(const so of entries){
+      // Only check project-linked rows (never standalone/ad hoc)
+      const alreadyExists=vinylSchedule.filter(v=>!v.is_standalone).some(v=>v.project_id===p.id&&(v.so===so||soList.length===1));
+      if(!alreadyExists){
+        toAdd.push({
+          project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),
+          so,client:p.client||'',vinyl_type:p.vinyl_type||'',
+          date:vm.date,ship_date:sh?.date||null,
+          pm:p.pm||'',form_factor:p.form_factor||'',
+          status:'Scheduled',priority:vinylSchedule.length+toAdd.length+1,
+          is_standalone:false,updated_at:new Date().toISOString()
+        });
+      }
+    }
+  }
+  if(!toAdd.length){showToast('All projects already in schedule ✓');return;}
+  if(!confirm('Add '+toAdd.length+' missing project'+(toAdd.length>1?'s':'')+' back to vinyl schedule?\n\nAd hoc rows are not affected.\n\n'+toAdd.map(r=>r.name+' ('+r.so+') — '+fmt(r.date)).join('\n')))return;
+  const{error}=await sb.from('vinyl_schedule').insert(toAdd);
+  if(error){alert('Error: '+error.message);return;}
+  showToast('Restored '+toAdd.length+' row'+(toAdd.length>1?'s':'')+' — ad hoc rows untouched ✓');
+  await loadAll();
 }
 function vsMulti(itemId,k,selectEl){
   const selected=[...selectEl.selectedOptions].map(o=>o.value).filter(Boolean).join(', ');
