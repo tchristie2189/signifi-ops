@@ -831,6 +831,7 @@ function renderGlance(){
   const el=document.getElementById('tab-glance');
   const visibleProjects=projects.filter(p=>{
     if(glanceFilter==='archived'?p.status!=='complete':p.status==='complete')return false;
+    if(isChild(p))return false; // hide child projects — they show under their master
     if(pmFilter&&p.pm!==pmFilter)return false;
     if(salesFilter&&p.sales!==salesFilter)return false;
     return true;
@@ -2788,22 +2789,20 @@ function renderProjPageBody(){
     <div style="margin-bottom:10px">
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">${cat.cat}</div>
       ${cat.items.map(item=>{
-        const isCustom=cat.cat==='Custom';
-        const labelDisplay=isCustom
-          ?`<input class="pp-link-label" value="${item.label}" placeholder="Name this link..." style="cursor:text;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;font-size:11px;color:var(--gray-600);width:105px;font-family:var(--font)" onblur="renamePPLink('${item.label}',this.value)">`
-          :`<span class="pp-link-label">${item.label}</span>`;
-        const rows=entries.length?entries.map((e,i)=>`
-          <div class="pp-link-item" style="padding-left:${i>0?'110px':'0'}">
-            ${i===0?labelDisplay:'<span class="pp-link-label" style="opacity:0"> </span>'}
-            <input class="pp-link-input" value="${e.url.replace(/"/g,'&quot;')}" placeholder="https://..." onchange="updatePPLink('${item.label}',${i},this.value)" onblur="updatePPLink('${item.label}',${i},this.value)" data-link="${item.label}">
-            <a href="${e.url}" target="_blank" class="pp-link-go" title="Open">↗</a>
-            <button onclick="removePPLink('${item.label}',${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px" title="Remove">✕</button>
-          </div>`).join(''):`<div class="pp-link-item">
-            ${labelDisplay}
-            <input class="pp-link-input" value="" placeholder="https://..." onchange="savePPLink('${item.label}',this.value)" onblur="if(this.value)savePPLink('${item.label}',this.value)" data-link="${item.label}">
-            <span class="pp-link-go"> </span>
-          </div>`;
-        return rows+`<div style="padding-left:110px;margin-top:2px"><button onclick="addPPLink('${item.label}')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>`;
+        const entries=linkMap[item.label]||[];
+        const isCustomCat=cat.cat==='Custom';
+        const labelHtml=isCustomCat
+          ?'<input class="pp-link-label" value="'+item.label+'" placeholder="Name this link..." style="cursor:text;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;font-size:11px;color:var(--gray-600);width:105px;font-family:var(--font)" onblur="renamePPLink(\''+item.label+'\',this.value)">'
+          :'<span class="pp-link-label">'+item.label+'</span>';
+        const rows=entries.length?entries.map((e,i)=>
+          '<div class="pp-link-item" style="padding-left:'+(i>0?'110px':'0')+'">'
+          +(i===0?labelHtml:'<span class="pp-link-label" style="opacity:0"> </span>')
+          +'<input class="pp-link-input" value="'+e.url.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="updatePPLink(\''+item.label+'\','+i+',this.value)" onblur="updatePPLink(\''+item.label+'\','+i+',this.value)" data-link="'+item.label+'">'
+          +(e.url?'<a href="'+e.url+'" target="_blank" class="pp-link-go" title="Open">↗</a>':'<span class="pp-link-go"> </span>')
+          +'<button onclick="removePPLink(\''+item.label+'\','+i+')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px" title="Remove">✕</button>'
+          +'</div>').join('')
+        :'<div class="pp-link-item">'+labelHtml+'<input class="pp-link-input" value="" placeholder="https://..." onchange="savePPLink(\''+item.label+'\',this.value)" onblur="if(this.value)savePPLink(\''+item.label+'\',this.value)" data-link="'+item.label+'"><span class="pp-link-go"> </span></div>';
+        return rows+'<div style="padding-left:110px;margin-top:2px"><button onclick="addPPLink(\''+item.label+'\')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>';
       }).join('')}
     </div>`).join('');
 
