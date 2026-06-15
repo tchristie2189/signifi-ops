@@ -2816,12 +2816,12 @@ function renderProjPageBody(){
         const rows=entries.length?entries.map((e,i)=>
           '<div class="pp-link-item" style="padding-left:'+(i>0?'110px':'0')+'">'
           +(i===0?labelHtml:'<span class="pp-link-label" style="opacity:0"> </span>')
-          +'<input class="pp-link-input" value="'+e.url.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="updatePPLink(\''+item.label+'\','+i+',this.value)" onblur="updatePPLink(\''+item.label+'\','+i+',this.value)" data-link="'+item.label+'">'
+          +'<input class="pp-link-input" value="'+e.url.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="updatePPLink(\''+displayLabel+'\','+i+',this.value)" onblur="updatePPLink(\''+displayLabel+'\','+i+',this.value)" data-link="'+displayLabel+'">'
           +(e.url?'<a href="'+e.url+'" target="_blank" class="pp-link-go" title="Open">↗</a>':'<span class="pp-link-go"> </span>')
-          +'<button onclick="removePPLink(\''+item.label+'\','+i+')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px" title="Remove">✕</button>'
+          +'<button onclick="removePPLink(\''+displayLabel+'\','+i+')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px" title="Remove">✕</button>'
           +'</div>').join('')
-        :'<div class="pp-link-item">'+labelHtml+'<input class="pp-link-input" value="" placeholder="https://..." onchange="savePPLink(\''+item.label+'\',this.value)" onblur="if(this.value)savePPLink(\''+item.label+'\',this.value)" data-link="'+item.label+'"><span class="pp-link-go"> </span></div>';
-        return rows+'<div style="padding-left:110px;margin-top:2px"><button onclick="addPPLink(\''+item.label+'\')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>';
+        :'<div class="pp-link-item">'+labelHtml+'<input class="pp-link-input" value="" placeholder="https://..." onchange="savePPLink(\''+displayLabel+'\',this.value)" onblur="if(this.value)savePPLink(\''+displayLabel+'\',this.value)" data-link="'+displayLabel+'"><span class="pp-link-go"> </span></div>';
+        return rows+'<div style="padding-left:110px;margin-top:2px"><button onclick="addPPLink(\''+displayLabel+'\')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>';
       }).join('')}
     </div>`).join('');
 
@@ -3171,9 +3171,22 @@ async function savePPLink(label,url){
     const proj=projects.find(p=>p.id===ppProjId);if(proj)proj[hubField]=url;
     await logActivity('updated link',label,label,ppProjId,null,url);
   }
-  const existing=ppData.links.find(l=>l.label===label);
-  if(existing){await sb.from('project_links').update({url}).eq('id',existing.id);existing.url=url;}
-  else{const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:'',sort_order:ppData.links.length}).select().single();if(data)ppData.links.push(data);}
+  // Find existing row — check by label first, then by custom category placeholder (renamed links)
+  const DEFAULT_CUSTOM=['Custom link 1','Custom link 2','Custom link 3','Custom link 4','Custom link 5'];
+  let existing=ppData.links.find(l=>l.label===label);
+  if(!existing&&DEFAULT_CUSTOM.includes(label)){
+    // Label is still a default — check if there's a renamed placeholder for this slot
+    const slotIdx=DEFAULT_CUSTOM.indexOf(label);
+    const customRows=ppData.links.filter(l=>l.category==='custom');
+    if(customRows[slotIdx])existing=customRows[slotIdx];
+  }
+  if(existing){
+    await sb.from('project_links').update({url}).eq('id',existing.id);
+    existing.url=url;
+  } else {
+    const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:DEFAULT_CUSTOM.includes(label)?'custom':'',sort_order:ppData.links.length}).select().single();
+    if(data)ppData.links.push(data);
+  }
   showPPSaved();
 }
 async function updatePPLink(label,idx,url){
