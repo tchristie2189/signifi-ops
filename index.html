@@ -4401,6 +4401,30 @@ function openPushDatesModal(masterId,childId){}// placeholder - handled by openP
 function renderSettings(){
   const el=document.getElementById('tab-settings');
   const types=getProductTypes();
+  // Find campaign projects that need migrating
+  const campaignMasters=projects.filter(p=>isMaster(p)&&getChildren(p.id).length>0);
+  const migrationSection=campaignMasters.length?`
+    <div class="section" style="max-width:700px;margin-top:16px">
+      <div class="section-head"><div class="section-title">🔄 Data Migration</div></div>
+      <div style="padding:1.5rem">
+        <div style="background:#fffbeb;border:1px solid #d97706;border-radius:8px;padding:12px 16px;margin-bottom:16px">
+          <div style="font-size:13px;font-weight:600;color:#92400e;margin-bottom:4px">⚠️ Campaign projects found — migration needed</div>
+          <div style="font-size:12px;color:#a16207;line-height:1.6">The following projects use the old parent/child system. Running migration will merge each child project's milestones onto the master with SO tags, then unlink the children so everything works the same as new projects.</div>
+        </div>
+        ${campaignMasters.map(p=>{
+          const kids=getChildren(p.id);
+          return`<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--gray-50);border-radius:8px;margin-bottom:8px">
+            <div>
+              <div style="font-size:13px;font-weight:600">${p.name}</div>
+              <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${kids.length} children: ${kids.map(c=>c.so_number||c.name).join(', ')}</div>
+            </div>
+            <button onclick="migrateCampaignToSO('${p.id}')" style="font-size:12px;padding:7px 16px;border-radius:var(--radius);border:none;background:#d97706;color:white;cursor:pointer;font-family:var(--font);font-weight:600">↗ Migrate</button>
+          </div>`;
+        }).join('')}
+        <button onclick="migrateAllCampaigns()" style="font-size:12px;padding:8px 18px;border-radius:var(--radius);border:none;background:var(--red);color:white;cursor:pointer;font-family:var(--font);font-weight:600;margin-top:4px">⚡ Migrate all at once</button>
+      </div>
+    </div>`:'';
+
   el.innerHTML=`
     <div class="section" style="max-width:700px">
       <div class="section-head">
@@ -4426,7 +4450,76 @@ function renderSettings(){
           <span id="pt-saved" style="font-size:11px;color:var(--success);display:none">✓ Saved</span>
         </div>
       </div>
-    </div>`;
+    </div>
+    ${migrationSection}`;
+}
+
+async function migrateCampaignToSO(masterId){
+  const master=projects.find(p=>p.id===masterId);
+  if(!master)return;
+  const children=getChildren(masterId);
+  if(!children.length){showToast('No children found');return;}
+  if(!confirm('Migrate "'+master.name+'" ('+children.length+' children) to SO split?\n\n'
+    +'This will:\n• Copy each child\'s milestones to the master with SO tags\n• Delete all child projects and their data\n\nThis cannot be undone.'))return;
+
+  showToast('Migrating...');
+  let inserted=0;
+
+  // Delete any existing so_tag milestones on master to avoid dupes
+  const existingSoMs=milestones.filter(m=>m.project_id===masterId&&m.so_tag);
+  for(const m of existingSoMs) await sb.from('milestones').delete().eq('id',m.id);
+
+  // Copy each child's milestones onto master with so_tag, then delete child
+  for(const child of children){
+    const childMs=milestones.filter(m=>m.project_id===child.id);
+    const so=child.so_number||child.name;
+    for(const m of childMs){
+      const{data}=await sb.from('milestones').insert({
+        project_id:masterId,key:m.key,label:m.label,date:m.date,
+        original_date:m.original_date||m.date,so_tag:so,changed_by:currentUserName
+      }).select().single();
+      if(data)inserted++;
+    }
+    // Delete all child data
+    const cid=child.id;
+    await sb.from('milestones').delete().eq('project_id',cid);
+    await sb.from('project_links').delete().eq('project_id',cid);
+    await sb.from('project_team').delete().eq('project_id',cid);
+    await sb.from('action_items').delete().eq('project_id',cid);
+    await sb.from('risks').delete().eq('project_id',cid);
+    await sb.from('decisions').delete().eq('project_id',cid);
+    await sb.from('project_sections').delete().eq('project_id',cid);
+    await sb.from('checkin_status').delete().eq('project_id',cid);
+    await sb.from('milestone_done').delete().eq('project_id',cid);
+    await sb.from('vinyl_schedule').delete().eq('project_id',cid).eq('is_standalone',false);
+    await sb.from('planogram_schedule').delete().eq('project_id',cid).eq('is_standalone',false);
+    await sb.from('adhoc_schedule').delete().eq('project_id',cid);
+    await sb.from('pm_tasks').delete().eq('project_id',cid);
+    // Delete the child project itself
+    await sb.from('projects').delete().eq('id',cid);
+    const idx=projects.findIndex(p=>p.id===cid);
+    if(idx>=0)projects.splice(idx,1);
+  }
+
+  // Mark master as no longer a master
+  await sb.from('projects').update({is_master:false}).eq('id',masterId);
+  const mp=projects.find(p=>p.id===masterId);
+  if(mp)mp.is_master=false;
+
+  showToast('Migrated '+inserted+' milestones, deleted '+children.length+' child projects ✓');
+  await loadAll();
+  renderSettings();
+}
+
+async function migrateAllCampaigns(){
+  const masters=projects.filter(p=>isMaster(p)&&getChildren(p.id).length>0);
+  if(!masters.length){showToast('Nothing to migrate');return;}
+  if(!confirm('Migrate ALL '+masters.length+' campaign project(s) to SO split?\n\n'+masters.map(p=>p.name).join('\n')))return;
+  for(const m of masters){
+    await migrateCampaignToSO(m.id);
+  }
+  showToast('All campaigns migrated ✓');
+  renderSettings();
 }
 
 let _ptList=null;
