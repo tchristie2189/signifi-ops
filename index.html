@@ -2666,6 +2666,18 @@ function onProjPageSearch(val){
     document.getElementById('pp-proj-search').blur();
   }
 }
+function switchProjPageBySO(so){
+  // Find a child project with this SO, or filter current project to this SO
+  const child=projects.find(p=>p.so_number&&p.so_number.trim()===so&&p.id!==ppProjId);
+  if(child){
+    switchProjPage(child.id);
+  } else {
+    // Same project — scroll to that SO's milestone group
+    const soHeader=document.querySelector('td span[style*="SO: '+so+'"]');
+    if(soHeader)soHeader.closest('tr')?.scrollIntoView({behavior:'smooth',block:'start'});
+    else showToast('SO '+so+' — milestones shown in tracker below');
+  }
+}
 async function switchProjPage(id){
   ppProjId=id;
   selectedProjId=id;
@@ -2711,12 +2723,12 @@ function renderProjPageBody(){
         const rows=entries.length?entries.map((e,i)=>`
           <div class="pp-link-item" style="padding-left:${i>0?'110px':'0'}">
             ${i===0?`<span class="pp-link-label">${item.label}</span>`:'<span class="pp-link-label" style="opacity:0"> </span>'}
-            <input class="pp-link-input" value="${e.url.replace(/"/g,'&quot;')}" placeholder="https://..." onchange="updatePPLink('${item.label}',${i},this.value)" data-link="${item.label}">
+            <input class="pp-link-input" value="${e.url.replace(/"/g,'&quot;')}" placeholder="https://..." onchange="updatePPLink('${item.label}',${i},this.value)" onblur="updatePPLink('${item.label}',${i},this.value)" data-link="${item.label}">
             <a href="${e.url}" target="_blank" class="pp-link-go" title="Open">↗</a>
             <button onclick="removePPLink('${item.label}',${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px" title="Remove">✕</button>
           </div>`).join(''):`<div class="pp-link-item">
             <span class="pp-link-label">${item.label}</span>
-            <input class="pp-link-input" value="" placeholder="https://..." onchange="updatePPLink('${item.label}',0,this.value)" data-link="${item.label}">
+            <input class="pp-link-input" value="" placeholder="https://..." onchange="savePPLink('${item.label}',this.value)" onblur="if(this.value)savePPLink('${item.label}',this.value)" data-link="${item.label}">
             <span class="pp-link-go"> </span>
           </div>`;
         return rows+`<div style="padding-left:110px;margin-top:2px"><button onclick="addPPLink('${item.label}')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>`;
@@ -2845,7 +2857,7 @@ function renderProjPageBody(){
           ${isChild(proj)?`<button onclick="switchProjPage('${proj.parent_project_id}')" style="font-size:10px;padding:2px 10px;border-radius:10px;border:1px solid #e879f9;background:rgba(232,121,249,0.15);color:#e879f9;cursor:pointer;font-family:var(--font)">🏛 Back to master</button>`:''}
         </div>
         <div class="pp-meta">
-          <span>📋 SO: <strong>${proj.so_number||'—'}</strong></span>
+          <span>📋 SO: ${(proj.so_number||'').split(',').map(s=>{const so=s.trim();return so?'<strong style="cursor:pointer;text-decoration:underline;color:#93c5fd" onclick="switchProjPageBySO(\''+so+'\')" title="Go to '+so+'">'+so+'</strong>':''}).join(', ')||'—'}</span>
           <span>👤 PM: <strong>${proj.pm||'—'}</strong></span>
           <span>🏢 ${proj.client||'—'}</span>
           ${proj.product_type?`<span>📦 ${proj.product_type}</span>`:''}
@@ -2900,9 +2912,9 @@ function renderProjPageBody(){
           </div>
         </div>
       </div>
-      <div class="pp-card">
+      <div class="pp-card" style="display:flex;flex-direction:column">
         <div class="pp-card-head"><span class="pp-card-title">Quick links</span></div>
-        <div class="pp-card-body" style="max-height:280px;overflow-y:auto">${linksHtml}</div>
+        <div class="pp-card-body" style="flex:1;overflow-y:auto;max-height:420px">${linksHtml}</div>
       </div>
     </div>
 
