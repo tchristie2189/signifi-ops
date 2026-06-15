@@ -1474,8 +1474,8 @@ function renderVinyl(){
       <td style="${readStyle}">${item.client||'—'}</td>
       <td style="${readStyle}">${item.name||'—'}</td>
       <td><select class="sched-select" onchange="vs('${item.id || origIdx}','vinylType',this.value)">${['','Decal','Partial Vinyl','Full Vinyl'].map(t=>`<option${t===item.vinylType?' selected':''}>${t||'Select...'}</option>`).join('')}</select></td>
-      <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vinylDateSync(${origIdx},this.value,'vinyl')" title="Syncs with project overview"></td>
-      <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vinylDateSync(${origIdx},this.value,'ship')" title="Syncs with project overview"></td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vinylDateSync('${item.id||'idx:'+origIdx}',this.value,'vinyl')" title="Syncs with project overview"></td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vinylDateSync('${item.id||'idx:'+origIdx}',this.value,'ship')" title="Syncs with project overview"></td>
       <td style="${readStyle}">${item.pm||'—'}</td>
       <td><select class="sched-select" multiple style="min-width:140px;height:58px;font-size:11px" title="Hold Ctrl/Cmd to select multiple" onchange="vsMulti('${item.id || origIdx}','formFactor',this)">${getProductTypes().map(t=>'<option'+((','+item.formFactor+',').includes(','+t+',')?' selected':'')+'>'+t+'</option>').join('')}</select></td>
       <td><select class="sched-select" onchange="vs('${item.id || origIdx}','status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
@@ -1682,11 +1682,18 @@ function ps2(itemId,k,v){
   }
 }
 // Vinyl date sync — updates both the local schedule AND the milestone in Supabase
-async function vinylDateSync(i,val,type){
+async function vinylDateSync(idOrIdx,val,type){
+  // Accept either a DB id (string UUID) or 'idx:N' for virtual rows
+  let item;
+  if(typeof idOrIdx==='string'&&idOrIdx.startsWith('idx:')){
+    item=vinylSchedule[parseInt(idOrIdx.slice(4))];
+  } else {
+    item=vinylSchedule.find(x=>x.id===idOrIdx)||vinylSchedule[parseInt(idOrIdx)];
+  }
+  if(!item){console.warn('vinylDateSync: item not found',idOrIdx);showToast('Save error — row not found');return;}
   const field=type==='ship'?'shipDate':'date';
   const dbField=type==='ship'?'ship_date':'date';
-  vinylSchedule[i][field]=val;
-  const item=vinylSchedule[i];
+  item[field]=val;
   // If no DB row exists yet, insert one first
   if(!item.id){
     const{data}=await sb.from('vinyl_schedule').insert({
@@ -1695,22 +1702,23 @@ async function vinylDateSync(i,val,type){
       vinyl_type:item.vinylType||'',pm:item.pm||'',
       form_factor:item.formFactor||'',status:item.status||'Scheduled',
       [dbField]:val||null,priority:item.priority||99,
-      is_standalone:false,updated_at:new Date().toISOString()
+      is_standalone:item.is_standalone||false,updated_at:new Date().toISOString()
     }).select().single();
-    if(data){item.id=data.id;vinylSchedule[i].id=data.id;}
+    if(data){item.id=data.id;}
   } else {
-    // Always update by row ID — never by project_id to avoid touching other SO rows
-    await sb.from('vinyl_schedule').update({[dbField]:val||null,updated_at:new Date().toISOString()}).eq('id',item.id);
+    // Always update by row ID
+    const{error}=await sb.from('vinyl_schedule').update({[dbField]:val||null,updated_at:new Date().toISOString()}).eq('id',item.id);
+    if(error){console.warn('vinyl save error',error);showToast('Save error: '+error.message);return;}
   }
-  // Sync back to the matching project milestone — match by so_tag if this is a split project
+  // Sync back to the matching project milestone
   const proj=projects.find(p=>p.id===item.project_id);
   if(proj&&val){
     const msKey=type==='ship'?'shipping':'vinyl';
     const msLabel=type==='ship'?'Pack & ship':'Vinyl / branding';
-    // Match so_tag if row has a specific SO, otherwise match untagged milestone
     const existing=milestones.find(m=>m.project_id===proj.id&&m.key===msKey&&(item.so?m.so_tag===item.so:!m.so_tag));
-    if(existing){await sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id);await logActivity('updated date',msLabel,msLabel,proj.id,existing.date,val);}
-    else{await sb.from('milestones').insert({project_id:proj.id,key:msKey,label:msLabel,date:val,so_tag:item.so||null,changed_by:currentUserName});await logActivity('added milestone',msLabel,msLabel,proj.id,null,val);}
+    if(existing){await sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id);}
+    else{await sb.from('milestones').insert({project_id:proj.id,key:msKey,label:msLabel,date:val,so_tag:item.so||null,changed_by:currentUserName});}
+    showToast('Date saved ✓');
     await loadAll();
   } else {
     showToast('Date saved ✓');
