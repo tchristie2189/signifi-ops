@@ -3144,7 +3144,12 @@ function renderProjPageBody(){
             <textarea class="pp-textarea" placeholder="Updates, status, and notes for the client..." onchange="savePPSection('client_updates',this.value)" style="min-height:80px">${getSection('client_updates')}</textarea>
           </div>
         </div>
-
+      </div>
+      <div class="pp-card" style="display:flex;flex-direction:column">
+        <div class="pp-card-head"><span class="pp-card-title">Quick links</span></div>
+        <div class="pp-card-body" style="flex:1;overflow-y:auto;max-height:380px">${linksHtml}</div>
+      </div>
+    </div>
 
     <!-- ROW 2: PM Tasks + Milestone Tracker side by side -->
     <div style="display:grid;grid-template-columns:320px 1fr;gap:12px;margin-bottom:12px">
