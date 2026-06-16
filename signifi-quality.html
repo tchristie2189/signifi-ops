@@ -145,8 +145,8 @@ table.qgrid{border-collapse:separate;border-spacing:0;min-width:100%}
 
 /* ── TODAY TAB ── */
 .dep-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.875rem}
-.dep-card{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:1rem 1.1rem;box-shadow:var(--shadow);transition:all .15s;border-left:3px solid var(--surface3)}
-.dep-card.track-new{border-left-color:var(--accent)}.dep-card.track-revisit{border-left-color:var(--amber)}
+.dep-card{background:#fff;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.625rem .75rem;box-shadow:var(--shadow);transition:all .15s;border-left:3px solid var(--surface3)}
+.dep-card.track-new{border-left-color:var(--accent)}.dep-card.track-revisit{border-left-color:var(--amber)}.dep-card.track-breakfix{border-left-color:var(--red)}
 .dep-card:hover{box-shadow:var(--shadow-md);transform:translateY(-1px)}
 .dc-client{font-size:.9rem;font-weight:700;color:var(--text);margin-bottom:2px}
 .dc-ticket{font-size:.7rem;color:var(--text3);margin-bottom:.5rem}
@@ -460,7 +460,20 @@ function stripHtml(s){return String(s).replace(/<[^>]*>/g,'').trim()}
 function toast(msg,type=''){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show'+(type?' '+type:'');setTimeout(()=>t.classList.remove('show'),2800)}
 function showModal(id){document.getElementById(id).classList.add('show')}
 function closeModal(id){document.getElementById(id).classList.remove('show')}
-function getTrack(dep){const a=(dep.activity_type||'').toLowerCase();return NEW_ACTS.some(x=>a.includes(x))?'new':'revisit'}
+function getTrack(dep){
+  const a=(dep.activity_type||'').toLowerCase();
+  if(a.includes('break/fix')||a.includes('break fix'))return'breakfix';
+  if(NEW_ACTS.some(x=>a.includes(x)))return'new';
+  return'revisit';
+}
+function getTrackLabel(dep){
+  const t=getTrack(dep);
+  return t==='new'?'New Install':t==='breakfix'?'Break/Fix':'Revisit';
+}
+function getTrackTagClass(dep){
+  const t=getTrack(dep);
+  return t==='new'?'t-blue':t==='breakfix'?'t-red':'t-amber';
+}
 function getQs(role,track){if(role==='pm')return track==='new'?Q.pm:Q.pm_revisit;if(role==='logistics')return track==='new'?Q.logistics:Q.logistics_revisit;return track==='new'?Q.install_new:Q.install_revisit}
 function calcScore(ans,qs){const s=qs.filter(q=>ans[q.id]!==undefined&&ans[q.id]!==null);if(!s.length)return null;return Math.round(s.reduce((a,q)=>a+(ans[q.id]||0),0)/s.length*100)}
 function scCol(v){return v>=90?'var(--green)':v>=70?'var(--amber)':'var(--red)'}
@@ -862,27 +875,67 @@ async function renderToday(){
         const dayLabel=days[i]+' · '+day.toLocaleDateString('en-CA',{month:'short',day:'numeric'});
         const countTxt=dayDeps.length?' <span style="color:var(--text3);font-size:.65rem;margin-left:.25rem">'+dayDeps.length+' deployment'+(dayDeps.length!==1?'s':'')+'</span>':'';
         html+=`<div class="sec" style="${isToday?'color:var(--accent)':''}">${dayLabel}${isToday?' <span class="tag t-blue" style="margin-left:.4rem">Today</span>':''}${countTxt}</div>`;
-        if(dayDeps.length){html+=`<div class="dep-grid" style="margin-bottom:1.25rem">${renderTodayCards(dayDeps)}</div>`;}
+        if(dayDeps.length){
+          const newD=dayDeps.filter(d=>getTrack(d)==='new');
+          const revD=dayDeps.filter(d=>getTrack(d)==='revisit');
+          const bfD=dayDeps.filter(d=>getTrack(d)==='breakfix');
+          let dayHtml='';
+          if(newD.length)dayHtml+=`<div style="font-size:.65rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:.4rem;margin-top:.5rem">New Install (${newD.length})</div><div class="dep-grid" style="margin-bottom:.75rem">${renderTodayCards(newD)}</div>`;
+          if(revD.length)dayHtml+=`<div style="font-size:.65rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--amber);margin-bottom:.4rem;margin-top:.5rem">Revisit (${revD.length})</div><div class="dep-grid" style="margin-bottom:.75rem">${renderTodayCards(revD)}</div>`;
+          if(bfD.length)dayHtml+=`<div style="font-size:.65rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--red);margin-bottom:.4rem;margin-top:.5rem">Break/Fix (${bfD.length})</div><div class="dep-grid" style="margin-bottom:.75rem">${renderTodayCards(bfD)}</div>`;
+          html+=`<div style="margin-bottom:1.25rem">${dayHtml}</div>`;
+        }
         else{html+=`<div style="font-size:.8rem;color:var(--text3);padding:.4rem 0 1.1rem;font-style:italic">No deployments</div>`;}
       }
       document.getElementById('todayContent').innerHTML=html||'<div class="empty"><div class="empty-icon">&#128234;</div><div class="empty-title">Nothing scheduled</div></div>';
     } else {
-      // Month view — only show days that have deployments
-      const todayStr2=new Date().toISOString().slice(0,10);
-      const byDay={};
-      deps.forEach(d=>{const ds=(d.scheduled_start_date||'').slice(0,10);if(ds){if(!byDay[ds])byDay[ds]=[];byDay[ds].push(d)}});
-      const sortedDays=Object.keys(byDay).sort();
-      if(!sortedDays.length){document.getElementById('todayContent').innerHTML='<div class="empty"><div class="empty-icon">&#128218;</div><div class="empty-title">Nothing scheduled this month</div></div>';return;}
-      let html='';
-      sortedDays.forEach(ds=>{
-        const dayDeps=byDay[ds];
-        const d=new Date(ds+'T12:00:00');
-        const isToday=ds===todayStr2;
-        const dayLabel=d.toLocaleDateString('en-CA',{weekday:'long',month:'short',day:'numeric'});
-        const countTxt=' <span style="color:var(--text3);font-size:.65rem;margin-left:.25rem">'+dayDeps.length+' deployment'+(dayDeps.length!==1?'s':'')+'</span>';
-        html+=`<div class="sec" style="${isToday?'color:var(--accent)':''}">${dayLabel}${isToday?' <span class="tag t-blue" style="margin-left:.4rem">Today</span>':''}${countTxt}</div>`;
-        html+=`<div class="dep-grid" style="margin-bottom:1.25rem">${renderTodayCards(dayDeps)}</div>`;
-      });
+      // Month view — calendar grid
+      const now3=new Date();
+      const todayStr3=now3.toISOString().slice(0,10);
+      const yr=now3.getFullYear();const mo=now3.getMonth();
+      const firstDay=new Date(yr,mo,1);
+      const lastDay=new Date(yr,mo+1,0);
+      const daysInMo=lastDay.getDate();
+      // startOffset: how many blank cells before day 1 (Mon=0)
+      const startOffset=(firstDay.getDay()===0?6:firstDay.getDay()-1);
+      // Build day->deps map
+      const byDay3={};
+      deps.forEach(d=>{const ds=(d.scheduled_start_date||'').slice(0,10);if(ds){if(!byDay3[ds])byDay3[ds]=[];byDay3[ds].push(d)}});
+      const totalDeps=deps.length;
+      const newTotal=deps.filter(d=>getTrack(d)==='new').length;
+      const revTotal=deps.filter(d=>getTrack(d)==='revisit').length;
+      const bfTotal=deps.filter(d=>getTrack(d)==='breakfix').length;
+      let html=`<div style="display:flex;gap:.625rem;flex-wrap:wrap;margin-bottom:1.25rem">
+        <div style="background:var(--accent-soft);border:1px solid var(--accent-border);border-radius:8px;padding:.5rem .875rem;font-size:.78rem;font-weight:600;color:var(--accent)">${newTotal} New Installs</div>
+        <div style="background:var(--amber-soft);border:1px solid var(--amber-border);border-radius:8px;padding:.5rem .875rem;font-size:.78rem;font-weight:600;color:var(--amber)">${revTotal} Revisits</div>
+        <div style="background:var(--red-soft);border:1px solid var(--red-border);border-radius:8px;padding:.5rem .875rem;font-size:.78rem;font-weight:600;color:var(--red)">${bfTotal} Break/Fix</div>
+        <div style="background:var(--surface2);border:1px solid var(--border2);border-radius:8px;padding:.5rem .875rem;font-size:.78rem;font-weight:600;color:var(--text2)">${totalDeps} Total</div>
+      </div>`;
+      // Calendar header
+      html+=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:4px">`;
+      ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d=>{html+=`<div style="text-align:center;font-size:.65rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);padding:.35rem 0">${d}</div>`});
+      html+=`</div><div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">`;
+      // Blank cells
+      for(let i=0;i<startOffset;i++)html+=`<div></div>`;
+      // Day cells
+      for(let d=1;d<=daysInMo;d++){
+        const ds=yr+'-'+String(mo+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+        const dayDeps=byDay3[ds]||[];
+        const isToday=ds===todayStr3;
+        const newC=dayDeps.filter(x=>getTrack(x)==='new').length;
+        const revC=dayDeps.filter(x=>getTrack(x)==='revisit').length;
+        const bfC=dayDeps.filter(x=>getTrack(x)==='breakfix').length;
+        const hasAny=dayDeps.length>0;
+        html+=`<div style="background:${isToday?'var(--accent-soft)':hasAny?'#fff':'var(--surface2)'};border:1.5px solid ${isToday?'var(--accent)':hasAny?'var(--border2)':'transparent'};border-radius:8px;padding:.4rem .45rem;min-height:72px;cursor:${hasAny?'pointer':'default'};transition:all .15s" ${hasAny?`onclick="expandMonthDay('${ds}',this)"`:''}">
+          <div style="font-size:.75rem;font-weight:${isToday?'700':'500'};color:${isToday?'var(--accent)':'var(--text2)'};margin-bottom:.3rem">${d}</div>
+          ${newC?`<div style="font-size:.6rem;font-weight:600;color:var(--accent);background:var(--accent-soft);border-radius:3px;padding:1px 4px;margin-bottom:2px">${newC} New</div>`:''}
+          ${revC?`<div style="font-size:.6rem;font-weight:600;color:var(--amber);background:var(--amber-soft);border-radius:3px;padding:1px 4px;margin-bottom:2px">${revC} Revisit</div>`:''}
+          ${bfC?`<div style="font-size:.6rem;font-weight:600;color:var(--red);background:var(--red-soft);border-radius:3px;padding:1px 4px">${bfC} Break/Fix</div>`:''}
+        </div>`;
+      }
+      html+=`</div>`;
+      // Expanded day panel
+      html+=`<div id="monthDayPanel" style="display:none;margin-top:1.25rem"></div>`;
       document.getElementById('todayContent').innerHTML=html;
     }
   }catch(e){document.getElementById('todayContent').innerHTML=`<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Could not load</div></div>`}
@@ -909,7 +962,7 @@ function renderTodayCards(deps){
       <div class="dc-ticket">${esc(first.parent_ticket||'')}</div>
       ${first.location?`<div class="dc-row" style="margin-top:.35rem"><span class="dc-lbl">📍</span><span class="dc-val" style="font-size:.72rem">${esc(first.location)}</span></div>`:''}
       <div class="dc-tags" style="margin-top:.5rem">
-        <span class="tag ${track==='new'?'t-blue':'t-amber'}">${track==='new'?'New Install':'Revisit'}</span>
+        <span class="tag ${getTrackTagClass(first)}">${getTrackLabel(first)}</span>
         ${first.week_no?`<span class="tag t-gray" style="margin-left:3px">Wk ${first.week_no}</span>`:''}
       </div>
       <button onclick="toggleDup('${uid}')" style="margin-top:.625rem;width:100%;padding:.35rem;border-radius:5px;border:1px solid var(--border2);background:var(--surface2);color:var(--text2);font-size:.75rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer" id="btn-${uid}">Show ${group.length} tasks ↓</button>
@@ -924,6 +977,23 @@ function renderTodayCards(deps){
     </div>`;
   }).join('');
 }
+function expandMonthDay(ds,cell){
+  const panel=document.getElementById('monthDayPanel');
+  if(panel.dataset.activeDay===ds){panel.style.display='none';panel.dataset.activeDay='';return;}
+  panel.dataset.activeDay=ds;
+  const d=new Date(ds+'T12:00:00');
+  const dayLabel=d.toLocaleDateString('en-CA',{weekday:'long',month:'long',day:'numeric'});
+  const dayDeps=todayDepsDB.filter(x=>(x.scheduled_start_date||'').slice(0,10)===ds);
+  const newD=dayDeps.filter(x=>getTrack(x)==='new');
+  const revD=dayDeps.filter(x=>getTrack(x)==='revisit');
+  const bfD=dayDeps.filter(x=>getTrack(x)==='breakfix');
+  let html=`<div style="font-size:.9rem;font-weight:700;color:var(--text);margin-bottom:1rem;padding-bottom:.625rem;border-bottom:1px solid var(--border)">${dayLabel}</div>`;
+  if(newD.length)html+=`<div style="font-size:.65rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:.4rem">New Install (${newD.length})</div><div class="dep-grid" style="margin-bottom:.875rem">${renderTodayCards(newD)}</div>`;
+  if(revD.length)html+=`<div style="font-size:.65rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--amber);margin-bottom:.4rem">Revisit (${revD.length})</div><div class="dep-grid" style="margin-bottom:.875rem">${renderTodayCards(revD)}</div>`;
+  if(bfD.length)html+=`<div style="font-size:.65rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--red);margin-bottom:.4rem">Break/Fix (${bfD.length})</div><div class="dep-grid" style="margin-bottom:.875rem">${renderTodayCards(bfD)}</div>`;
+  panel.innerHTML=html;panel.style.display='block';
+  panel.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
 function toggleDup(uid){
   const el=document.getElementById(uid);
   const btn=document.getElementById('btn-'+uid);
@@ -933,14 +1003,18 @@ function toggleDup(uid){
 }
 function todayCard(dep){
   const track=getTrack(dep);
+  const tagCls=getTrackTagClass(dep);
+  const tagLbl=getTrackLabel(dep);
   return`<div class="dep-card track-${track}">
-    <div class="dc-client">${esc(dep.client)}</div>
-    <div class="dc-ticket">${esc(dep.parent_ticket||'')}${dep.kiosk_id?' · '+esc(dep.kiosk_id):''}</div>
-    ${dep.location?`<div class="dc-row"><span class="dc-lbl">📍</span><span class="dc-val" style="font-size:.72rem">${esc(dep.location)}</span></div>`:''}
-    <div class="dc-row"><span class="dc-lbl">Activity</span><span class="dc-val" style="font-size:.72rem">${esc(dep.activity_type)}</span></div>
-    ${dep.stage?`<div class="dc-row"><span class="dc-lbl">Stage</span><span class="tag t-gray">${esc(dep.stage)}</span></div>`:''}
-    ${dep.tech?`<div class="dc-row"><span class="dc-lbl">👤</span><span class="dc-val">${esc(dep.tech)}</span></div>`:''}
-    <div class="dc-tags"><span class="tag ${track==='new'?'t-blue':'t-amber'}">${track==='new'?'New Install':'Revisit'}</span>${dep.week_no?`<span class="tag t-gray" style="margin-left:3px">Wk ${dep.week_no}</span>`:''}</div>
+    <div class="dc-client" style="font-size:.8rem;margin-bottom:.2rem">${esc(dep.client)}</div>
+    <div class="dc-ticket" style="font-size:.65rem;margin-bottom:.25rem">${esc(dep.parent_ticket||'')}</div>
+    ${dep.kiosk_id?`<div style="font-size:.65rem;color:var(--accent);font-weight:600;margin-bottom:.25rem">${esc(dep.kiosk_id)}</div>`:''}
+    ${dep.tech?`<div style="font-size:.68rem;color:var(--text2);margin-bottom:.25rem">👤 ${esc(dep.tech)}</div>`:''}
+    ${dep.stage?`<div style="margin-bottom:.3rem"><span class="tag t-gray">${esc(dep.stage)}</span></div>`:''}
+    <div style="display:flex;gap:.25rem;flex-wrap:wrap;margin-top:auto;padding-top:.25rem;border-top:1px solid var(--border)">
+      <span class="tag ${tagCls}">${tagLbl}</span>
+      ${dep.week_no?`<span class="tag t-gray">Wk ${dep.week_no}</span>`:''}
+    </div>
   </div>`;
 }
 
