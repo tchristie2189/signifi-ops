@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Signifi — Today's Deployments</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --accent:#0066FF;--accent-soft:rgba(0,102,255,.08);--accent-border:rgba(0,102,255,.2);
+  --green:#059669;--green-soft:rgba(5,150,105,.08);--green-border:rgba(5,150,105,.25);
+  --red:#DC2626;--red-soft:rgba(220,38,38,.08);--red-border:rgba(220,38,38,.2);
+  --amber:#D97706;--amber-soft:rgba(217,119,6,.08);--amber-border:rgba(217,119,6,.2);
+  --bg:#F8F9FB;--surface:#fff;--surface2:#F3F4F6;--surface3:#E9EAEC;
+  --border:#E5E7EB;--border2:#D1D3D7;--text:#111827;--text2:#4B5563;--text3:#9CA3AF;
+  --shadow:0 1px 3px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.04);--shadow-md:0 4px 12px rgba(0,0,0,.07);--radius:10px;--radius-sm:7px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;min-height:100vh}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:var(--surface3);border-radius:4px}
+nav{background:#fff;border-bottom:1px solid var(--border);padding:.625rem 1.5rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;position:sticky;top:0;z-index:300;box-shadow:var(--shadow)}
+.nav-left{display:flex;align-items:center;gap:.875rem}
+.logo-mark{width:26px;height:26px;background:#0066FF;border-radius:6px;display:flex;align-items:center;justify-content:center}
+.logo-mark svg{width:14px;height:14px}
+.logo-text{font-size:.9rem;font-weight:700;color:var(--text)}
+.nav-div{width:1px;height:18px;background:var(--border2)}
+.nav-title{font-size:.8125rem;font-weight:600;color:var(--text2)}
+.nav-links{display:flex;align-items:center;gap:.25rem}
+.nav-link{padding:.375rem .75rem;border-radius:6px;font-size:.8125rem;font-weight:500;color:var(--text2);cursor:pointer;text-decoration:none;transition:all .15s;border:none;background:transparent;font-family:'DM Sans',sans-serif}
+.nav-link:hover{background:var(--surface2);color:var(--text)}.nav-link.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.tag{font-size:.65rem;font-weight:600;padding:2px 7px;border-radius:4px}
+.t-blue{background:var(--accent-soft);color:var(--accent)}.t-amber{background:var(--amber-soft);color:var(--amber)}
+.t-green{background:var(--green-soft);color:var(--green)}.t-gray{background:var(--surface2);color:var(--text3)}
+.t-red{background:var(--red-soft);color:var(--red)}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}
+.chip-blue{background:var(--accent-soft);border:1px solid var(--accent-border);color:var(--accent)}
+
+main{max-width:900px;margin:0 auto;padding:1.75rem 1.25rem}
+.page-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1.75rem;gap:1rem;flex-wrap:wrap}
+.page-title{font-size:1.375rem;font-weight:700;color:var(--text);margin-bottom:.25rem}
+.page-date{font-size:.875rem;color:var(--text2)}
+.page-count{font-size:.8125rem;color:var(--text3);margin-top:2px}
+
+.section-title{font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);display:flex;align-items:center;gap:.75rem;margin-bottom:.875rem}
+.section-title::after{content:'';flex:1;height:1px;background:var(--border)}
+
+.dep-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.875rem;margin-bottom:2rem}
+.dep-card{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:1.1rem 1.25rem;box-shadow:var(--shadow);transition:all .15s;border-left:3px solid var(--surface3)}
+.dep-card.track-new{border-left-color:var(--accent)}
+.dep-card.track-revisit{border-left-color:var(--amber)}
+.dep-card:hover{box-shadow:var(--shadow-md);transform:translateY(-1px)}
+.dc-client{font-size:.9375rem;font-weight:700;color:var(--text);margin-bottom:2px}
+.dc-ticket{font-size:.72rem;color:var(--text3);margin-bottom:.625rem}
+.dc-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:.35rem}
+.dc-label{font-size:.72rem;color:var(--text3);font-weight:500}
+.dc-val{font-size:.8rem;font-weight:600;color:var(--text)}
+.dc-tags{display:flex;gap:.3rem;flex-wrap:wrap;margin-top:.625rem;padding-top:.625rem;border-top:1px solid var(--border)}
+.dc-tech{display:flex;align-items:center;gap:.35rem;font-size:.75rem;color:var(--text2);margin-top:.35rem}
+
+.time-badge{display:inline-flex;align-items:center;gap:.3rem;padding:3px 10px;border-radius:20px;font-size:.72rem;font-weight:700;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-border)}
+
+.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem;margin-bottom:1.75rem}
+.stat{background:#fff;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.875rem 1rem;box-shadow:var(--shadow)}
+.stat-val{font-size:1.75rem;font-weight:700;font-family:'DM Mono',monospace;color:var(--text);line-height:1;margin-bottom:.2rem}
+.stat-lbl{font-size:.7rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text3)}
+
+.empty{text-align:center;padding:3rem 1.5rem}
+.empty-icon{font-size:2.5rem;margin-bottom:.75rem}
+.empty-title{font-size:1rem;font-weight:600;color:var(--text2);margin-bottom:.35rem}
+.empty-sub{font-size:.8rem;color:var(--text3);line-height:1.6}
+
+.filter-bar{display:flex;align-items:center;gap:.625rem;flex-wrap:wrap;margin-bottom:1rem}
+.fl{font-size:.6875rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);white-space:nowrap}
+select.f-sel{background:#fff;color:var(--text);border:1px solid var(--border2);border-radius:6px;padding:5px 10px;font-size:.8125rem;font-family:'DM Sans',sans-serif;cursor:pointer;outline:none;box-shadow:var(--shadow)}
+select.f-sel:focus{border-color:var(--accent)}
+input.f-search{background:#fff;color:var(--text);border:1px solid var(--border2);border-radius:6px;padding:5px 10px;font-size:.8125rem;font-family:'DM Sans',sans-serif;outline:none;box-shadow:var(--shadow);width:200px}
+input.f-search:focus{border-color:var(--accent)}
+input.f-search::placeholder{color:var(--text3)}
+
+@media(max-width:600px){nav{padding:.5rem 1rem}.nav-title,.nav-div{display:none}main{padding:1rem}.dep-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav>
+  <div class="nav-left">
+    <div class="logo-mark"><svg viewBox="0 0 16 16" fill="none"><polygon points="2,14 8,2 14,14" fill="white" opacity=".9"/></svg></div>
+    <span class="logo-text">Signifi</span>
+    <div class="nav-div"></div>
+    <span class="nav-title">Today's Deployments</span>
+  </div>
+  <div class="nav-links">
+    <a class="nav-link active" href="signifi-quality-today.html">📅 Today</a>
+    <a class="nav-link" href="signifi-quality-check.html">✓ Quality Check</a>
+    <a class="nav-link" href="signifi-quality-overview.html">👁 Overview</a>
+    <a class="nav-link" href="signifi-quality-dashboard.html">📊 Dashboard</a>
+  </div>
+</nav>
+
+<main>
+  <div class="page-header">
+    <div>
+      <div class="page-title" id="pageTitle">Today's Deployments</div>
+      <div class="page-date" id="pageDate"></div>
+      <div class="page-count" id="pageCount"></div>
+    </div>
+    <div class="filter-bar" style="margin-bottom:0">
+      <select class="f-sel" id="trackFil" onchange="render()">
+        <option value="all">All tracks</option>
+        <option value="new">New Install</option>
+        <option value="revisit">Revisit / Other</option>
+      </select>
+      <input class="f-search" id="searchBox" placeholder="Search client…" oninput="render()">
+    </div>
+  </div>
+
+  <div class="stat-row" id="statRow"></div>
+  <div id="contentArea"><div class="empty"><div class="empty-icon">⏳</div><div class="empty-title">Loading…</div></div></div>
+</main>
+
+<script>
+const SB_URL='https://oykgpkolliqjeznblavy.supabase.co';
+const SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95a2dwa29sbGlxamV6bmJsYXl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNTI3ODgsImV4cCI6MjA5NTYyODc4OH0.kkOBhxyaqLG7PLPNI0SwPNwQSWmbpFjDoP2VQp33_X4';
+const NEW_ACTS=['new installation','go live support','break/fix','maintenance','relocation','expansion'];
+
+let allDeps=[];
+const today=new Date();
+const todayStr=today.toISOString().slice(0,10);
+const todayLabel=today.toLocaleDateString('en-CA',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+
+function sbFetch(p){return fetch(SB_URL+p,{headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY}})}
+function getTrack(dep){const a=(dep.activity_type||'').toLowerCase();return NEW_ACTS.some(x=>a.includes(x))?'new':'revisit'}
+function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+async function init(){
+  document.getElementById('pageDate').textContent=todayLabel;
+  try{
+    // Pull all deployments with today's install date
+    const res=await sbFetch(`/rest/v1/deployments?install_date=eq.${todayStr}&select=*&order=client.asc`);
+    if(!res.ok)throw new Error(res.status);
+    allDeps=await res.json();
+    render();
+  }catch(e){
+    document.getElementById('contentArea').innerHTML=`<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Could not load deployments</div><div class="empty-sub">Check Supabase connection.</div></div>`;
+  }
+}
+
+function render(){
+  const track=document.getElementById('trackFil').value;
+  const q=document.getElementById('searchBox').value.toLowerCase();
+  let deps=allDeps.filter(d=>{
+    if(track!=='all'&&getTrack(d)!==track)return false;
+    if(q&&!d.client.toLowerCase().includes(q)&&!(d.parent_ticket||'').includes(q))return false;
+    return true;
+  });
+
+  document.getElementById('pageCount').textContent=deps.length+' deployment'+(deps.length!==1?'s':'')+(allDeps.length!==deps.length?' (filtered from '+allDeps.length+')':'');
+
+  // Stats
+  const newCount=deps.filter(d=>getTrack(d)==='new').length;
+  const revCount=deps.filter(d=>getTrack(d)==='revisit').length;
+  const techs=[...new Set(deps.map(d=>d.tech).filter(Boolean))].length;
+  document.getElementById('statRow').innerHTML=[
+    {val:deps.length,lbl:'Total today',color:'var(--text)'},
+    {val:newCount,lbl:'New installs',color:'var(--accent)'},
+    {val:revCount,lbl:'Revisits / Other',color:'var(--amber)'},
+    {val:techs,lbl:'Techs dispatched',color:'var(--green)'},
+  ].map(s=>`<div class="stat"><div class="stat-val" style="color:${s.color}">${s.val}</div><div class="stat-lbl">${s.lbl}</div></div>`).join('');
+
+  if(!deps.length){
+    document.getElementById('contentArea').innerHTML=`<div class="empty"><div class="empty-icon">🎉</div><div class="empty-title">No deployments today</div><div class="empty-sub">Nothing scheduled for ${todayLabel}.<br>Check the Overview or Quality Check for upcoming work.</div></div>`;
+    return;
+  }
+
+  // Group by track
+  const newDeps=deps.filter(d=>getTrack(d)==='new');
+  const revDeps=deps.filter(d=>getTrack(d)==='revisit');
+  let html='';
+
+  if(newDeps.length){
+    html+=`<div class="section-title">New installations <span class="chip chip-blue" style="margin-left:.5rem">${newDeps.length}</span></div>`;
+    html+=`<div class="dep-grid">${newDeps.map(depCard).join('')}</div>`;
+  }
+  if(revDeps.length){
+    html+=`<div class="section-title">Revisits & other <span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;background:var(--amber-soft);border:1px solid var(--amber-border);color:var(--amber);margin-left:.5rem">${revDeps.length}</span></div>`;
+    html+=`<div class="dep-grid">${revDeps.map(depCard).join('')}</div>`;
+  }
+  document.getElementById('contentArea').innerHTML=html;
+}
+
+function depCard(dep){
+  const track=getTrack(dep);
+  const act=dep.activity_type||'—';
+  const stage=dep.stage||'';
+  const stageColor=stage.toLowerCase().includes('waiting')||stage.toLowerCase().includes('transit')?'t-amber':stage.toLowerCase().includes('complete')?'t-green':'t-gray';
+  return `<div class="dep-card track-${track}">
+    <div class="dc-client">${escHtml(dep.client)}</div>
+    <div class="dc-ticket">${escHtml(dep.parent_ticket||'')}${dep.kiosk_id?' · '+escHtml(dep.kiosk_id):''}</div>
+    ${dep.location?`<div class="dc-row"><span class="dc-label">📍 Location</span><span class="dc-val">${escHtml(dep.location)}</span></div>`:''}
+    <div class="dc-row"><span class="dc-label">🔧 Activity</span><span class="dc-val" style="font-size:.75rem">${escHtml(act)}</span></div>
+    ${stage?`<div class="dc-row"><span class="dc-label">📋 Stage</span><span class="tag ${stageColor}">${escHtml(stage)}</span></div>`:''}
+    ${dep.tech?`<div class="dc-tech">👤 <span>${escHtml(dep.tech)}</span></div>`:''}
+    <div class="dc-tags">
+      <span class="tag ${track==='new'?'t-blue':'t-amber'}">${track==='new'?'New Install':'Revisit'}</span>
+      ${dep.week_no?`<span class="tag t-gray">Week ${dep.week_no}</span>`:''}
+    </div>
+  </div>`;
+}
+
+init();
+</script>
+</body>
+</html>
