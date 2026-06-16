@@ -267,7 +267,10 @@ table.dtbl{border-collapse:collapse;width:100%;min-width:560px}
 
   <div style="margin-top:1.25rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem">
     <div class="sec" style="margin:0;flex:1">Previous imports</div>
-    <button class="nav-btn" onclick="loadFileHistory()" style="font-size:.75rem">↻ Refresh</button>
+    <div style="display:flex;gap:.5rem">
+      <button class="nav-btn primary" onclick="loadAllDeployments()" style="font-size:.75rem">Load all deployments</button>
+      <button class="nav-btn" onclick="loadFileHistory()" style="font-size:.75rem">↻ Refresh</button>
+    </div>
   </div>
   <div class="file-list" id="fileList"><div style="font-size:.8rem;color:var(--text3);padding:.5rem 0">Loading…</div></div>
 
@@ -678,6 +681,26 @@ async function loadFileHistory(){
   }catch(e){document.getElementById('fileList').innerHTML='<div style="font-size:.8rem;color:var(--text3);padding:.5rem 0">Could not load file history.</div>'}
 }
 
+async function loadAllDeployments(){
+  try{
+    toast('Loading all deployments…');
+    const res=await sb('/rest/v1/deployments?select=*&order=week_no.desc,client.asc');
+    if(!res.ok)throw new Error(res.status);
+    const deps=await res.json();
+    activeFileId=null;activeFileName='All deployments';
+    deployments=deps;rowData={};scores={};
+    deployments.forEach(d=>{rowData[d.id]={submitter:'',accountability:'',comments:'',answers:{}}});
+    const weeks=[...new Set(deps.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>b-a);
+    const wSel=document.getElementById('weekSel');
+    wSel.innerHTML='<option value="all">All</option>';
+    weeks.forEach(w=>{const o=document.createElement('option');o.value=w;o.textContent='Wk '+w;wSel.appendChild(o)});
+    wSel.value='all';
+    document.getElementById('roleSection').style.display='block';
+    checkGoBtn();
+    await loadScores();
+    toast('✓ '+deps.length+' deployments loaded across all imports','ok');
+  }catch(e){toast('Could not load all deployments: '+e.message)}
+}
 async function loadFile(fileId,fileName){
   try{
     const res=await sb(`/rest/v1/deployments?file_id=eq.${fileId}&select=*&order=week_no.asc`);
@@ -702,15 +725,21 @@ async function loadFile(fileId,fileName){
 async function loadScores(){
   if(!deployments.length)return;
   try{
-    const ids=deployments.map(d=>d.id).join(',');
-    const res=await sb(`/rest/v1/quality_scores?deployment_id=in.(${ids})&select=*`);
-    if(!res.ok)return;
-    const rows=await res.json();
-    rows.forEach(r=>{
+    const ids=deployments.map(d=>d.id);
+    let allRows=[];
+    // Fetch in batches of 100 IDs to avoid URL length limits
+    for(let i=0;i<ids.length;i+=100){
+      const batch=ids.slice(i,i+100).join(',');
+      const res=await sb(`/rest/v1/quality_scores?deployment_id=in.(${batch})&select=*`);
+      if(!res.ok)continue;
+      const rows=await res.json();
+      allRows=allRows.concat(rows);
+    }
+    allRows.forEach(r=>{
       scores[r.deployment_id+'_'+r.role]={answers:r.answers||{},score:r.score,submitted_by:r.submitted_by,accountability:r.accountability,comments:r.comments};
       if(rowData[r.deployment_id]){Object.assign(rowData[r.deployment_id].answers,r.answers||{});rowData[r.deployment_id].submitter=r.submitted_by||'';rowData[r.deployment_id].accountability=r.accountability||'';rowData[r.deployment_id].comments=r.comments||''}
     });
-    if(rows.length)toast('✓ '+rows.length+' saved scores loaded','ok');
+    if(allRows.length)toast('✓ '+allRows.length+' saved scores loaded','ok');
   }catch(e){console.error(e)}
 }
 
