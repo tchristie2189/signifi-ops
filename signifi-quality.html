@@ -518,6 +518,7 @@ function normalizeRow(r){
   for(const k in r){out[k.trim()]=r[k]}
   return out;
 }
+function log(msg){console.log('[Import]',msg)}
 async function importRows(rows,fileName){
   rows=rows.map(normalizeRow);
   const mapped=rows.filter(r=>{const a=(r['Requested Activity']||'').toLowerCase();if(!a)return false;return!EXCLUDE.some(x=>a.includes(x));})
@@ -530,20 +531,47 @@ async function importRows(rows,fileName){
   const weeks=[...new Set(mapped.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>a-b);
   const weekRange=weeks.length?(weeks.length===1?'Wk '+weeks[0]:'Wk '+weeks[0]+'-'+weeks[weeks.length-1]):'';
 
+  // Parse file date from filename e.g. Task__project_task__-_2026-06-12T080553_549.xlsx
+  let fileDate=null;
+  const fdMatch=fileName.match(/(\d{4}-\d{2}-\d{2})/);
+  if(fdMatch)fileDate=fdMatch[1];
+  log('File date: '+(fileDate||'unknown'));
+
   let fileId;
   try{
-    const fr=await sb('/rest/v1/imported_files',{method:'POST',body:JSON.stringify({file_name:fileName,row_count:mapped.length,week_range:weekRange}),headers:{'Prefer':'return=representation'}});
+    const fr=await sb('/rest/v1/imported_files',{method:'POST',body:JSON.stringify({file_name:fileName,row_count:mapped.length,week_range:weekRange,file_date:fileDate}),headers:{'Prefer':'return=representation'}});
     const txt=await fr.text();
     if(!fr.ok){toast('Import error '+fr.status+': '+txt.substring(0,80));return}
     const fd=JSON.parse(txt);
     fileId=Array.isArray(fd)?fd[0].id:fd.id;
   }catch(e){toast('Network error: '+e.message);return}
 
-  // Batch upsert deployments
+  // Batch upsert deployments — for duplicates, keep the most recent date
   for(let i=0;i<mapped.length;i+=50){
-    const batch=mapped.slice(i,i+50).map(d=>{const {uploaded_at,...rest}=d;return{...rest,file_id:fileId}});
+    const batch=mapped.slice(i,i+50).map(d=>{const {uploaded_at,...rest}=d;return{...rest,file_id:fileId,file_date:fileDate}});
     try{
-      const dr=await sb('/rest/v1/deployments?on_conflict=task_id',{method:'POST',body:JSON.stringify(batch),headers:{'Prefer':'resolution=merge-duplicates,return=minimal','Content-Type':'application/json'}});
+      // First check which of these task_ids already exist and what dates they have
+      const taskIds=batch.map(d=>d.task_id).join(',');
+      const existing=await sb(`/rest/v1/deployments?task_id=in.(${taskIds})&select=task_id,scheduled_start_date,install_date,file_date`);
+      const existingMap={};
+      if(existing.ok){
+        const rows=await existing.json();
+        rows.forEach(r=>{existingMap[r.task_id]={scheduled_start_date:r.scheduled_start_date,install_date:r.install_date,file_date:r.file_date}});
+      }
+      // Use file_date from filename to determine which import wins on conflict
+      const finalBatch=batch.map(d=>{
+        const ex=existingMap[d.task_id];
+        if(!ex) return d;
+        const exFileDate=ex.file_date||'0000-00-00';
+        const thisFileDate=fileDate||'0000-00-00';
+        if(thisFileDate>=exFileDate){
+          return{...d}; // This file is newer — use its data
+        } else {
+          // Existing data is from newer file — preserve its dates
+          return{...d,scheduled_start_date:ex.scheduled_start_date,install_date:ex.install_date};
+        }
+      });
+      const dr=await sb('/rest/v1/deployments?on_conflict=task_id',{method:'POST',body:JSON.stringify(finalBatch),headers:{'Prefer':'resolution=merge-duplicates,return=minimal','Content-Type':'application/json'}});
       if(!dr.ok){const t=await dr.text();toast('Deployment save error: '+t.substring(0,80));return}
     }catch(e){toast('Network error saving deployments: '+e.message);return}
   }
@@ -579,7 +607,7 @@ async function deleteImport(fileId,fileName){
 }
 async function loadFileHistory(){
   try{
-    const res=await sb('/rest/v1/imported_files?select=*&order=imported_at.desc&limit=20');
+    const res=await sb('/rest/v1/imported_files?select=*&order=imported_at.desc&limit=50');
     if(!res.ok)return;
     const files=await res.json();
     document.getElementById('fileList').innerHTML=files.length?files.map(f=>`
@@ -607,7 +635,8 @@ async function loadFile(fileId,fileName){
     const wSel=document.getElementById('weekSel');
     wSel.innerHTML='<option value="all">All</option>';
     weeks.forEach(w=>{const o=document.createElement('option');o.value=w;o.textContent='Wk '+w;wSel.appendChild(o)});
-    if(weeks.length)wSel.value=weeks[0];
+    // Default to 'all' so users see everything
+    wSel.value='all';
     document.getElementById('roleSection').style.display='block';
     checkGoBtn();
     await loadScores();
