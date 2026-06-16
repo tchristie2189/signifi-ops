@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Signifi — Historical Data Migration</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--accent:#0066FF;--green:#059669;--green-soft:rgba(5,150,105,.08);--green-border:rgba(5,150,105,.25);--red:#DC2626;--red-soft:rgba(220,38,38,.08);--amber:#D97706;--bg:#F8F9FB;--surface:#fff;--surface2:#F3F4F6;--border:#E5E7EB;--border2:#D1D3D7;--text:#111827;--text2:#4B5563;--text3:#9CA3AF;--shadow:0 1px 3px rgba(0,0,0,.07);--shadow-md:0 4px 12px rgba(0,0,0,.07);--radius:10px;--radius-sm:7px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;min-height:100vh}
+nav{background:#fff;border-bottom:1px solid var(--border);padding:.625rem 1.5rem;display:flex;align-items:center;gap:.875rem;box-shadow:var(--shadow)}
+.logo-mark{width:26px;height:26px;background:#0066FF;border-radius:6px;display:flex;align-items:center;justify-content:center}
+.logo-mark svg{width:14px;height:14px}
+.logo-text{font-size:.9rem;font-weight:700;color:var(--text)}
+.nav-div{width:1px;height:18px;background:var(--border2)}
+.nav-title{font-size:.8125rem;font-weight:600;color:var(--text2)}
+.wrap{max-width:680px;margin:0 auto;padding:2rem 1.25rem 3rem}
+.page-title{font-size:1.25rem;font-weight:700;margin-bottom:.25rem}
+.page-sub{font-size:.875rem;color:var(--text2);line-height:1.6;margin-bottom:1.75rem}
+.upload-zone{border:1.5px dashed var(--border2);border-radius:var(--radius);padding:2rem 1.5rem;text-align:center;cursor:pointer;transition:all .2s;background:#fff;position:relative;margin-bottom:1.25rem}
+.upload-zone:hover,.upload-zone.drag{border-color:var(--accent);background:rgba(0,102,255,.04)}
+.upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.btn{display:flex;align-items:center;justify-content:center;gap:.4rem;width:100%;padding:.75rem 1.25rem;border-radius:var(--radius-sm);font-size:.875rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;border:none;transition:all .15s;margin-bottom:.625rem}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:#0052CC}.btn-primary:disabled{background:var(--surface2);color:var(--text3);cursor:not-allowed}
+.btn-ghost{background:#fff;color:var(--text2);border:1px solid var(--border2)}.btn-ghost:hover{border-color:var(--border);color:var(--text)}
+.log-box{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:1rem;max-height:400px;overflow-y:auto;font-family:'DM Mono',monospace;font-size:.75rem;line-height:1.7;box-shadow:var(--shadow)}
+.log-ok{color:var(--green)}.log-err{color:var(--red)}.log-info{color:var(--text2)}.log-warn{color:var(--amber)}
+.progress-wrap{margin-bottom:1.25rem}
+.progress-bar{height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;margin-top:.4rem}
+.progress-fill{height:100%;background:var(--accent);border-radius:4px;transition:width .3s ease}
+.stat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem;margin-bottom:1.25rem}
+.stat{background:#fff;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.875rem 1rem;text-align:center;box-shadow:var(--shadow)}
+.stat-val{font-size:1.5rem;font-weight:700;font-family:'DM Mono',monospace;color:var(--text)}
+.stat-lbl{font-size:.7rem;color:var(--text3);font-weight:600;letter-spacing:.06em;text-transform:uppercase;margin-top:.2rem}
+.sec{font-size:.65rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--text3);display:flex;align-items:center;gap:.75rem;margin-bottom:.875rem;margin-top:1.5rem}
+.sec::after{content:'';flex:1;height:1px;background:var(--border)}
+</style>
+</head>
+<body>
+<nav>
+  <div class="logo-mark"><svg viewBox="0 0 16 16" fill="none"><polygon points="2,14 8,2 14,14" fill="white" opacity=".9"/></svg></div>
+  <span class="logo-text">Signifi</span>
+  <div class="nav-div"></div>
+  <span class="nav-title">Historical Data Migration</span>
+</nav>
+
+<div class="wrap">
+  <div class="page-title">Import Historical Quality Data</div>
+  <p class="page-sub">Upload your filled-out Quality_Metrics.xlsx file. This will import all historical deployment records and scores into Supabase so they appear in the dashboard and show as completed in the quality check.</p>
+
+  <div class="upload-zone" id="uploadZone">
+    <input type="file" id="fileInput" accept=".xlsx,.xls">
+    <div style="font-size:1.5rem;margin-bottom:.4rem">📊</div>
+    <div style="font-size:.875rem;font-weight:600;color:var(--text);margin-bottom:.2rem">Drop Quality_Metrics.xlsx here</div>
+    <div style="font-size:.75rem;color:var(--text3)">or tap to browse</div>
+  </div>
+
+  <div id="previewSection" style="display:none">
+    <div class="stat-row" id="statRow"></div>
+    <button class="btn btn-primary" id="importBtn" onclick="runImport()">Import all historical data →</button>
+    <button class="btn btn-ghost" onclick="reset()">← Upload different file</button>
+  </div>
+
+  <div id="progressSection" style="display:none">
+    <div class="progress-wrap">
+      <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:.3rem">
+        <span id="progressLbl" style="color:var(--text2)">Starting…</span>
+        <span id="progressPct" style="font-weight:700;color:var(--accent)">0%</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+    </div>
+    <div class="sec">Import log</div>
+    <div class="log-box" id="logBox"></div>
+  </div>
+</div>
+
+<script>
+const SB_URL='https://oykgpkolliqjeznblayv.supabase.co';
+const SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95a2dwa29sbGlxamV6bmJsYXl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNTI3ODgsImV4cCI6MjA5NTYyODc4OH0.kkOBhxyaqLG7PLPNI0SwPNwQSWmbpFjDoP2VQp33_X4';
+
+const COL_MAP={10:'site_survey',11:'badge_payment',12:'product_received',13:'no_so_changes',32:'no_surprises',14:'shipped_schedule',16:'pickup_ontime',17:'equipment_arrived',18:'no_vinyl_damage',19:'no_equip_damage',21:'tech_ontime',22:'install_4hrs',23:'no_revisit',24:'no_parts',25:'network_ready',26:'no_sw_issues',27:'no_hw_issues',28:'worked_first_time',29:'planogram_done',30:'latest_ui',31:'no_repeat_visits'};
+const PM_IDS=new Set(['site_survey','badge_payment','product_received','no_so_changes','no_surprises']);
+const LOG_IDS=new Set(['shipped_schedule','pickup_ontime','equipment_arrived','no_vinyl_damage','no_equip_damage']);
+const INST_IDS=new Set(['tech_ontime','install_4hrs','no_revisit','no_parts','network_ready','no_sw_issues','no_hw_issues','worked_first_time','planogram_done','latest_ui','no_repeat_visits']);
+const NEW_ACTS=['install','go live','break/fix','maintenance','relocation','expansion'];
+
+let parsedRecords=[];
+
+function sb(path,opts={}){return fetch(SB_URL+path,{...opts,headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json',...(opts.headers||{})}})}
+function log(msg,type='info'){const box=document.getElementById('logBox');const line=document.createElement('div');line.className='log-'+type;line.textContent=msg;box.appendChild(line);box.scrollTop=box.scrollHeight}
+function setProgress(pct,lbl){document.getElementById('progressFill').style.width=pct+'%';document.getElementById('progressPct').textContent=Math.round(pct)+'%';if(lbl)document.getElementById('progressLbl').textContent=lbl}
+
+function parseVal(v){
+  if(v===undefined||v===null||v==='')return null;
+  const s=String(v).trim();
+  if(s.toLowerCase()==='na'||s==='-')return null;
+  const n=parseFloat(s);
+  if(!isNaN(n))return n>=1?1:n<=0?0:null;
+  return null;
+}
+
+function excelDateToISO(val){
+  if(!val)return null;
+  const n=parseFloat(val);
+  if(isNaN(n)||n<1000)return null;
+  const d=new Date((n-25569)*86400*1000);
+  return d.toISOString().slice(0,10);
+}
+
+function extractClient(display){
+  const parts=display.split(' - ');
+  if(parts.length>=3)return parts[2].split(' ')[0].split('|')[0].trim();
+  return display.split(' ').slice(0,3).join(' ');
+}
+
+function parseSheet(ws,year){
+  const data=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+  // Find header row (has 'Parent Ticket' in col 0)
+  let headerIdx=data.findIndex(r=>String(r[0]).includes('Parent Ticket'));
+  if(headerIdx===-1)return[];
+  const records=[];
+  for(let i=headerIdx+1;i<data.length;i++){
+    const row=data[i];
+    const ticket=String(row[0]||'').trim();
+    if(!ticket||isNaN(parseInt(ticket)))continue;
+    const displayName=String(row[1]||'').trim();
+    const client=extractClient(displayName);
+    const weekNo=parseInt(row[4])||0;
+    const comment=String(row[5]||'').trim();
+    const accountability=String(row[6]||'').trim();
+    const totalScore=parseFloat(row[7]);
+    const scorePct=!isNaN(totalScore)?Math.round(totalScore*100):null;
+    const answers={};
+    for(const[colIdx,qId]of Object.entries(COL_MAP)){
+      answers[qId]=parseVal(row[parseInt(colIdx)]);
+    }
+    const pmAns=Object.fromEntries(Object.entries(answers).filter(([k])=>PM_IDS.has(k)));
+    const logAns=Object.fromEntries(Object.entries(answers).filter(([k])=>LOG_IDS.has(k)));
+    const instAns=Object.fromEntries(Object.entries(answers).filter(([k])=>INST_IDS.has(k)));
+    // Determine track
+    const dl=displayName.toLowerCase();
+    const track=NEW_ACTS.some(x=>dl.includes(x))?'new':'revisit';
+    records.push({ticket,client,displayName,weekNo,comment,accountability,scorePct,pmAns,logAns,instAns,track,year});
+  }
+  return records;
+}
+
+const uz=document.getElementById('uploadZone');
+uz.addEventListener('dragover',e=>{e.preventDefault();uz.classList.add('drag')});
+uz.addEventListener('dragleave',()=>uz.classList.remove('drag'));
+uz.addEventListener('drop',e=>{e.preventDefault();uz.classList.remove('drag');handleFile(e.dataTransfer.files[0])});
+document.getElementById('fileInput').addEventListener('change',e=>handleFile(e.target.files[0]));
+
+function handleFile(file){
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const wb=XLSX.read(e.target.result,{type:'array'});
+    parsedRecords=[];
+    for(const sheetName of wb.SheetNames){
+      if(sheetName.includes('Score Card')){
+        const year=sheetName.includes('2026')?'2026':'2025';
+        const ws=wb.Sheets[sheetName];
+        const recs=parseSheet(ws,year);
+        parsedRecords.push(...recs);
+        console.log(`Sheet ${sheetName}: ${recs.length} records`);
+      }
+    }
+    // Dedupe by ticket+year
+    const seen=new Set();
+    parsedRecords=parsedRecords.filter(r=>{const k=r.ticket+'_'+r.year;if(seen.has(k))return false;seen.add(k);return true});
+    const y2025=parsedRecords.filter(r=>r.year==='2025').length;
+    const y2026=parsedRecords.filter(r=>r.year==='2026').length;
+    document.getElementById('statRow').innerHTML=[
+      {val:parsedRecords.length,lbl:'Total records'},{val:y2025,lbl:'2025'},{val:y2026,lbl:'2026'}
+    ].map(s=>`<div class="stat"><div class="stat-val">${s.val}</div><div class="stat-lbl">${s.lbl}</div></div>`).join('');
+    document.getElementById('previewSection').style.display='block';
+    document.getElementById('uploadZone').style.display='none';
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+async function runImport(){
+  document.getElementById('previewSection').style.display='none';
+  document.getElementById('progressSection').style.display='block';
+  const logBox=document.getElementById('logBox');
+  logBox.innerHTML='';
+
+  // 1. Create a file record for historical import
+  log('Creating historical import file record…','info');
+  let fileId;
+  try{
+    const fr=await sb('/rest/v1/imported_files',{method:'POST',body:JSON.stringify({file_name:'Quality_Metrics_Historical.xlsx',row_count:parsedRecords.length,week_range:'Historical 2025–2026'}),headers:{'Prefer':'return=representation'}});
+    const txt=await fr.text();
+    if(!fr.ok){log('Failed to create file record: '+txt,'err');return}
+    const fd=JSON.parse(txt);
+    fileId=Array.isArray(fd)?fd[0].id:fd.id;
+    log('✓ File record created: '+fileId,'ok');
+  }catch(e){log('Error: '+e.message,'err');return}
+
+  // 2. Upsert deployments
+  log('Upserting '+parsedRecords.length+' deployments…','info');
+  const depRows=parsedRecords.map(r=>({
+    task_id:'hist-'+r.ticket+'-'+r.year,
+    parent_ticket:r.ticket,
+    display_name:r.displayName,
+    client:r.client,
+    week_no:r.weekNo,
+    activity_type:r.track==='new'?'New Installation':'Revisit',
+    file_id:fileId,
+    install_date:null,
+  }));
+
+  let depIds={};
+  const batchSize=50;
+  let depsDone=0;
+  for(let i=0;i<depRows.length;i+=batchSize){
+    const batch=depRows.slice(i,i+batchSize);
+    try{
+      const res=await sb('/rest/v1/deployments?on_conflict=task_id',{method:'POST',body:JSON.stringify(batch),headers:{'Prefer':'resolution=merge-duplicates,return=representation'}});
+      if(!res.ok){const t=await res.text();log('Dep batch error: '+t.substring(0,100),'err');continue}
+      const saved=await res.json();
+      saved.forEach(d=>{depIds[d.task_id]=d.id});
+      depsDone+=batch.length;
+      setProgress(depsDone/depRows.length*40,'Saving deployments '+depsDone+'/'+depRows.length+'…');
+    }catch(e){log('Dep batch error: '+e.message,'err')}
+  }
+  log('✓ '+depsDone+' deployments saved','ok');
+
+  // 3. Build and upsert quality scores
+  log('Upserting quality scores…','info');
+  const scoreRows=[];
+  for(const r of parsedRecords){
+    const taskId='hist-'+r.ticket+'-'+r.year;
+    const depId=depIds[taskId];
+    if(!depId){log('No dep ID for '+r.ticket,'warn');continue}
+    // Calculate per-role scores
+    const calcScore=(ans)=>{const v=Object.values(ans).filter(x=>x!==null);return v.length?Math.round(v.reduce((a,b)=>a+b,0)/v.length*100):null};
+    scoreRows.push({deployment_id:depId,role:'pm',track:r.track,submitted_by:'Historical Import',accountability:r.accountability,comments:r.comment,answers:r.pmAns,score:calcScore(r.pmAns),submitted_at:new Date().toISOString()});
+    scoreRows.push({deployment_id:depId,role:'logistics',track:r.track,submitted_by:'Historical Import',accountability:r.accountability,comments:r.comment,answers:r.logAns,score:calcScore(r.logAns),submitted_at:new Date().toISOString()});
+    scoreRows.push({deployment_id:depId,role:'install',track:r.track,submitted_by:'Historical Import',accountability:r.accountability,comments:r.comment,answers:r.instAns,score:calcScore(r.instAns),submitted_at:new Date().toISOString()});
+  }
+
+  let scoresDone=0;
+  for(let i=0;i<scoreRows.length;i+=batchSize){
+    const batch=scoreRows.slice(i,i+batchSize);
+    try{
+      const res=await sb('/rest/v1/quality_scores?on_conflict=deployment_id,role',{method:'POST',body:JSON.stringify(batch),headers:{'Prefer':'resolution=merge-duplicates,return=minimal'}});
+      if(!res.ok){const t=await res.text();log('Score batch error: '+t.substring(0,100),'err');continue}
+      scoresDone+=batch.length;
+      setProgress(40+scoresDone/scoreRows.length*60,'Saving scores '+scoresDone+'/'+scoreRows.length+'…');
+    }catch(e){log('Score batch error: '+e.message,'err')}
+  }
+
+  setProgress(100,'Complete!');
+  log('✓ '+scoresDone+' quality scores saved','ok');
+  log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━','info');
+  log('✅ Migration complete! '+parsedRecords.length+' deployments · '+scoresDone+' scores','ok');
+  log('Head to the Quality Hub to see your historical data.','info');
+  document.getElementById('progressLbl').textContent='Migration complete!';
+  document.getElementById('progressFill').style.background='var(--green)';
+}
+
+function reset(){parsedRecords=[];document.getElementById('previewSection').style.display='none';document.getElementById('uploadZone').style.display='block';document.getElementById('fileInput').value=''}
+</script>
+</body>
+</html>
