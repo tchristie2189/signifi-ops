@@ -302,6 +302,17 @@ table.dtbl{border-collapse:collapse;width:100%;min-width:560px}
     <div class="fdiv"></div>
     <input class="fsearch" id="searchBox" placeholder="Search…" oninput="renderGrid()">
     <div class="fdiv"></div>
+    <span class="fl">Role</span>
+    <select class="fsel" id="roleSwitch" onchange="switchRole(this.value)">
+      <option value="pm">PM</option>
+      <option value="logistics">Logistics</option>
+      <option value="install">Install</option>
+    </select>
+    <div class="fdiv"></div>
+    <label style="display:flex;align-items:center;gap:.35rem;font-size:.8rem;font-weight:600;color:var(--text2);cursor:pointer;white-space:nowrap">
+      <input type="checkbox" id="incompleteOnly" onchange="renderGrid()" style="cursor:pointer"> Incomplete only
+    </label>
+    <div class="fdiv"></div>
     <button class="nav-btn success" onclick="submitAll()">↑ Submit all</button>
     <button class="nav-btn primary" onclick="downloadResults()">↓ Download</button>
     <button class="nav-btn" onclick="showModal('manualModal')">+ Add</button>
@@ -325,6 +336,7 @@ table.dtbl{border-collapse:collapse;width:100%;min-width:560px}
         <button id="btnWeek" onclick="setTodayView('week')" style="padding:.35rem .75rem;border-radius:4px;font-size:.78rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;border:none;background:transparent;color:var(--text3)">This Week</button>
         <button id="btnNextWeek" onclick="setTodayView('nextweek')" style="padding:.35rem .75rem;border-radius:4px;font-size:.78rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;border:none;background:transparent;color:var(--text3)">Next Week</button>
         <button id="btnMonth" onclick="setTodayView('month')" style="padding:.35rem .75rem;border-radius:4px;font-size:.78rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;border:none;background:transparent;color:var(--text3)">This Month</button>
+        <button id="btnNextMonth" onclick="setTodayView('nextmonth')" style="padding:.35rem .75rem;border-radius:4px;font-size:.78rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;border:none;background:transparent;color:var(--text3)">Next Month</button>
       </div>
       <select class="fsel" id="todayTrack" onchange="renderToday()"><option value="all">All tracks</option><option value="new">New Install</option><option value="revisit">Revisit</option><option value="breakfix">Break/Fix</option></select>
       <select class="fsel" id="todayOrg" onchange="renderToday()"><option value="all">All orgs</option></select>
@@ -369,7 +381,10 @@ table.dtbl{border-collapse:collapse;width:100%;min-width:560px}
 <div class="view" id="view-dashboard">
 <div class="wrap">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:.75rem">
-    <div class="page-title">Quality Dashboard</div>
+    <div style="display:flex;align-items:center;gap:.875rem">
+      <div class="page-title">Quality Dashboard</div>
+      <button onclick="dashLoaded=false;renderDashboard()" style="padding:.35rem .875rem;border-radius:6px;font-size:.78rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;border:1px solid var(--border2);background:#fff;color:var(--text2);transition:all .15s" title="Refresh data">↻ Refresh</button>
+    </div>
     <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
       <select class="fsel" id="dbWeek" onchange="renderDashboard()"><option value="all">All weeks</option></select>
       <select class="fsel" id="dbRole" onchange="renderDashboard()"><option value="all">All roles</option><option value="pm">PM</option><option value="logistics">Logistics</option><option value="install">Install</option></select>
@@ -435,14 +450,52 @@ const SB_URL='https://oykgpkolliqjeznblayv.supabase.co';
 const SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95a2dwa29sbGlxamV6bmJsYXl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNTI3ODgsImV4cCI6MjA5NTYyODc4OH0.kkOBhxyaqLG7PLPNI0SwPNwQSWmbpFjDoP2VQp33_X4';
 
 const Q={
-  pm:[{id:'site_survey',s:'Survey'},{id:'badge_payment',s:'Badge'},{id:'product_received',s:'Product'},{id:'no_so_changes',s:'SO'},{id:'no_surprises',s:'Surp.'}],
-  logistics:[{id:'shipped_schedule',s:'Shipped'},{id:'pickup_ontime',s:'Pickup'},{id:'equipment_arrived',s:'Arrived'},{id:'no_vinyl_damage',s:'Vinyl'},{id:'no_equip_damage',s:'Damage'}],
-  install_new:[{id:'tech_ontime',s:'Tech'},{id:'install_4hrs',s:'4hrs'},{id:'no_revisit',s:'No Rev.'},{id:'no_parts',s:'Parts'},{id:'network_ready',s:'Network'},{id:'no_sw_issues',s:'SW'},{id:'no_hw_issues',s:'HW'},{id:'worked_first_time',s:'1st Try'},{id:'planogram_done',s:'Plano.'},{id:'latest_ui',s:'UI'},{id:'no_repeat_visits',s:'No Rep.'}],
-  install_revisit:[{id:'tech_ontime',s:'Tech'},{id:'no_revisit',s:'No Rev.'},{id:'network_ready',s:'Network'},{id:'no_sw_issues',s:'SW'},{id:'no_hw_issues',s:'HW'},{id:'worked_first_time',s:'1st Try'}],
-  pm_revisit:[{id:'site_survey',s:'Survey'},{id:'no_surprises',s:'Surp.'}],
-  logistics_revisit:[{id:'equipment_arrived',s:'Arrived'},{id:'no_vinyl_damage',s:'Vinyl'},{id:'no_equip_damage',s:'Damage'}],
+  pm:[
+    {id:'site_survey',      s:'Site Survey',   full:'Was the facility site survey completed accurately with no issues?'},
+    {id:'badge_payment',    s:'Badge/Pay',      full:'Was payment activation or badge access configured before install?'},
+    {id:'product_received', s:'Product Rcvd',   full:'Was the product received from the client as expected?'},
+    {id:'no_so_changes',    s:'No SO Changes',  full:'Were there no changes to the SO after the PO was issued?'},
+    {id:'no_surprises',     s:'No Surprises',   full:'Were there no site survey surprises on install day?'},
+  ],
+  logistics:[
+    {id:'shipped_schedule',  s:'On Schedule',    full:'Was the unit shipped on the original schedule?'},
+    {id:'pickup_ontime',     s:'Pickup OnTime',  full:'Was the unit picked up on time with no penalty?'},
+    {id:'equipment_arrived', s:'Equip Arrived',  full:'Did the equipment arrive on time?'},
+    {id:'no_vinyl_damage',   s:'No Vinyl Dmg',   full:'Was there no vinyl damage on arrival?'},
+    {id:'no_equip_damage',   s:'No Equip Dmg',   full:'Did the unit arrive with no equipment damage, uncrated in its final resting spot?'},
+  ],
+  install_new:[
+    {id:'tech_ontime',       s:'Tech OnTime',    full:'Did the technician arrive on time without causing issues?'},
+    {id:'install_4hrs',      s:'≤4hr Install',   full:'Was the install completed in 4 hours or less?'},
+    {id:'no_revisit',        s:'No Revisit',     full:'Was no revisit required?'},
+    {id:'no_parts',          s:'No Parts Req',   full:'Were no additional parts required on site?'},
+    {id:'network_ready',     s:'Network Ready',  full:'Was the network ready and configured correctly?'},
+    {id:'no_sw_issues',      s:'No SW Issues',   full:'Were there no software challenges?'},
+    {id:'no_hw_issues',      s:'No HW Issues',   full:'Were there no hardware challenges?'},
+    {id:'worked_first_time', s:'First Try',      full:'Did it work right the first time?'},
+    {id:'planogram_done',    s:'Planogram',      full:'Was the planogram / merchandising configured?'},
+    {id:'latest_ui',         s:'Latest UI',      full:'Was the latest UI version installed before ship?'},
+    {id:'no_repeat_visits',  s:'No Repeats',     full:'Were there no repeat visits within 30 days?'},
+  ],
+  install_revisit:[
+    {id:'tech_ontime',       s:'Tech OnTime',    full:'Did the technician arrive on time without causing issues?'},
+    {id:'no_revisit',        s:'No Revisit',     full:'Was no further revisit required?'},
+    {id:'network_ready',     s:'Network Ready',  full:'Was the network ready and configured correctly?'},
+    {id:'no_sw_issues',      s:'No SW Issues',   full:'Were there no software challenges?'},
+    {id:'no_hw_issues',      s:'No HW Issues',   full:'Were there no hardware challenges?'},
+    {id:'worked_first_time', s:'First Try',      full:'Did it work right the first time?'},
+  ],
+  pm_revisit:[
+    {id:'site_survey',    s:'Site Survey',  full:'Was the facility site survey completed accurately with no issues?'},
+    {id:'no_surprises',   s:'No Surprises', full:'Were there no site survey surprises on install day?'},
+  ],
+  logistics_revisit:[
+    {id:'equipment_arrived', s:'Equip Arrived', full:'Did the equipment arrive on time?'},
+    {id:'no_vinyl_damage',   s:'No Vinyl Dmg',  full:'Was there no vinyl damage on arrival?'},
+    {id:'no_equip_damage',   s:'No Equip Dmg',  full:'Did the unit arrive with no equipment damage, uncrated in its final resting spot?'},
+  ],
 };
-const Q_LABELS={site_survey:'Site survey',badge_payment:'Badge/payment',product_received:'Product received',no_so_changes:'No SO changes',no_surprises:'No surprises',shipped_schedule:'Shipped on schedule',pickup_ontime:'Pickup on time',equipment_arrived:'Equipment arrived',no_vinyl_damage:'No vinyl damage',no_equip_damage:'No equip. damage',tech_ontime:'Tech on time',install_4hrs:'Install ≤4hrs',no_revisit:'No revisit',no_parts:'No parts needed',network_ready:'Network ready',no_sw_issues:'No SW issues',no_hw_issues:'No HW issues',worked_first_time:'First time success',planogram_done:'Planogram configured',latest_ui:'Latest UI shipped',no_repeat_visits:'No repeat visits'};
+const Q_LABELS={site_survey:'Site Survey',badge_payment:'Badge/Pay',product_received:'Product Rcvd',no_so_changes:'No SO Changes',no_surprises:'No Surprises',shipped_schedule:'On Schedule',pickup_ontime:'Pickup OnTime',equipment_arrived:'Equip Arrived',no_vinyl_damage:'No Vinyl Dmg',no_equip_damage:'No Equip Dmg',tech_ontime:'Tech OnTime',install_4hrs:'≤4hr Install',no_revisit:'No Revisit',no_parts:'No Parts Req',network_ready:'Network Ready',no_sw_issues:'No SW Issues',no_hw_issues:'No HW Issues',worked_first_time:'First Try',planogram_done:'Planogram',latest_ui:'Latest UI',no_repeat_visits:'No Repeats'};
 const ACC=['','Success','Client','PM','Logistics','QC','QA','Production','Technician','Tech Error','Software','Solutioning','Support Agent','Client / PM','QA / PM','QC / Client','Other'];
 const ROLES=['pm','logistics','install'];
 const ROLE_LABELS={pm:'Project Management',logistics:'Logistics',install:'Install / Tech'};
@@ -451,7 +504,9 @@ const NEW_ACTS=['new installation','go live support','break/fix','maintenance','
 
 let deployments=[],scores={},rowData={},selectedRole=null,activeFileId=null,activeFileName='';
 let allDepsDB=[],allScoresDB=[];
+let dashDepsDB=[],dashScoresDB=[];
 let todayDepsDB=[];
+let dashLoaded=false;
 let CH={};
 
 // HELPERS
@@ -525,7 +580,7 @@ async function importRows(rows,fileName){
     .map((r,i)=>{
       const display=stripHtml(String(r['Display Name']||r['display_name']||''));
       const loc=r['Service location']||r['service_location']||'';
-      const rawDate=String(r['Confirmed Installation Date']||r['install_date']||'').trim().split(' ')[0].split('T')[0];const installDate=(rawDate&&/^\d{4}-\d{2}-\d{2}$/.test(rawDate))?rawDate:null;const rawSched=String(r['Scheduled Start Date Time']||'').trim();let schedDate=null;if(rawSched){const schedDatePart=rawSched.split(' ')[0].split('T')[0];if(/^\d{4}-\d{2}-\d{2}$/.test(schedDatePart)){schedDate=schedDatePart}else{const schedNum=parseFloat(rawSched);if(!isNaN(schedNum)&&schedNum>1000){const d=new Date((schedNum-25569)*86400*1000);schedDate=d.toISOString().slice(0,10)}}}return{task_id:stripHtml(String(r['Task ID']||r['task_id']||'m'+Date.now()+i)),parent_ticket:String(r['Parent Ticket #']||r['parent_ticket']||''),display_name:display,client:extractClient(display,loc),kiosk_id:String(r['Kiosk ID']||r['kiosk_id']||''),location:String(loc||''),stage:String(r['Project Stage']||''),activity_type:String(r['Requested Activity']||''),tech:String(r['Dispatch Tech']||r['dispatch_tech']||''),service_org:String(r['Service Organization']||r['service_org']||''),week_no:parseInt(r['Confirmed Week No.']||r['week_no'])||0,install_date:installDate,scheduled_start_date:schedDate};
+      const rawDate=String(r['Confirmed Installation Date']||r['install_date']||'').trim().split(' ')[0].split('T')[0];const installDate=(rawDate&&/^\d{4}-\d{2}-\d{2}$/.test(rawDate))?rawDate:null;const rawSched=String(r['Scheduled Start Date Time']||'').trim();let schedDate=null;if(rawSched){const schedDatePart=rawSched.split(' ')[0].split('T')[0];if(/^\d{4}-\d{2}-\d{2}$/.test(schedDatePart)){schedDate=schedDatePart}else{const schedNum=parseFloat(rawSched);if(!isNaN(schedNum)&&schedNum>1000){const d=new Date((schedNum-25569)*86400*1000);schedDate=d.toISOString().slice(0,10)}}}return{task_id:stripHtml(String(r['Task ID']||r['task_id']||'m'+Date.now()+i)),parent_ticket:String(r['Parent Ticket #']||r['parent_ticket']||''),display_name:display,client:extractClient(display,loc),kiosk_id:String(r['Kiosk ID']||r['kiosk_id']||''),location:String(loc||''),stage:String(r['Project Stage']||''),activity_type:String(r['Requested Activity']||''),tech:String(r['Dispatch Tech']||r['dispatch_tech']||''),service_org:String(r['Service Organization']||r['service_org']||''),system_type:String(r['System Type']||r['system_type']||''),sales_order:String(r['Sales Order']||r['Sales Order ']||r['sales_order']||''),week_no:parseInt(r['Confirmed Week No.']||r['week_no'])||0,install_date:installDate,scheduled_start_date:schedDate};
     });
 
   const weeks=[...new Set(mapped.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>a-b);
@@ -661,7 +716,21 @@ async function loadScores(){
 
 function selectRole(role,el){selectedRole=role;document.querySelectorAll('.role-card').forEach(c=>c.classList.remove('selected'));el.classList.add('selected');checkGoBtn()}
 function checkGoBtn(){document.getElementById('goBtn').disabled=!deployments.length||!selectedRole}
-function goToGrid(){if(!selectedRole||!deployments.length)return;document.getElementById('gridFileLabel').textContent=activeFileName;renderGrid();switchTab('grid')}
+function goToGrid(){
+  if(!selectedRole||!deployments.length)return;
+  document.getElementById('gridFileLabel').textContent=activeFileName;
+  document.getElementById('roleSwitch').value=selectedRole;
+  renderGrid();switchTab('grid');
+}
+function switchRole(role){
+  selectedRole=role;
+  // Update role card selection on import tab
+  document.querySelectorAll('.role-card').forEach(c=>c.classList.remove('selected'));
+  const cards=document.querySelectorAll('.role-card');
+  const roleIdx={pm:0,logistics:1,install:2}[role];
+  if(cards[roleIdx])cards[roleIdx].classList.add('selected');
+  renderGrid();
+}
 
 // MANUAL TICKET
 async function saveManual(){
@@ -685,11 +754,13 @@ function getFiltered(){
   const track=document.getElementById('trackSel').value;
   const status=document.getElementById('statusSel').value;
   const q=document.getElementById('searchBox').value.toLowerCase();
+  const incompleteOnly=document.getElementById('incompleteOnly')?.checked;
   return deployments.filter(d=>{
     if(week!=='all'&&d.week_no!==parseInt(week))return false;
     if(track!=='all'&&getTrack(d)!==track)return false;
     if(q&&!d.client.toLowerCase().includes(q)&&!(d.parent_ticket||'').includes(q)&&!(d.kiosk_id||'').toLowerCase().includes(q))return false;
     const done=!!scores[d.id+'_'+selectedRole];
+    if(incompleteOnly&&done)return false;
     if(status==='pending'&&done)return false;
     if(status==='done'&&!done)return false;
     return true;
@@ -714,7 +785,7 @@ function renderGrid(){
       <th rowspan="2" style="min-width:130px"><div class="th-i" style="text-align:left">Comments</div></th>
       <th rowspan="2"><div class="th-i">Save</div></th>
     </tr>
-    <tr>${allQ.map(q=>`<th class="${grpCls}"><div class="th-i" title="${q.id}">${q.s}</div></th>`).join('')}</tr>
+    <tr>${allQ.map(q=>`<th class="${grpCls}"><div class="th-i" title="${q.full||q.s}" style="cursor:help">${q.s}</div></th>`).join('')}</tr>
   </thead><tbody>`;
 
   deps.forEach(dep=>{
@@ -730,7 +801,9 @@ function renderGrid(){
       <td class="col-dep td-dep">
         <div class="dep-name" title="${esc(dep.display_name)}">${esc(dep.client)}</div>
         <div class="dep-sub">${esc(dep.parent_ticket||'')}${dep.kiosk_id?' · '+esc(dep.kiosk_id):''}</div>
-        <div class="dep-tags"><span class="tag ${track==='new'?'t-blue':'t-amber'}">${track==='new'?'New':'Revisit'}</span>${dep.week_no?`<span class="tag t-gray" style="margin-left:2px">Wk ${dep.week_no}</span>`:''}${isDone?'<span class="tag t-green" style="margin-left:2px">✓</span>':''}</div>
+        ${dep.system_type?`<div style="font-size:.63rem;color:var(--accent);font-weight:600;margin-top:2px">${esc(dep.system_type)}</div>`:''}
+        ${dep.sales_order?`<div style="font-size:.63rem;color:var(--text3);margin-top:1px">SO: ${esc(dep.sales_order)}</div>`:''}
+        <div class="dep-tags" style="margin-top:3px"><span class="tag ${track==='new'?'t-blue':track==='breakfix'?'t-red':'t-amber'}">${track==='new'?'New':track==='breakfix'?'B/F':'Revisit'}</span>${dep.week_no?`<span class="tag t-gray" style="margin-left:2px">Wk ${dep.week_no}</span>`:''}${isDone?'<span class="tag t-green" style="margin-left:2px">✓</span>':''}</div>
       </td>
       <td class="col-name td-name"><input class="si" placeholder="Your name" value="${esc(saved?.submitted_by||rd.submitter||'')}" onchange="setMeta('${dep.id}','submitter',this.value)" ${isDone?'disabled':''}></td>
       <td class="td-acc"><select class="as" onchange="setMeta('${dep.id}','accountability',this.value)" ${isDone?'disabled':''}>${ACC.map(a=>`<option value="${esc(a)}" ${(saved?.accountability||rd.accountability||'')===a?'selected':''}>${a||'Select…'}</option>`).join('')}</select></td>
@@ -816,8 +889,8 @@ let todayViewMode='today';
 function setTodayView(mode){
   todayViewMode=mode;
   todayDepsDB=[];
-  const btnIds=['btnToday','btnWeek','btnNextWeek','btnMonth'];
-  const activeId={today:'btnToday',week:'btnWeek',nextweek:'btnNextWeek',month:'btnMonth'}[mode];
+  const btnIds=['btnToday','btnWeek','btnNextWeek','btnMonth','btnNextMonth'];
+  const activeId={today:'btnToday',week:'btnWeek',nextweek:'btnNextWeek',month:'btnMonth',nextmonth:'btnNextMonth'}[mode];
   btnIds.forEach(id=>{
     const b=document.getElementById(id);if(!b)return;
     if(id===activeId){b.style.background='#fff';b.style.color='var(--text)';b.style.boxShadow='var(--shadow)';}
@@ -836,11 +909,13 @@ async function renderToday(){
   const weekEnd=sunday.toISOString().slice(0,10);
   const nextMonday2=new Date(monday);nextMonday2.setDate(monday.getDate()+7);
   const nextSunday2=new Date(nextMonday2);nextSunday2.setDate(nextMonday2.getDate()+6);
+  const nextMonthDate=new Date(now.getFullYear(),now.getMonth()+1,1);
   const titles={
     today:{title:"Today's Deployments",sub:now.toLocaleDateString('en-CA',{weekday:'long',month:'long',day:'numeric',year:'numeric'})},
     week:{title:"This Week's Deployments",sub:`${monday.toLocaleDateString('en-CA',{month:'short',day:'numeric'})} – ${sunday.toLocaleDateString('en-CA',{month:'short',day:'numeric',year:'numeric'})}`},
     nextweek:{title:"Next Week's Deployments",sub:`${nextMonday2.toLocaleDateString('en-CA',{month:'short',day:'numeric'})} – ${nextSunday2.toLocaleDateString('en-CA',{month:'short',day:'numeric',year:'numeric'})}`},
     month:{title:"This Month's Deployments",sub:now.toLocaleDateString('en-CA',{month:'long',year:'numeric'})},
+    nextmonth:{title:"Next Month's Deployments",sub:nextMonthDate.toLocaleDateString('en-CA',{month:'long',year:'numeric'})},
   };
   document.getElementById('todayDate').textContent=titles[todayViewMode].sub;
   document.getElementById('todayTitle').textContent=titles[todayViewMode].title;
@@ -856,12 +931,16 @@ async function renderToday(){
       // Month bounds
       const monthStart=new Date(now.getFullYear(),now.getMonth(),1).toISOString().slice(0,10);
       const monthEnd=new Date(now.getFullYear(),now.getMonth()+1,0).toISOString().slice(0,10);
+      const nextMonthStart=new Date(now.getFullYear(),now.getMonth()+1,1).toISOString().slice(0,10);
+      const nextMonthEnd=new Date(now.getFullYear(),now.getMonth()+2,0).toISOString().slice(0,10);
       const query=todayViewMode==='today'
         ?`/rest/v1/deployments?scheduled_start_date=eq.${todayStr}&select=*&order=client.asc`
         :todayViewMode==='week'
         ?`/rest/v1/deployments?scheduled_start_date=gte.${weekStart}&scheduled_start_date=lte.${weekEnd}&select=*&order=scheduled_start_date.asc,client.asc`
         :todayViewMode==='nextweek'
         ?`/rest/v1/deployments?scheduled_start_date=gte.${nextWeekStart}&scheduled_start_date=lte.${nextWeekEnd}&select=*&order=scheduled_start_date.asc,client.asc`
+        :todayViewMode==='nextmonth'
+        ?`/rest/v1/deployments?scheduled_start_date=gte.${nextMonthStart}&scheduled_start_date=lte.${nextMonthEnd}&select=*&order=scheduled_start_date.asc,client.asc`
         :`/rest/v1/deployments?scheduled_start_date=gte.${monthStart}&scheduled_start_date=lte.${monthEnd}&select=*&order=scheduled_start_date.asc,client.asc`;
       const res=await sb(query);
       if(!res.ok)throw new Error();
@@ -889,12 +968,13 @@ async function renderToday(){
     ].map(s=>`<div class="stat"><div class="stat-val" style="color:${s.c}">${s.val}</div><div class="stat-lbl">${s.lbl}</div></div>`).join('');
     if(!deps.length){document.getElementById('todayContent').innerHTML=`<div class="empty"><div class="empty-icon">🎉</div><div class="empty-title">Nothing scheduled today</div><div class="empty-sub">No installs or revisits for today's date in the system.</div></div>`;return}
     if(todayViewMode==='today'){
-      // Group by track
       const newDeps=deps.filter(d=>getTrack(d)==='new');
       const revDeps=deps.filter(d=>getTrack(d)==='revisit');
+      const bfDeps=deps.filter(d=>getTrack(d)==='breakfix');
       let html='';
-      if(newDeps.length){html+=`<div class="sec">New installations</div><div class="dep-grid">${renderTodayCards(newDeps)}</div>`}
-      if(revDeps.length){html+=`<div class="sec">Revisits & other</div><div class="dep-grid">${renderTodayCards(revDeps)}</div>`}
+      if(newDeps.length)html+=`<div class="sec">New installations <span style="color:var(--text3);font-size:.65rem">${newDeps.length}</span></div><div class="dep-grid" style="margin-bottom:1rem">${renderTodayCards(newDeps)}</div>`;
+      if(revDeps.length)html+=`<div class="sec">Revisits <span style="color:var(--text3);font-size:.65rem">${revDeps.length}</span></div><div class="dep-grid" style="margin-bottom:1rem">${renderTodayCards(revDeps)}</div>`;
+      if(bfDeps.length)html+=`<div class="sec">Break / Fix <span style="color:var(--text3);font-size:.65rem">${bfDeps.length}</span></div><div class="dep-grid" style="margin-bottom:1rem">${renderTodayCards(bfDeps)}</div>`;
       if(!html)html='<div class="empty"><div class="empty-icon">🎉</div><div class="empty-title">Nothing today</div></div>';
       document.getElementById('todayContent').innerHTML=html;
     } else if(todayViewMode==='week'||todayViewMode==='nextweek'){
@@ -930,7 +1010,8 @@ async function renderToday(){
       // Month view — calendar grid
       const now3=new Date();
       const todayStr3=now3.toISOString().slice(0,10);
-      const yr=now3.getFullYear();const mo=now3.getMonth();
+      const yr=todayViewMode==='nextmonth'?new Date(now3.getFullYear(),now3.getMonth()+1,1).getFullYear():now3.getFullYear();
+      const mo=todayViewMode==='nextmonth'?new Date(now3.getFullYear(),now3.getMonth()+1,1).getMonth():now3.getMonth();
       const firstDay=new Date(yr,mo,1);
       const lastDay=new Date(yr,mo+1,0);
       const daysInMo=lastDay.getDate();
@@ -1068,7 +1149,7 @@ async function renderOverview(){
   const status=document.getElementById('ovStatus').value;
   const q=document.getElementById('ovSearch').value.toLowerCase();
   try{
-    if(!allDepsDB.length||allDepsDB[0]?.install_date){
+    if(!allDepsDB.length){
       const r1=await sb('/rest/v1/deployments?select=*&order=week_no.desc,client.asc');
       const r2=await sb('/rest/v1/quality_scores?select=*');
       if(!r1.ok||!r2.ok)throw new Error();
@@ -1122,17 +1203,18 @@ async function renderDashboard(){
   const week=document.getElementById('dbWeek').value;
   const role=document.getElementById('dbRole').value;
   try{
-    if(!allDepsDB.length||allDepsDB[0]?.install_date){
+    if(!dashLoaded){
       const r1=await sb('/rest/v1/deployments?select=*&order=week_no.desc');
       const r2=await sb('/rest/v1/quality_scores?select=*');
       if(!r1.ok||!r2.ok)throw new Error();
-      allDepsDB=await r1.json();allScoresDB=await r2.json();
-      const weeks=[...new Set(allDepsDB.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>b-a);
+      dashDepsDB=await r1.json();dashScoresDB=await r2.json();
+      dashLoaded=true;
+      const weeks=[...new Set(dashDepsDB.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>b-a);
       const sel=document.getElementById('dbWeek');sel.innerHTML='<option value="all">All weeks</option>';
       weeks.forEach(w=>{const o=document.createElement('option');o.value=w;o.textContent='Week '+w;sel.appendChild(o)});
     }
-    let sc=allScoresDB.filter(s=>{
-      const dep=allDepsDB.find(d=>d.id===s.deployment_id);if(!dep)return false;
+    let sc=dashScoresDB.filter(s=>{
+      const dep=dashDepsDB.find(d=>d.id===s.deployment_id);if(!dep)return false;
       if(week!=='all'&&dep.week_no!==parseInt(week))return false;
       if(role!=='all'&&s.role!==role)return false;
       return true;
@@ -1148,7 +1230,7 @@ async function renderDashboard(){
     ].map(k=>`<div class="kpi"><div class="kpi-bar" style="background:${k.c}"></div><div class="kpi-lbl">${k.lbl}</div><div class="kpi-val" style="color:${k.c}">${k.val}</div><div class="kpi-note">${k.note}</div></div>`).join('');
     // Trend
     const wkMap={};
-    allScoresDB.forEach(s=>{const dep=allDepsDB.find(d=>d.id===s.deployment_id);if(!dep||!dep.week_no)return;if(!wkMap[dep.week_no])wkMap[dep.week_no]=[];wkMap[dep.week_no].push(s.score)});
+    dashScoresDB.forEach(s=>{const dep=dashDepsDB.find(d=>d.id===s.deployment_id);if(!dep||!dep.week_no)return;if(!wkMap[dep.week_no])wkMap[dep.week_no]=[];wkMap[dep.week_no].push(s.score)});
     const wks=Object.keys(wkMap).map(Number).sort((a,b)=>a-b);
     const avgs=wks.map(w=>r1(avg(wkMap[w])));
     if(CH.trend)CH.trend.destroy();
@@ -1172,8 +1254,8 @@ async function renderDashboard(){
     });
     // Clients
     const clientMap={};
-    allDepsDB.forEach(d=>{if(!clientMap[d.client])clientMap[d.client]={n:0,scores:{pm:[],logistics:[],install:[]}};clientMap[d.client].n++});
-    sc.forEach(s=>{const dep=allDepsDB.find(d=>d.id===s.deployment_id);if(!dep||!clientMap[dep.client])return;clientMap[dep.client].scores[s.role]&&clientMap[dep.client].scores[s.role].push(s.score)});
+    dashDepsDB.forEach(d=>{if(!clientMap[d.client])clientMap[d.client]={n:0,scores:{pm:[],logistics:[],install:[]}};clientMap[d.client].n++});
+    sc.forEach(s=>{const dep=dashDepsDB.find(d=>d.id===s.deployment_id);if(!dep||!clientMap[dep.client])return;clientMap[dep.client].scores[s.role]&&clientMap[dep.client].scores[s.role].push(s.score)});
     const rows=Object.entries(clientMap).filter(([,d])=>Object.values(d.scores).some(a=>a.length)).sort((a,b)=>{const aa=avg([...a[1].scores.pm,...a[1].scores.logistics,...a[1].scores.install]);const bb=avg([...b[1].scores.pm,...b[1].scores.logistics,...b[1].scores.install]);return bb-aa});
     document.getElementById('dbClients').innerHTML=rows.map(([c,d])=>{
       const allSc=[...d.scores.pm,...d.scores.logistics,...d.scores.install];
