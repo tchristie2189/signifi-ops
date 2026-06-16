@@ -448,6 +448,7 @@ const NEW_ACTS=['new installation','go live support','break/fix','maintenance','
 
 let deployments=[],scores={},rowData={},selectedRole=null,activeFileId=null,activeFileName='';
 let allDepsDB=[],allScoresDB=[];
+let todayDepsDB=[];
 let CH={};
 
 // HELPERS
@@ -763,7 +764,7 @@ function downloadResults(){
 let todayViewMode='today';
 function setTodayView(mode){
   todayViewMode=mode;
-  allDepsDB=[];
+  todayDepsDB=[];
   const btnT=document.getElementById('btnToday');const btnW=document.getElementById('btnWeek');
   if(mode==='today'){btnT.style.background='#fff';btnT.style.color='var(--text)';btnT.style.boxShadow='var(--shadow)';btnW.style.background='transparent';btnW.style.color='var(--text3)';btnW.style.boxShadow='none';}
   else{btnW.style.background='#fff';btnW.style.color='var(--text)';btnW.style.boxShadow='var(--shadow)';btnT.style.background='transparent';btnT.style.color='var(--text3)';btnT.style.boxShadow='none';}
@@ -783,15 +784,15 @@ async function renderToday(){
   const track=document.getElementById('todayTrack').value;
   const q=document.getElementById('todaySearch').value.toLowerCase();
   try{
-    if(!allDepsDB.length){
+    if(!todayDepsDB.length){
       const query=todayViewMode==='today'
         ?`/rest/v1/deployments?scheduled_start_date=eq.${todayStr}&select=*&order=client.asc`
         :`/rest/v1/deployments?scheduled_start_date=gte.${weekStart}&scheduled_start_date=lte.${weekEnd}&select=*&order=scheduled_start_date.asc,client.asc`;
       const res=await sb(query);
       if(!res.ok)throw new Error();
-      allDepsDB=await res.json();
+      todayDepsDB=await res.json();
     }
-    let deps=allDepsDB.filter(d=>{
+    let deps=todayDepsDB.filter(d=>{
       if(track!=='all'&&getTrack(d)!==track)return false;
       if(q&&!d.client.toLowerCase().includes(q)&&!(d.parent_ticket||'').includes(q))return false;
       return true;
