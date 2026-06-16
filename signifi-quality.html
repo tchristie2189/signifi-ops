@@ -497,7 +497,7 @@ async function importRows(rows,fileName){
     .map((r,i)=>{
       const display=stripHtml(String(r['Display Name']||r['display_name']||''));
       const loc=r['Service location']||r['service_location']||'';
-      const rawDate=String(r["Confirmed Installation Date"]||r["install_date"]||"").trim();let installDate=null;if(rawDate){try{const d=new Date(rawDate);if(!isNaN(d.getTime()))installDate=d.toISOString().slice(0,10)}catch(e){}}return{task_id:stripHtml(String(r["Task ID"]||r["task_id"]||"m"+Date.now()+i)),parent_ticket:String(r["Parent Ticket #"]||r["parent_ticket"]||""),display_name:display,client:extractClient(display,loc),kiosk_id:String(r["Kiosk ID"]||r["kiosk_id"]||""),location:String(loc||""),stage:String(r["Project Stage"]||""),activity_type:String(r["Requested Activity"]||""),tech:String(r["Dispatch Tech"]||r["dispatch_tech"]||""),week_no:parseInt(r["Confirmed Week No."]||r["week_no"])||0,install_date:installDate};
+      const rawDate=String(r['Confirmed Installation Date']||r['install_date']||'').trim().split(' ')[0].split('T')[0];const installDate=(rawDate&&/^\d{4}-\d{2}-\d{2}$/.test(rawDate))?rawDate:null;return{task_id:stripHtml(String(r['Task ID']||r['task_id']||'m'+Date.now()+i)),parent_ticket:String(r['Parent Ticket #']||r['parent_ticket']||''),display_name:display,client:extractClient(display,loc),kiosk_id:String(r['Kiosk ID']||r['kiosk_id']||''),location:String(loc||''),stage:String(r['Project Stage']||''),activity_type:String(r['Requested Activity']||''),tech:String(r['Dispatch Tech']||r['dispatch_tech']||''),week_no:parseInt(r['Confirmed Week No.']||r['week_no'])||0,install_date:installDate};
     });
 
   const weeks=[...new Set(mapped.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>a-b);
@@ -514,7 +514,7 @@ async function importRows(rows,fileName){
 
   // Batch upsert deployments
   for(let i=0;i<mapped.length;i+=50){
-    const batch=mapped.slice(i,i+50).map(d=>({...d,file_id:fileId}));
+    const batch=mapped.slice(i,i+50).map(d=>{const {uploaded_at,...rest}=d;return{...rest,file_id:fileId}});
     try{
       const dr=await sb('/rest/v1/deployments?on_conflict=task_id',{method:'POST',body:JSON.stringify(batch),headers:{'Prefer':'resolution=merge-duplicates,return=minimal','Content-Type':'application/json'}});
       if(!dr.ok){const t=await dr.text();toast('Deployment save error: '+t.substring(0,80));return}
