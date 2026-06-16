@@ -497,12 +497,18 @@ function handleFile(file){
   }else toast('Please upload CSV or Excel');
 }
 
+function normalizeRow(r){
+  const out={};
+  for(const k in r){out[k.trim()]=r[k]}
+  return out;
+}
 async function importRows(rows,fileName){
+  rows=rows.map(normalizeRow);
   const mapped=rows.filter(r=>{const a=(r['Requested Activity']||'').toLowerCase();if(!a)return false;return!EXCLUDE.some(x=>a.includes(x));})
     .map((r,i)=>{
       const display=stripHtml(String(r['Display Name']||r['display_name']||''));
       const loc=r['Service location']||r['service_location']||'';
-      const rawDate=String(r['Confirmed Installation Date']||r['install_date']||'').trim().split(' ')[0].split('T')[0];const installDate=(rawDate&&/^\d{4}-\d{2}-\d{2}$/.test(rawDate))?rawDate:null;const rawSched=String(r['Scheduled Start Date Time']||'').trim();let schedDate=null;if(rawSched){const schedNum=parseFloat(rawSched);if(!isNaN(schedNum)&&schedNum>1000){const d=new Date((schedNum-25569)*86400*1000);schedDate=d.toISOString().slice(0,10)}else if(/^\d{4}-\d{2}-\d{2}$/.test(rawSched.split('T')[0])){schedDate=rawSched.split('T')[0]}}return{task_id:stripHtml(String(r['Task ID']||r['task_id']||'m'+Date.now()+i)),parent_ticket:String(r['Parent Ticket #']||r['parent_ticket']||''),display_name:display,client:extractClient(display,loc),kiosk_id:String(r['Kiosk ID']||r['kiosk_id']||''),location:String(loc||''),stage:String(r['Project Stage']||''),activity_type:String(r['Requested Activity']||''),tech:String(r['Dispatch Tech']||r['dispatch_tech']||''),week_no:parseInt(r['Confirmed Week No.']||r['week_no'])||0,install_date:installDate,scheduled_start_date:schedDate};
+      const rawDate=String(r['Confirmed Installation Date']||r['install_date']||'').trim().split(' ')[0].split('T')[0];const installDate=(rawDate&&/^\d{4}-\d{2}-\d{2}$/.test(rawDate))?rawDate:null;const rawSched=String(r['Scheduled Start Date Time']||'').trim();let schedDate=null;if(rawSched){const schedDatePart=rawSched.split(' ')[0].split('T')[0];if(/^\d{4}-\d{2}-\d{2}$/.test(schedDatePart)){schedDate=schedDatePart}else{const schedNum=parseFloat(rawSched);if(!isNaN(schedNum)&&schedNum>1000){const d=new Date((schedNum-25569)*86400*1000);schedDate=d.toISOString().slice(0,10)}}}return{task_id:stripHtml(String(r['Task ID']||r['task_id']||'m'+Date.now()+i)),parent_ticket:String(r['Parent Ticket #']||r['parent_ticket']||''),display_name:display,client:extractClient(display,loc),kiosk_id:String(r['Kiosk ID']||r['kiosk_id']||''),location:String(loc||''),stage:String(r['Project Stage']||''),activity_type:String(r['Requested Activity']||''),tech:String(r['Dispatch Tech']||r['dispatch_tech']||''),week_no:parseInt(r['Confirmed Week No.']||r['week_no'])||0,install_date:installDate,scheduled_start_date:schedDate};
     });
 
   const weeks=[...new Set(mapped.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>a-b);
