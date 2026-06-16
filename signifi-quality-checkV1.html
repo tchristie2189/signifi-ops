@@ -420,21 +420,34 @@ async function importRows(rows,fileName){
 
   // Save file record
   const weeks=[...new Set(mapped.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>a-b);
-  const weekRange=weeks.length?(weeks.length===1?'Wk '+weeks[0]:'Wk '+weeks[0]+'–'+weeks[weeks.length-1]):'';
+  const weekRange=weeks.length?(weeks.length===1?'Wk '+weeks[0]:'Wk '+weeks[0]+'-'+weeks[weeks.length-1]):'';
   let fileId;
   try{
-    const fr=await sbFetch('/rest/v1/imported_files',{method:'POST',body:JSON.stringify({file_name:fileName,row_count:mapped.length,week_range:weekRange}),headers:{'Prefer':'return=representation'}});
-    if(!fr.ok)throw new Error(fr.status);
-    const fd=await fr.json();
-    fileId=fd[0].id;
-  }catch(e){toast('Could not save file record — check schema');return}
+    const fr=await sbFetch('/rest/v1/imported_files',{
+      method:'POST',
+      body:JSON.stringify({file_name:fileName,row_count:mapped.length,week_range:weekRange}),
+      headers:{'Prefer':'return=representation','Content-Type':'application/json'}
+    });
+    const frText=await fr.text();
+    if(!fr.ok){console.error('imported_files error:',fr.status,frText);toast('Could not save file record ('+fr.status+')');return}
+    const fd=JSON.parse(frText);
+    fileId=Array.isArray(fd)?fd[0].id:fd.id;
+  }catch(e){console.error('File record error:',e);toast('Could not save file record: '+e.message);return}
 
-  // Upsert deployments with file_id
-  const depRows=mapped.map(d=>({...d,file_id:fileId}));
+  // Upsert deployments — send in batches of 50 to avoid payload limits
+  const depRows=mapped.map(d=>({...d,file_id:fileId,install_date:d.install_date||null}));
   try{
-    const dr=await sbFetch('/rest/v1/deployments',{method:'POST',body:JSON.stringify(depRows),headers:{'Prefer':'resolution=merge-duplicates,return=minimal'}});
-    if(!dr.ok)throw new Error(dr.status);
-  }catch(e){toast('Could not save deployments — check schema');return}
+    const batchSize=50;
+    for(let i=0;i<depRows.length;i+=batchSize){
+      const batch=depRows.slice(i,i+batchSize);
+      const dr=await sbFetch('/rest/v1/deployments',{
+        method:'POST',
+        body:JSON.stringify(batch),
+        headers:{'Prefer':'resolution=merge-duplicates,return=minimal','Content-Type':'application/json'}
+      });
+      if(!dr.ok){const t=await dr.text();console.error('deployments error:',dr.status,t);toast('Could not save deployments ('+dr.status+')');return}
+    }
+  }catch(e){console.error('Deployments error:',e);toast('Could not save deployments: '+e.message);return}
 
   // Reload file history and load this file
   await loadFileHistory();
