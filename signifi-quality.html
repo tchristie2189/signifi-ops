@@ -497,7 +497,7 @@ async function importRows(rows,fileName){
     .map((r,i)=>{
       const display=stripHtml(String(r['Display Name']||r['display_name']||''));
       const loc=r['Service location']||r['service_location']||'';
-      return{task_id:stripHtml(String(r['Task ID']||r['task_id']||'m'+Date.now()+i)),parent_ticket:String(r['Parent Ticket #']||r['parent_ticket']||''),display_name:display,client:extractClient(display,loc),kiosk_id:r['Kiosk ID']||r['kiosk_id']||'',location:loc,stage:r['Project Stage']||'',activity_type:r['Requested Activity']||'',tech:r['Dispatch Tech']||r['dispatch_tech']||'',week_no:parseInt(r['Confirmed Week No.']||r['week_no'])||0,install_date:r['Confirmed Installation Date']||null};
+      const rawDate=String(r["Confirmed Installation Date"]||r["install_date"]||"").trim();let installDate=null;if(rawDate){try{const d=new Date(rawDate);if(!isNaN(d.getTime()))installDate=d.toISOString().slice(0,10)}catch(e){}}return{task_id:stripHtml(String(r["Task ID"]||r["task_id"]||"m"+Date.now()+i)),parent_ticket:String(r["Parent Ticket #"]||r["parent_ticket"]||""),display_name:display,client:extractClient(display,loc),kiosk_id:String(r["Kiosk ID"]||r["kiosk_id"]||""),location:String(loc||""),stage:String(r["Project Stage"]||""),activity_type:String(r["Requested Activity"]||""),tech:String(r["Dispatch Tech"]||r["dispatch_tech"]||""),week_no:parseInt(r["Confirmed Week No."]||r["week_no"])||0,install_date:installDate};
     });
 
   const weeks=[...new Set(mapped.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>a-b);
