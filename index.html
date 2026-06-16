@@ -929,7 +929,14 @@ function renderGlance(){
           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <div class="glance-proj-name">${p.name}</div>
             ${isComplete?'<span style="font-size:10px;padding:1px 7px;border-radius:10px;background:var(--gray-100);color:var(--gray-500);font-weight:600">Complete</span>':''}
-            ${isMaster(p)?`<span style="font-size:9px;padding:1px 7px;border-radius:10px;background:#fce7f3;color:#be185d;font-weight:700;cursor:pointer" onclick="openCampaignModal('${p.id}')">🏛 Master · ${getChildren(p.id).length} children</span>`:''}
+            ${(()=>{
+              const kids=getChildren(p.id);
+              const soCount=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean).length;
+              const hasSoSplit=milestones.some(m=>m.project_id===p.id&&m.so_tag);
+              if(kids.length>0)return`<span style="font-size:9px;padding:1px 7px;border-radius:10px;background:#fce7f3;color:#be185d;font-weight:700">🏛 ${kids.length} children — migrate in Settings</span>`;
+              if(hasSoSplit&&soCount>1)return`<span style="font-size:9px;padding:1px 7px;border-radius:10px;background:#fff0f0;color:#e22f4a;font-weight:700">📋 ${soCount} SOs</span>`;
+              return'';
+            })()}
             ${isChild(p)?`<span style="font-size:9px;padding:1px 7px;border-radius:10px;background:#ede9fe;color:#7c3aed;font-weight:700">⬡ Child · ${getMaster(p.id)?.name||''}</span>`:''}
           </div>
           <div class="glance-proj-meta"><span class="glance-so" title="${p.so_number||''}">${truncateSO(p.so_number)}</span><span class="glance-client">${p.client||''}</span>${p.naming_convention?`<span class="glance-client" style="font-family:var(--mono);font-size:9px;color:var(--gray-400)">${p.naming_convention}</span>`:''}</div>
@@ -2467,22 +2474,25 @@ async function pushSODatesToAll(projId,fromSO){
   const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
   const otherSOs=soList.filter(s=>s!==fromSO);
   if(!otherSOs.length)return;
-  if(!confirm('Push all dates from SO '+fromSO+' to '+otherSOs.join(', ')+'? This overwrites their dates.'))return;
+  if(!confirm('Push all dates from SO '+fromSO+' to '+otherSOs.join(', ')+'?\n\nThis overwrites their dates.'))return;
   const sourceMs=milestones.filter(m=>m.project_id===projId&&m.so_tag===fromSO);
   let updated=0;
   for(const so of otherSOs){
     const targetMs=milestones.filter(m=>m.project_id===projId&&m.so_tag===so);
     for(const src of sourceMs){
       if(!src.date)continue;
-      const tgt=targetMs.find(m=>m.key===src.key);
+      // Match by BOTH key and label to handle duplicate keys (e.g. multiple 'arrival' milestones)
+      const tgt=targetMs.find(m=>m.key===src.key&&m.label===src.label)
+               ||targetMs.find(m=>m.label===src.label)
+               ||targetMs.find(m=>m.key===src.key);
       if(tgt){
-        await sb.from('milestones').update({date:src.date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',tgt.id);
-        tgt.date=src.date;updated++;
+        const{error}=await sb.from('milestones').update({date:src.date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',tgt.id);
+        if(!error){tgt.date=src.date;updated++;}
       }
     }
   }
   showToast('Pushed '+updated+' dates to '+otherSOs.length+' other SOs ✓');
-  renderOverview();
+  await loadAll();
 }
 function openEditMs(id,label,date,soTag,projId){
   const ms=milestones.find(m=>m.id===id);
@@ -2571,7 +2581,10 @@ async function pushSODateToOthers(projId,fromSO,msKey,newDate,msLabel){
   const otherSOs=soList.filter(s=>s!==fromSO);
   let updated=0;
   for(const so of otherSOs){
-    const tgt=milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.key===msKey);
+    // Match by key AND label to handle duplicate keys
+    const tgt=milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.key===msKey&&m.label===msLabel)
+             ||milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.label===msLabel)
+             ||milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.key===msKey);
     if(tgt){
       await sb.from('milestones').update({date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',tgt.id);
       tgt.date=newDate;updated++;
@@ -2832,7 +2845,7 @@ function toggleAllSOView(){
         return'<td style="padding:6px 10px;text-align:center;'+clr+'">'+dateStr+'</td>';
       }).join('')
       // Push to all button — uses first SO's date as source
-      +'<td style="padding:4px 8px;text-align:center">'+(firstDate?'<button onclick="pushMsKeyToAllSOs(\''+key+'\',\''+firstDate+'\',\''+ppProjId+'\')" style="font-size:10px;padding:3px 8px;border-radius:6px;border:1px solid var(--gray-200);background:white;color:var(--blue);cursor:pointer;font-family:var(--font)" title="Match all SOs to '+fmt(firstDate)+'">Match all</button>':'')+'</td>'
+      +'<td style="padding:4px 8px;text-align:center">'+(firstDate?'<button onclick="pushMsKeyToAllSOs(\''+key+'\',\''+firstDate+'\',\''+ppProjId+'\',\''+( labels[key]||'').replace(/'/g,"\\'")+'\')" style="font-size:10px;padding:3px 8px;border-radius:6px;border:1px solid var(--gray-200);background:white;color:var(--blue);cursor:pointer;font-family:var(--font)" title="Match all SOs to '+fmt(firstDate)+'">Match all</button>':'')+'</td>'
       +'</tr>';
   }).join('');
 
@@ -2844,27 +2857,35 @@ function toggleAllSOView(){
     +'</div></div>';
 }
 
-async function pushMsKeyToAllSOs(key,date,projId){
+async function pushMsKeyToAllSOs(key,date,projId,label){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
   const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
   const children=getChildren(projId);
   let updated=0;
   if(milestones.some(m=>m.project_id===projId&&m.so_tag)){
-    // SO split — update all so_tag variants
+    // SO split — update all so_tag variants, match by key AND label
     for(const so of soList){
-      const m=milestones.find(x=>x.project_id===projId&&x.key===key&&x.so_tag===so);
-      if(m){await sb.from('milestones').update({date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);m.date=date;updated++;}
+      const m=milestones.find(x=>x.project_id===projId&&x.key===key&&x.so_tag===so&&(!label||x.label===label));
+      if(m){
+        const{error}=await sb.from('milestones').update({date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
+        if(!error){m.date=date;updated++;}
+      }
     }
   } else {
     // Campaign children
     for(const c of children){
-      const m=milestones.find(x=>x.project_id===c.id&&x.key===key);
-      if(m){await sb.from('milestones').update({date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);m.date=date;updated++;}
+      const m=milestones.find(x=>x.project_id===c.id&&x.key===key&&(!label||x.label===label));
+      if(m){
+        const{error}=await sb.from('milestones').update({date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
+        if(!error){m.date=date;updated++;}
+      }
     }
   }
+  if(updated===0){showToast('No milestones updated — check SO tags');return;}
   showToast('Pushed to '+updated+' SOs ✓');
-  toggleAllSOView(); // refresh modal
+  await loadAll();
+  toggleAllSOView();
 }
 
 async function pushAllMilestoneKeysToAllSOs(projId){
@@ -2898,18 +2919,22 @@ async function unlinkFromMaster(childId){
 }
 
 function switchProjPageBySO(so){
-  // Find a child project whose so_number exactly matches this SO
-  const child=projects.find(p=>p.id!==ppProjId&&p.so_number&&p.so_number.split(',').map(s=>s.trim()).includes(so));
-  if(child){
-    switchProjPage(child.id);
-    return;
+  // For SO-split projects: scroll to that SO's group in the milestone tracker
+  // Only navigate away if it's a campaign child project with its own page
+  const child=projects.find(p=>p.id!==ppProjId&&p.parent_project_id===ppProjId&&p.so_number&&p.so_number.split(',').map(s=>s.trim()).includes(so));
+  if(child){switchProjPage(child.id);return;}
+  // Same project — find the SO header span in the milestone table and scroll to it
+  const spans=[...document.querySelectorAll('span')];
+  const soSpan=spans.find(s=>s.textContent.trim()==='SO: '+so&&s.style.color&&s.style.color.includes('rgb'));
+  if(soSpan){
+    soSpan.closest('tr')?.scrollIntoView({behavior:'smooth',block:'center'});
+    soSpan.closest('td').style.background='#fff0f0';
+    setTimeout(()=>{if(soSpan.closest('td'))soSpan.closest('td').style.background='';},1500);
+  } else {
+    // Fall back to project page tab
+    setTab('projpage');
+    showToast('SO '+so+' — milestones in tracker below');
   }
-  // Same project — scroll to that SO's milestone group in the tracker
-  // Try to find the SO header row in the milestone table
-  const allTds=[...document.querySelectorAll('td')];
-  const soTd=allTds.find(td=>td.textContent.includes('SO: '+so));
-  if(soTd){soTd.scrollIntoView({behavior:'smooth',block:'center'});soTd.style.background='#fef9c3';setTimeout(()=>{soTd.style.background='';},1500);}
-  else showToast('SO '+so+' — viewing milestones in tracker below');
 }
 async function switchProjPage(id){
   ppProjId=id;
