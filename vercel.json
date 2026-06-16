@@ -2,6 +2,8 @@
   "rewrites": [
     { "source": "/checkin", "destination": "/checkin.html" },
     { "source": "/client-status", "destination": "/client-status.html" },
+    { "source": "/signifi-quality", "destination": "/signifi-quality.html" },
+    { "source": "/signifi-quality.html", "destination": "/signifi-quality.html" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
