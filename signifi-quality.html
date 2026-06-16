@@ -425,7 +425,7 @@ table.dtbl{border-collapse:collapse;width:100%;min-width:560px}
 
 <script>
 const SB_URL='https://oykgpkolliqjeznblavy.supabase.co';
-const SB_KEY='sb_publishable_ZKvO_R_XnYpUQJ5D3zacDg_WhJBtBY3';
+const SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95a2dwa29sbGlxamV6bmJsYXZ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNTI3ODgsImV4cCI6MjA5NTYyODc4OH0.kkOBhxyaqLG7PLPNI0SwPNwQSWmbpFjDoP2VQp33_X4';
 
 const Q={
   pm:[{id:'site_survey',s:'Survey'},{id:'badge_payment',s:'Badge'},{id:'product_received',s:'Product'},{id:'no_so_changes',s:'SO'},{id:'no_surprises',s:'Surp.'}],
@@ -447,7 +447,7 @@ let allDepsDB=[],allScoresDB=[];
 let CH={};
 
 // HELPERS
-function sb(path,opts={}){return fetch(SB_URL+path,{...opts,headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json',...(opts.headers||{})}})}
+function sb(path,opts={}){return fetch(SB_URL+path,{...opts,headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json','x-client-info':'signifi-quality/1.0',...(opts.headers||{})}})}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function stripHtml(s){return String(s).replace(/<[^>]*>/g,'').trim()}
 function toast(msg,type=''){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show'+(type?' '+type:'');setTimeout(()=>t.classList.remove('show'),2800)}
