@@ -7,3 +7,4 @@
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
+{ "source": "/signifi-migrate", "destination": "/signifi-migrate-historical.html" },
