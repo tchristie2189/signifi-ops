@@ -326,8 +326,9 @@ table.dtbl{border-collapse:collapse;width:100%;min-width:560px}
         <button id="btnNextWeek" onclick="setTodayView('nextweek')" style="padding:.35rem .75rem;border-radius:4px;font-size:.78rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;border:none;background:transparent;color:var(--text3)">Next Week</button>
         <button id="btnMonth" onclick="setTodayView('month')" style="padding:.35rem .75rem;border-radius:4px;font-size:.78rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;border:none;background:transparent;color:var(--text3)">This Month</button>
       </div>
-      <select class="fsel" id="todayTrack" onchange="renderToday()"><option value="all">All tracks</option><option value="new">New Install</option><option value="revisit">Revisit</option></select>
-      <input class="fsearch" id="todaySearch" placeholder="Search..." oninput="renderToday()" style="width:160px">
+      <select class="fsel" id="todayTrack" onchange="renderToday()"><option value="all">All tracks</option><option value="new">New Install</option><option value="revisit">Revisit</option><option value="breakfix">Break/Fix</option></select>
+      <select class="fsel" id="todayOrg" onchange="renderToday()"><option value="all">All orgs</option></select>
+      <input class="fsearch" id="todaySearch" placeholder="Search..." oninput="renderToday()" style="width:140px">
     </div>
   </div>
   <div class="stat-row" id="todayStats"></div>
@@ -523,7 +524,7 @@ async function importRows(rows,fileName){
     .map((r,i)=>{
       const display=stripHtml(String(r['Display Name']||r['display_name']||''));
       const loc=r['Service location']||r['service_location']||'';
-      const rawDate=String(r['Confirmed Installation Date']||r['install_date']||'').trim().split(' ')[0].split('T')[0];const installDate=(rawDate&&/^\d{4}-\d{2}-\d{2}$/.test(rawDate))?rawDate:null;const rawSched=String(r['Scheduled Start Date Time']||'').trim();let schedDate=null;if(rawSched){const schedDatePart=rawSched.split(' ')[0].split('T')[0];if(/^\d{4}-\d{2}-\d{2}$/.test(schedDatePart)){schedDate=schedDatePart}else{const schedNum=parseFloat(rawSched);if(!isNaN(schedNum)&&schedNum>1000){const d=new Date((schedNum-25569)*86400*1000);schedDate=d.toISOString().slice(0,10)}}}return{task_id:stripHtml(String(r['Task ID']||r['task_id']||'m'+Date.now()+i)),parent_ticket:String(r['Parent Ticket #']||r['parent_ticket']||''),display_name:display,client:extractClient(display,loc),kiosk_id:String(r['Kiosk ID']||r['kiosk_id']||''),location:String(loc||''),stage:String(r['Project Stage']||''),activity_type:String(r['Requested Activity']||''),tech:String(r['Dispatch Tech']||r['dispatch_tech']||''),week_no:parseInt(r['Confirmed Week No.']||r['week_no'])||0,install_date:installDate,scheduled_start_date:schedDate};
+      const rawDate=String(r['Confirmed Installation Date']||r['install_date']||'').trim().split(' ')[0].split('T')[0];const installDate=(rawDate&&/^\d{4}-\d{2}-\d{2}$/.test(rawDate))?rawDate:null;const rawSched=String(r['Scheduled Start Date Time']||'').trim();let schedDate=null;if(rawSched){const schedDatePart=rawSched.split(' ')[0].split('T')[0];if(/^\d{4}-\d{2}-\d{2}$/.test(schedDatePart)){schedDate=schedDatePart}else{const schedNum=parseFloat(rawSched);if(!isNaN(schedNum)&&schedNum>1000){const d=new Date((schedNum-25569)*86400*1000);schedDate=d.toISOString().slice(0,10)}}}return{task_id:stripHtml(String(r['Task ID']||r['task_id']||'m'+Date.now()+i)),parent_ticket:String(r['Parent Ticket #']||r['parent_ticket']||''),display_name:display,client:extractClient(display,loc),kiosk_id:String(r['Kiosk ID']||r['kiosk_id']||''),location:String(loc||''),stage:String(r['Project Stage']||''),activity_type:String(r['Requested Activity']||''),tech:String(r['Dispatch Tech']||r['dispatch_tech']||''),service_org:String(r['Service Organization']||r['service_org']||''),week_no:parseInt(r['Confirmed Week No.']||r['week_no'])||0,install_date:installDate,scheduled_start_date:schedDate};
     });
 
   const weeks=[...new Set(mapped.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>a-b);
@@ -836,10 +837,18 @@ async function renderToday(){
       const res=await sb(query);
       if(!res.ok)throw new Error();
       todayDepsDB=await res.json();
+      // Populate org filter
+      const orgSel=document.getElementById('todayOrg');
+      const currentOrg=orgSel.value;
+      const orgs=[...new Set(todayDepsDB.map(d=>d.service_org).filter(Boolean))].sort();
+      orgSel.innerHTML='<option value="all">All orgs</option>'+orgs.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join('');
+      if(orgs.includes(currentOrg))orgSel.value=currentOrg;
     }
+    const org=document.getElementById('todayOrg').value;
     let deps=todayDepsDB.filter(d=>{
       if(track!=='all'&&getTrack(d)!==track)return false;
-      if(q&&!d.client.toLowerCase().includes(q)&&!(d.parent_ticket||'').includes(q))return false;
+      if(org!=='all'&&(d.service_org||'')!==org)return false;
+      if(q&&!d.client.toLowerCase().includes(q)&&!(d.parent_ticket||'').includes(q)&&!(d.task_id||'').includes(q)&&!(d.kiosk_id||'').toLowerCase().includes(q))return false;
       return true;
     });
     const newC=deps.filter(d=>getTrack(d)==='new').length;
@@ -1007,11 +1016,16 @@ function todayCard(dep){
   const tagLbl=getTrackLabel(dep);
   return`<div class="dep-card track-${track}">
     <div class="dc-client" style="font-size:.8rem;margin-bottom:.2rem">${esc(dep.client)}</div>
-    <div class="dc-ticket" style="font-size:.65rem;margin-bottom:.25rem">${esc(dep.parent_ticket||'')}</div>
-    ${dep.kiosk_id?`<div style="font-size:.65rem;color:var(--accent);font-weight:600;margin-bottom:.25rem">${esc(dep.kiosk_id)}</div>`:''}
-    ${dep.tech?`<div style="font-size:.68rem;color:var(--text2);margin-bottom:.25rem">👤 ${esc(dep.tech)}</div>`:''}
-    ${dep.stage?`<div style="margin-bottom:.3rem"><span class="tag t-gray">${esc(dep.stage)}</span></div>`:''}
-    <div style="display:flex;gap:.25rem;flex-wrap:wrap;margin-top:auto;padding-top:.25rem;border-top:1px solid var(--border)">
+    <div style="display:flex;align-items:center;gap:.35rem;margin-bottom:.2rem;flex-wrap:wrap">
+      ${dep.task_id?`<span style="font-size:.62rem;font-weight:700;color:var(--text3);font-family:'DM Mono',monospace">#${esc(dep.task_id)}</span>`:''}
+      ${dep.task_id&&dep.parent_ticket?`<span style="color:var(--border2);font-size:.6rem">·</span>`:''}
+      ${dep.parent_ticket?`<span style="font-size:.62rem;color:var(--text3)">${esc(dep.parent_ticket)}</span>`:''}
+    </div>
+    ${dep.kiosk_id?`<div style="font-size:.65rem;color:var(--accent);font-weight:600;margin-bottom:.2rem">${esc(dep.kiosk_id)}</div>`:''}
+    ${dep.service_org?`<div style="font-size:.62rem;color:var(--text2);margin-bottom:.2rem">🏢 ${esc(dep.service_org)}</div>`:''}
+    ${dep.tech?`<div style="font-size:.62rem;color:var(--text2);margin-bottom:.2rem">👤 ${esc(dep.tech)}</div>`:''}
+    ${dep.stage?`<div style="margin-bottom:.3rem"><span class="tag t-gray" style="font-size:.58rem">${esc(dep.stage)}</span></div>`:''}
+    <div style="display:flex;gap:.25rem;flex-wrap:wrap;padding-top:.3rem;border-top:1px solid var(--border)">
       <span class="tag ${tagCls}">${tagLbl}</span>
       ${dep.week_no?`<span class="tag t-gray">Wk ${dep.week_no}</span>`:''}
     </div>
