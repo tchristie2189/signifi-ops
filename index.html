@@ -431,6 +431,7 @@ const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date','
 
 let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={};
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
+let soDetails=[];
 let milestoneDeviations={}; // keyed by project_id → {milestone_key: deviation_row}
 let currentUser=null,currentUserName='';
 let vinylFilter={status:'',search:'',dateFrom:'',dateTo:'',pm:''};
@@ -641,7 +642,7 @@ function renderTab(){
 
 // ── DATA ───────────────────────────────────────────────────
 async function loadAll(){
-  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev]=await Promise.all([
+  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
@@ -650,12 +651,14 @@ async function loadAll(){
     sb.from('milestone_history').select('*').order('changed_at',{ascending:true}),
     sb.from('adhoc_schedule').select('*').order('created_at'),
     sb.from('app_settings').select('*'),
-    sb.from('project_links').select('project_id,label,url'),
+    sb.from('project_links').select('project_id,label,url,category,id,sort_order'),
     sb.from('milestone_deviations').select('*'),
+    sb.from('so_details').select('*'),
   ]);
   projects=pr.data||[];milestones=ms.data||[];activityLog=lg.data||[];
   checkinStatus={};(ci.data||[]).forEach(c=>{checkinStatus[c.milestone_id]=c;});
   milestoneDone={};(md.data||[]).forEach(d=>{milestoneDone[d.milestone_id]=d;});
+  soDetails=sod.data||[];
   milestoneHistory={};
   (mh.data||[]).forEach(h=>{
     if(!milestoneHistory[h.milestone_id])milestoneHistory[h.milestone_id]=[];
@@ -3144,12 +3147,27 @@ function renderProjPageBody(){
         <div class="pp-card">
           <div class="pp-card-head"><span class="pp-card-title">Naming & Address</span></div>
           <div class="pp-card-body" style="display:grid;grid-template-columns:1fr;gap:8px;padding:10px 0">
+            ${ppHasSoTags&&ppSoList.length>1?ppSoList.map(so=>{
+              const saved=soDetails.find(d=>d.project_id===proj.id&&d.so_tag===so);
+              const naming=saved?.naming_convention??proj.naming_convention??'';
+              const address=saved?.address??proj.address??'';
+              return`<div style="border:1px solid var(--gray-100);border-radius:8px;padding:8px 10px;background:var(--gray-50)">
+                <div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;border-left:3px solid var(--red);padding-left:6px">SO: ${so}</div>
+                <div style="margin-bottom:6px">
+                  <div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Naming Convention</div>
+                  <textarea placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:12px;padding:6px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);width:100%;min-height:50px;resize:vertical;box-sizing:border-box" onchange="saveSODetail('${proj.id}','${so}','naming_convention',this.value)">${naming}</textarea>
+                </div>
+                <div>
+                  <div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Installation Address</div>
+                  <input value="${address.replace(/"/g,'&quot;')}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085" style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);width:100%;box-sizing:border-box" onchange="saveSODetail('${proj.id}','${so}','address',this.value)">
+                </div>
+              </div>`;
+            }).join(''):`
             <div><div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Naming Convention <span style="font-weight:400;text-transform:none;font-size:9px">(one per line)</span></div>
               <textarea placeholder="e.g. GPIX-B2B-SUN-CA-ENC&#10;GPIX-B2B-SUN-CA-ENC-2" style="font-family:var(--mono);font-size:12px;padding:6px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);width:100%;min-height:60px;resize:vertical" onchange="saveProjField('${proj.id}','naming_convention',this.value)">${proj.naming_convention||''}</textarea></div>
             <div><div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Installation Address</div>
-              <input value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085" style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);width:100%" onchange="saveProjField('${proj.id}','address',this.value)"></div>
+              <input value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085" style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);width:100%" onchange="saveProjField('${proj.id}','address',this.value)"></div>`}
           </div>
-        </div>
       </div>
       <div class="pp-card" style="display:flex;flex-direction:column">
         <div class="pp-card-head"><span class="pp-card-title">Quick links</span></div>
@@ -3295,6 +3313,22 @@ function showPPSaved(){
   ppSaveTimer=setTimeout(()=>{el.style.display='none';},2000);
 }
 
+async function saveSODetail(projId,so,field,val){
+  const existing=soDetails.find(d=>d.project_id===projId&&d.so_tag===so);
+  if(existing){
+    await sb.from('so_details').update({[field]:val,updated_at:new Date().toISOString()}).eq('id',existing.id);
+    existing[field]=val;
+  } else {
+    const proj=projects.find(p=>p.id===projId);
+    const{data}=await sb.from('so_details').insert({
+      project_id:projId,so_tag:so,
+      address:field==='address'?val:(proj?.address||''),
+      naming_convention:field==='naming_convention'?val:(proj?.naming_convention||''),
+    }).select().single();
+    if(data)soDetails.push(data);
+  }
+  showPPSaved();
+}
 async function saveProjField(projId,field,val){
   await sb.from('projects').update({[field]:val||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',projId);
   const p=projects.find(x=>x.id===projId);if(p)p[field]=val||null;
@@ -3550,6 +3584,7 @@ async function ppAddDec(){
 async function ppDelDec(id){await sb.from('decisions').delete().eq('id',id);ppData.decisions=ppData.decisions.filter(d=>d.id!==id);document.querySelector(`#pp-decisions [data-id="${id}"]`)?.remove();}
 let activeDocTab='install';
 let selectedDocProjId=null;
+let selectedDocSO='';
 // docFormState keyed by projectId so switching projects preserves each project's data
 let docFormState={};
 
@@ -3646,12 +3681,26 @@ function renderGenDocs(){
             oninput="onDocProjSearch(this.value)">
           <datalist id="gd-proj-list">${projects.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(p=>'<option value="'+(p.name+(p.so_number?' — '+p.so_number:'')).replace(/"/g,'&quot;')+'">' ).join('')}</datalist>
           <select style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);max-width:260px"
-            onchange="selectedDocProjId=this.value;loadDocState(this.value).then(()=>renderGenDocs())">
+            onchange="selectedDocProjId=this.value;selectedDocSO='';loadDocState(this.value).then(()=>renderGenDocs())">
             <option value="">Select project...</option>
             ${projOpts}
           </select>
           ${selectedDocProjId?`<span style="font-size:11px;color:var(--success);white-space:nowrap">✓ Auto-filled</span>`:''}
         </div>
+        ${(()=>{
+          if(!selectedDocProjId)return'';
+          const dp=projects.find(p=>p.id===selectedDocProjId);
+          const dSoList=(dp?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+          const dHasSoTags=milestones.some(m=>m.project_id===selectedDocProjId&&m.so_tag);
+          if(dSoList.length<=1&&!dHasSoTags)return'';
+          return'<div class="proj-select-row" style="margin-top:6px"><label>SO</label>'
+            +'<select id="gd-so-select" style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--red);border-radius:var(--radius);background:var(--white);color:var(--red);font-weight:600;max-width:260px" onchange="selectedDocSO=this.value;renderGenDocs()">'
+            +'<option value="">All SOs (master defaults)</option>'
+            +dSoList.map(so=>'<option value="'+so+'"'+(selectedDocSO===so?' selected':'')+'>'+so+'</option>').join('')
+            +'</select>'
+            +(selectedDocSO?'<span style="font-size:11px;color:var(--red);white-space:nowrap">Using '+selectedDocSO+' address & naming</span>':'<span style="font-size:11px;color:var(--gray-400);white-space:nowrap">Pick an SO for its address & naming</span>')
+            +'</div>';
+        })()}
         <div class="doc-tabs" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
           <div style="display:flex;gap:4px">
             <button class="doc-tab${activeDocTab==='install'?' active':''}" onclick="saveDocFormState(true);activeDocTab='install';renderGenDocs()">🔧 Installation ticket</button>
@@ -3700,10 +3749,9 @@ function renderInstallForm(){
   const shipDate=getDocDate('shipping');
   return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()" onfocusout="saveDocFormState(true)">
     <div class="doc-section-lbl">Project identifiers (auto-filled from hub)</div>
-    ${fld('if-so','Sales Order (SO)','SO-XXXXX','','text',p.so_number||'')}
+    ${fld('if-so','Sales Order (SO)','SO-XXXXX','','text',selectedDocSO||p.so_number||'')}
     ${fld('if-client','End Client (CX)','e.g. Google','','text',p.client||'')}
-    ${fld('if-naming','Naming convention','e.g. GPIX-B2B-SUN-CA-ENC','full','text',p.naming_convention||'')}
-    ${fld('if-address','Installation address','e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085','full','text',p.address||'')}
+    ${(()=>{const soDet=selectedDocSO?soDetails.find(d=>d.project_id===p.id&&d.so_tag===selectedDocSO):null;const naming=soDet?.naming_convention??p.naming_convention??'';const address=soDet?.address??p.address??'';return fld('if-naming','Naming convention'+(selectedDocSO?' (SO: '+selectedDocSO+')':''),'e.g. GPIX-B2B-SUN-CA-ENC','full','text',naming)+fld('if-address','Installation address'+(selectedDocSO?' (SO: '+selectedDocSO+')':''),'e.g. 440 N Wolfe Rd','full','text',address);})()}
     <div class="doc-section-lbl">Dates (auto-filled)</div>
     ${fld('if-ship','Shipping date','','','text',shipDate)}
     ${fld('if-del','Delivery date','','','text',delivDate)}
