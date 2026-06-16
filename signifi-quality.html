@@ -516,7 +516,7 @@ async function importRows(rows,fileName){
   for(let i=0;i<mapped.length;i+=50){
     const batch=mapped.slice(i,i+50).map(d=>({...d,file_id:fileId}));
     try{
-      const dr=await sb('/rest/v1/deployments',{method:'POST',body:JSON.stringify(batch),headers:{'Prefer':'resolution=merge-duplicates,return=minimal'}});
+      const dr=await sb('/rest/v1/deployments?on_conflict=task_id',{method:'POST',body:JSON.stringify(batch),headers:{'Prefer':'resolution=merge-duplicates,return=minimal','Content-Type':'application/json'}});
       if(!dr.ok){const t=await dr.text();toast('Deployment save error: '+t.substring(0,80));return}
     }catch(e){toast('Network error saving deployments: '+e.message);return}
   }
