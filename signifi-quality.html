@@ -316,16 +316,20 @@ table.dtbl{border-collapse:collapse;width:100%;min-width:560px}
 <div class="wrap">
   <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:.75rem">
     <div>
-      <div class="page-title">Today's Deployments</div>
+      <div class="page-title" id="todayTitle">Today's Deployments</div>
       <div style="font-size:.875rem;color:var(--text2)" id="todayDate"></div>
     </div>
     <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+      <div style="display:flex;background:var(--surface2);border-radius:6px;padding:3px;gap:2px">
+        <button id="btnToday" onclick="setTodayView('today')" style="padding:.35rem .875rem;border-radius:4px;font-size:.8rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;border:none;background:#fff;color:var(--text);box-shadow:var(--shadow)">Today</button>
+        <button id="btnWeek" onclick="setTodayView('week')" style="padding:.35rem .875rem;border-radius:4px;font-size:.8rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;border:none;background:transparent;color:var(--text3)">This Week</button>
+      </div>
       <select class="fsel" id="todayTrack" onchange="renderToday()"><option value="all">All tracks</option><option value="new">New Install</option><option value="revisit">Revisit</option></select>
-      <input class="fsearch" id="todaySearch" placeholder="Search…" oninput="renderToday()" style="width:160px">
+      <input class="fsearch" id="todaySearch" placeholder="Search..." oninput="renderToday()" style="width:160px">
     </div>
   </div>
   <div class="stat-row" id="todayStats"></div>
-  <div id="todayContent"><div class="empty"><div class="empty-icon">⏳</div><div class="empty-title">Loading…</div></div></div>
+  <div id="todayContent"><div class="empty"><div class="empty-icon">&#8987;</div><div class="empty-title">Loading...</div></div></div>
 </div>
 </div>
 
@@ -497,7 +501,7 @@ async function importRows(rows,fileName){
     .map((r,i)=>{
       const display=stripHtml(String(r['Display Name']||r['display_name']||''));
       const loc=r['Service location']||r['service_location']||'';
-      const rawDate=String(r['Confirmed Installation Date']||r['install_date']||'').trim().split(' ')[0].split('T')[0];const installDate=(rawDate&&/^\d{4}-\d{2}-\d{2}$/.test(rawDate))?rawDate:null;return{task_id:stripHtml(String(r['Task ID']||r['task_id']||'m'+Date.now()+i)),parent_ticket:String(r['Parent Ticket #']||r['parent_ticket']||''),display_name:display,client:extractClient(display,loc),kiosk_id:String(r['Kiosk ID']||r['kiosk_id']||''),location:String(loc||''),stage:String(r['Project Stage']||''),activity_type:String(r['Requested Activity']||''),tech:String(r['Dispatch Tech']||r['dispatch_tech']||''),week_no:parseInt(r['Confirmed Week No.']||r['week_no'])||0,install_date:installDate};
+      const rawDate=String(r['Confirmed Installation Date']||r['install_date']||'').trim().split(' ')[0].split('T')[0];const installDate=(rawDate&&/^\d{4}-\d{2}-\d{2}$/.test(rawDate))?rawDate:null;const rawSched=String(r['Scheduled Start Date Time']||'').trim();let schedDate=null;if(rawSched){const schedNum=parseFloat(rawSched);if(!isNaN(schedNum)&&schedNum>1000){const d=new Date((schedNum-25569)*86400*1000);schedDate=d.toISOString().slice(0,10)}else if(/^\d{4}-\d{2}-\d{2}$/.test(rawSched.split('T')[0])){schedDate=rawSched.split('T')[0]}}return{task_id:stripHtml(String(r['Task ID']||r['task_id']||'m'+Date.now()+i)),parent_ticket:String(r['Parent Ticket #']||r['parent_ticket']||''),display_name:display,client:extractClient(display,loc),kiosk_id:String(r['Kiosk ID']||r['kiosk_id']||''),location:String(loc||''),stage:String(r['Project Stage']||''),activity_type:String(r['Requested Activity']||''),tech:String(r['Dispatch Tech']||r['dispatch_tech']||''),week_no:parseInt(r['Confirmed Week No.']||r['week_no'])||0,install_date:installDate,scheduled_start_date:schedDate};
     });
 
   const weeks=[...new Set(mapped.map(d=>d.week_no).filter(w=>w>0))].sort((a,b)=>a-b);
@@ -529,6 +533,27 @@ async function importRows(rows,fileName){
   await loadFile(fileId,fileName);
 }
 
+async function deleteImport(fileId,fileName){
+  if(!confirm('Delete import "'+fileName+'" and all its deployments? This cannot be undone.'))return;
+  try{
+    // Delete quality scores for all deployments in this file
+    const depsRes=await sb('/rest/v1/deployments?file_id=eq.'+fileId+'&select=id');
+    if(depsRes.ok){
+      const deps=await depsRes.json();
+      if(deps.length){
+        const ids=deps.map(d=>d.id).join(',');
+        await sb('/rest/v1/quality_scores?deployment_id=in.('+ids+')',{method:'DELETE'});
+      }
+    }
+    // Delete deployments
+    await sb('/rest/v1/deployments?file_id=eq.'+fileId,{method:'DELETE'});
+    // Delete file record
+    await sb('/rest/v1/imported_files?id=eq.'+fileId,{method:'DELETE'});
+    if(activeFileId===fileId){deployments=[];scores={};rowData={};activeFileId=null;activeFileName='';document.getElementById('roleSection').style.display='none';checkGoBtn();}
+    await loadFileHistory();
+    toast('Import deleted','ok');
+  }catch(e){toast('Delete failed: '+e.message)}
+}
 async function loadFileHistory(){
   try{
     const res=await sb('/rest/v1/imported_files?select=*&order=imported_at.desc&limit=20');
@@ -536,12 +561,13 @@ async function loadFileHistory(){
     const files=await res.json();
     document.getElementById('fileList').innerHTML=files.length?files.map(f=>`
       <div class="file-row ${activeFileId===f.id?'active-file':''}" onclick="loadFile('${f.id}','${esc(f.file_name)}')">
-        <div style="font-size:1.1rem">📄</div>
+        <div style="font-size:1.1rem">&#128196;</div>
         <div class="fr-info">
           <div class="fr-name">${esc(f.file_name)}</div>
           <div class="fr-meta">${new Date(f.imported_at).toLocaleDateString('en-CA',{month:'short',day:'numeric',year:'numeric'})} · ${f.row_count} tickets</div>
         </div>
         <div class="fr-badge">${f.week_range||''}</div>
+        <button onclick="event.stopPropagation();deleteImport('${f.id}','${esc(f.file_name)}')" style="background:var(--red-soft);color:var(--red);border:1px solid var(--red-border);border-radius:5px;padding:3px 8px;font-size:.7rem;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;flex-shrink:0">Delete</button>
       </div>`).join(''):'<div style="font-size:.8rem;color:var(--text3);padding:.5rem 0">No imports yet.</div>';
   }catch(e){document.getElementById('fileList').innerHTML='<div style="font-size:.8rem;color:var(--text3);padding:.5rem 0">Could not load file history.</div>'}
 }
@@ -734,14 +760,34 @@ function downloadResults(){
 }
 
 // TODAY
+let todayViewMode='today';
+function setTodayView(mode){
+  todayViewMode=mode;
+  allDepsDB=[];
+  const btnT=document.getElementById('btnToday');const btnW=document.getElementById('btnWeek');
+  if(mode==='today'){btnT.style.background='#fff';btnT.style.color='var(--text)';btnT.style.boxShadow='var(--shadow)';btnW.style.background='transparent';btnW.style.color='var(--text3)';btnW.style.boxShadow='none';}
+  else{btnW.style.background='#fff';btnW.style.color='var(--text)';btnW.style.boxShadow='var(--shadow)';btnT.style.background='transparent';btnT.style.color='var(--text3)';btnT.style.boxShadow='none';}
+  renderToday();
+}
 async function renderToday(){
-  const todayStr=new Date().toISOString().slice(0,10);
-  document.getElementById('todayDate').textContent=new Date().toLocaleDateString('en-CA',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+  const now=new Date();
+  const todayStr=now.toISOString().slice(0,10);
+  // Get start/end of current week (Mon-Sun)
+  const dayOfWeek=now.getDay();
+  const monday=new Date(now);monday.setDate(now.getDate()-(dayOfWeek===0?6:dayOfWeek-1));
+  const sunday=new Date(monday);sunday.setDate(monday.getDate()+6);
+  const weekStart=monday.toISOString().slice(0,10);
+  const weekEnd=sunday.toISOString().slice(0,10);
+  document.getElementById('todayDate').textContent=todayViewMode==='today'?now.toLocaleDateString('en-CA',{weekday:'long',month:'long',day:'numeric',year:'numeric'}):`Week of ${monday.toLocaleDateString('en-CA',{month:'short',day:'numeric'})} – ${sunday.toLocaleDateString('en-CA',{month:'short',day:'numeric',year:'numeric'})}`;
+  document.getElementById('todayTitle').textContent=todayViewMode==='today'?"Today's Deployments":"This Week's Deployments";
   const track=document.getElementById('todayTrack').value;
   const q=document.getElementById('todaySearch').value.toLowerCase();
   try{
     if(!allDepsDB.length){
-      const res=await sb(`/rest/v1/deployments?install_date=eq.${todayStr}&select=*&order=client.asc`);
+      const query=todayViewMode==='today'
+        ?`/rest/v1/deployments?scheduled_start_date=eq.${todayStr}&select=*&order=client.asc`
+        :`/rest/v1/deployments?scheduled_start_date=gte.${weekStart}&scheduled_start_date=lte.${weekEnd}&select=*&order=scheduled_start_date.asc,client.asc`;
+      const res=await sb(query);
       if(!res.ok)throw new Error();
       allDepsDB=await res.json();
     }
