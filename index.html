@@ -3260,17 +3260,19 @@ function renderProjPageBody(){
           <span class="pp-card-title">PM Tasks</span>
           <span style="font-size:10px;color:var(--gray-400)">Checklist with due dates</span>
         </div>
-        <table style="width:100%;border-collapse:collapse">
+        <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;min-width:300px">
           <thead><tr style="border-bottom:1px solid var(--gray-100)">
-            <th style="padding:5px 8px;font-size:10px;font-weight:700;color:var(--gray-400);text-align:left;text-transform:uppercase">Task</th>
-            <th style="padding:5px 8px;font-size:10px;font-weight:700;color:var(--gray-400);text-align:left;text-transform:uppercase;white-space:nowrap">Due date</th>
-            <th style="padding:5px 8px;font-size:10px;font-weight:700;color:var(--gray-400);text-align:left;text-transform:uppercase">Status</th>
-            <th style="width:28px"></th>
+            <th style="padding:5px 6px;font-size:10px;font-weight:700;color:var(--gray-400);text-align:left;text-transform:uppercase">Task</th>
+            <th style="padding:5px 6px;font-size:10px;font-weight:700;color:var(--gray-400);text-align:left;text-transform:uppercase;white-space:nowrap">Due</th>
+            <th style="padding:5px 6px;font-size:10px;font-weight:700;color:var(--gray-400);text-align:left;text-transform:uppercase">Status</th>
+            <th style="width:20px"></th>
           </tr></thead>
           <tbody id="pmt-body-${ppProjId}">
             ${renderPMTaskRows(ppProjId,ppData.pmtasks||[])}
           </tbody>
         </table>
+        </div>
         <button class="pp-add-btn" onclick="addPMTaskRow('${ppProjId}','pmt-body-${ppProjId}')">+ Add task</button>
       </div>
 
@@ -3520,14 +3522,14 @@ function renderPMTaskRows(pid,saved){
     var sc=t.status==='Done'?'var(--success)':t.status==='In Progress'?'#d97706':'#e11d48';
     var lbl=t.label.split('"').join('&quot;');
     var isSaved=!!t.id;
-    var labelCell='<input value="'+lbl+'" id="pmt-lbl-'+id+'" data-pid="'+pid+'" data-tid="'+id+'" data-field="label" style="font-family:var(--font);font-size:12px;padding:3px 6px;border:'+(isSaved?'1px solid var(--gray-200)':'1px solid transparent')+';border-radius:4px;width:170px;background:'+(isSaved?'var(--white)':'transparent')+'" onblur="pmtBlur(this)" onfocus="this.style.border=\'1px solid var(--gray-200)\';this.style.background=\'var(--white)\'">';
-    var dueCell='<input type="date" value="'+(t.due_date||'')+'" data-pid="'+pid+'" data-tid="'+id+'" data-field="due_date" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px" onchange="pmtChange(this)">';
+    var labelCell='<input value="'+lbl+'" id="pmt-lbl-'+id+'" data-pid="'+pid+'" data-tid="'+id+'" data-field="label" style="font-family:var(--font);font-size:11px;padding:3px 5px;border:'+(isSaved?'1px solid var(--gray-200)':'1px solid transparent')+';border-radius:4px;width:100px;background:'+(isSaved?'var(--white)':'transparent')+'" onblur="pmtBlur(this)" onfocus="this.style.border=\'1px solid var(--gray-200)\';this.style.background=\'var(--white)\'">';
+    var dueCell='<input type="date" value="'+(t.due_date||'')+'" data-pid="'+pid+'" data-tid="'+id+'" data-field="due_date" style="font-family:var(--font);font-size:10px;padding:2px 3px;border:1px solid var(--gray-200);border-radius:4px;width:88px" onchange="pmtChange(this)">';
     var statusOpts=['Pending','In Progress','Done'].map(function(s){return'<option'+(t.status===s?' selected':'')+'>'+s+'</option>';}).join('');
-    var statusCell='<select data-pid="'+pid+'" data-tid="'+id+'" data-field="status" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;color:'+sc+';font-weight:500" onchange="pmtChange(this)">'+statusOpts+'</select>';
+    var statusCell='<select data-pid="'+pid+'" data-tid="'+id+'" data-field="status" style="font-family:var(--font);font-size:10px;padding:2px 3px;border:1px solid var(--gray-200);border-radius:4px;color:'+sc+';font-weight:500;width:78px" onchange="pmtChange(this)">'+statusOpts+'</select>';
     var delCell='<button data-tid="'+id+'" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px" title="Remove" onclick="deletePMTask(this.dataset.tid)">✕</button>';
     var noteVal=(t.notes||'').split('"').join('&quot;');
     var noteCell='<input type="text" value="'+noteVal+'" placeholder="Note..." data-pid="'+pid+'" data-tid="'+id+'" data-field="notes" style="font-family:var(--font);font-size:10px;padding:2px 5px;border:none;border-bottom:1px solid var(--gray-100);border-radius:0;width:100%;color:var(--gray-500);background:transparent" onblur="pmtBlur(this)">';
-    return'<tr id="pmt-row-'+id+'" style="border-bottom:1px solid var(--gray-50)"><td style="padding:5px 8px 1px 8px">'+labelCell+'<div>'+noteCell+'</div></td><td style="padding:5px 8px">'+dueCell+'</td><td style="padding:5px 8px">'+statusCell+'</td><td style="padding:5px 8px;text-align:center">'+delCell+'</td></tr>';
+    return'<tr id="pmt-row-'+id+'" style="border-bottom:1px solid var(--gray-50)"><td style="padding:5px 6px 1px 6px">'+labelCell+'<div>'+noteCell+'</div></td><td style="padding:5px 6px">'+dueCell+'</td><td style="padding:5px 6px">'+statusCell+'</td><td style="padding:5px 4px;text-align:center">'+delCell+'</td></tr>';
   }).join('');
 }
 function pmtBlur(el){savePMTask(el.dataset.pid,el.dataset.tid,'label',el.value);}
@@ -3593,10 +3595,10 @@ async function addPMTaskRow(pid,containerId){
   tr.id='pmt-row-'+tempId;
   tr.style.borderBottom='1px solid var(--gray-50)';
   tr.innerHTML=
-    '<td style="padding:5px 8px"><input id="pmt-lbl-'+tempId+'" data-pid="'+pid+'" data-tid="'+tempId+'" data-field="label" placeholder="Task name..." style="font-family:var(--font);font-size:12px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:4px;width:170px" onblur="pmtBlur(this)"></td>'+
-    '<td style="padding:5px 8px"><input type="date" data-pid="'+pid+'" data-tid="'+tempId+'" data-field="due_date" style="font-family:var(--font);font-size:11px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:4px" onchange="pmtChange(this)"></td>'+
-    '<td style="padding:5px 8px"><select data-pid="'+pid+'" data-tid="'+tempId+'" data-field="status" style="font-family:var(--font);font-size:11px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:4px" onchange="pmtChange(this)"><option>Pending</option><option>In Progress</option><option>Done</option></select></td>'+
-    '<td style="padding:5px 8px;text-align:center"><button data-tid="'+tempId+'" onclick="deletePMTask(this.dataset.tid)" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px">✕</button></td>';
+    '<td style="padding:5px 6px"><input id="pmt-lbl-'+tempId+'" data-pid="'+pid+'" data-tid="'+tempId+'" data-field="label" placeholder="Task name..." style="font-family:var(--font);font-size:11px;padding:3px 5px;border:1px solid var(--gray-200);border-radius:4px;width:100px" onblur="pmtBlur(this)"></td>'+
+    '<td style="padding:5px 6px"><input type="date" data-pid="'+pid+'" data-tid="'+tempId+'" data-field="due_date" style="font-family:var(--font);font-size:10px;padding:2px 3px;border:1px solid var(--gray-200);border-radius:4px;width:88px" onchange="pmtChange(this)"></td>'+
+    '<td style="padding:5px 6px"><select data-pid="'+pid+'" data-tid="'+tempId+'" data-field="status" style="font-family:var(--font);font-size:10px;padding:2px 3px;border:1px solid var(--gray-200);border-radius:4px;width:78px" onchange="pmtChange(this)"><option>Pending</option><option>In Progress</option><option>Done</option></select></td>'+
+    '<td style="padding:5px 6px;text-align:center"><button data-tid="'+tempId+'" onclick="deletePMTask(this.dataset.tid)" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px">✕</button></td>';
   container.appendChild(tr);
   document.getElementById('pmt-lbl-'+tempId)?.focus();
 }
