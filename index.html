@@ -1059,7 +1059,9 @@ function renderOverview(){
     ${pillsHtml}
     ${proj?`<div class="section">
       <div class="section-head">
-        <div class="section-title">${proj.name} <span style="font-size:11px;font-weight:400;color:var(--gray-500)">— ${proj.client}</span></div>
+        <div class="section-title">${proj.name} <span style="font-size:11px;font-weight:400;color:var(--gray-500)">— ${proj.client}</span>
+          <button onclick="goToProjPage('${proj.id}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font);margin-left:6px;vertical-align:middle" title="Open project page">↗ Project page</button>
+        </div>
         <div style="display:flex;align-items:center;gap:8px">
           ${hideCompletedBtn('overview')}
           <span style="font-family:var(--mono);color:var(--red);font-size:11px" title="${proj.so_number||''}">${truncateSO(proj.so_number)}</span>
