@@ -2195,16 +2195,16 @@ function renderIntake(){
 async function saveIntake(){
   const name=document.getElementById('i-name').value.trim();const so=document.getElementById('i-so').value.trim();const client=document.getElementById('i-client').value.trim();
   if(!name||!so||!client){alert('Please fill in project name, SO number, and client.');return;}
-  // Combine all section notes into the main notes field
-  const sectionNotes=[
-    document.getElementById('i-notes-readiness').value.trim(),
-    document.getElementById('i-notes-production').value.trim(),
-    document.getElementById('i-notes-ui').value.trim(),
-    document.getElementById('i-notes-quality').value.trim(),
-    document.getElementById('i-notes-shipping').value.trim(),
-    document.getElementById('i-notes-install').value.trim(),
-    document.getElementById('i-notes').value.trim(),
-  ].filter(Boolean).join('\n\n');
+  // Keep each section's notes separate (so they can be shown individually on the Project Page)
+  const noteSections={
+    readiness:document.getElementById('i-notes-readiness').value.trim(),
+    production:document.getElementById('i-notes-production').value.trim(),
+    ui:document.getElementById('i-notes-ui').value.trim(),
+    quality:document.getElementById('i-notes-quality').value.trim(),
+    shipping:document.getElementById('i-notes-shipping').value.trim(),
+    install:document.getElementById('i-notes-install').value.trim(),
+  };
+  const generalNotes=document.getElementById('i-notes').value.trim();
   const pm=document.getElementById('i-pm').value.trim();
   const sdm=document.getElementById('i-sdm')?.value.trim()||'';
   const solutions=document.getElementById('i-solutions')?.value.trim()||'';
@@ -2214,8 +2214,13 @@ async function saveIntake(){
   const vinylType=document.getElementById('i-vinyl-type').value;
   const formFactor='';
   const productType=[...document.getElementById('i-type').selectedOptions].map(o=>o.value).join(', ');
-  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,channel_partner:channelPartner,product_type:productType,quantity:parseInt(document.getElementById('i-qty').value)||null,location:document.getElementById('i-loc').value,notes:sectionNotes,naming_convention:document.getElementById('i-naming')?.value.trim()||null,status:'active',changed_by:currentUserName,pm,sdm,solutions,sales,account_manager:accountManager,vinyl_type:vinylType,form_factor:formFactor}).select().single();
+  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,channel_partner:channelPartner,product_type:productType,quantity:parseInt(document.getElementById('i-qty').value)||null,location:document.getElementById('i-loc').value,notes:generalNotes,naming_convention:document.getElementById('i-naming')?.value.trim()||null,status:'active',changed_by:currentUserName,pm,sdm,solutions,sales,account_manager:accountManager,vinyl_type:vinylType,form_factor:formFactor}).select().single();
   if(error){alert('Error: '+error.message);return;}
+  // Save each section's notes individually into project_sections so they can be shown
+  // separately on the Project Page (instead of being merged into one untraceable blob)
+  const sectionKeyMap={readiness:'notes_readiness',production:'notes_production',ui:'notes_ui',quality:'notes_quality',shipping:'notes_shipping',install:'notes_install'};
+  const sectionInserts=Object.entries(noteSections).filter(([k,v])=>v).map(([k,v])=>({project_id:proj.id,section_key:sectionKeyMap[k],content:v,updated_by:currentUserName}));
+  if(sectionInserts.length)await sb.from('project_sections').insert(sectionInserts);
   const msFields=[
     {id:'i-po',key:'po-release',label:'PO Release'},
     {id:'i-mo',key:'mo-release',label:'MO Release'},
@@ -3263,6 +3268,40 @@ function renderProjPageBody(){
             <textarea class="pp-textarea" placeholder="Updates, status, and notes for the client..." onchange="savePPSection('client_updates',this.value)" style="min-height:80px">${getSection('client_updates')}</textarea>
           </div>
         </div>
+        ${(()=>{
+          const NOTE_SECTIONS=[
+            {key:'notes_readiness',label:'Readiness / Procurement notes'},
+            {key:'notes_production',label:'Production / Products notes'},
+            {key:'notes_ui',label:'UI notes'},
+            {key:'notes_quality',label:'Quality & testing notes'},
+            {key:'notes_shipping',label:'Shipping notes'},
+            {key:'notes_install',label:'Installation notes'},
+          ];
+          const populated=NOTE_SECTIONS.filter(s=>getSection(s.key));
+          const empty=NOTE_SECTIONS.filter(s=>!getSection(s.key));
+          if(!populated.length&&!proj.notes)return'';
+          return `<div class="pp-card" style="margin-bottom:12px">
+            <div class="pp-card-head"><span class="pp-card-title">Intake notes</span><span style="font-size:10px;color:var(--gray-400)">From project intake</span></div>
+            <div class="pp-card-body" style="display:flex;flex-direction:column;gap:10px">
+              ${populated.map(s=>`<div>
+                <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">${s.label}</div>
+                <textarea class="pp-textarea" onchange="savePPSection('${s.key}',this.value)" style="min-height:50px">${getSection(s.key)}</textarea>
+              </div>`).join('')}
+              ${proj.notes?`<div>
+                <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">General notes</div>
+                <textarea class="pp-textarea" onchange="saveProjField('${proj.id}','notes',this.value)" style="min-height:50px">${proj.notes.replace(/</g,'&lt;')}</textarea>
+              </div>`:''}
+              ${empty.length?`<details style="font-size:11px;color:var(--gray-400)"><summary style="cursor:pointer">+ Add ${empty.length} more note type${empty.length>1?'s':''}</summary>
+                <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+                  ${empty.map(s=>`<div>
+                    <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">${s.label}</div>
+                    <textarea class="pp-textarea" placeholder="Add ${s.label.toLowerCase()}..." onchange="savePPSection('${s.key}',this.value)" style="min-height:44px"></textarea>
+                  </div>`).join('')}
+                </div>
+              </details>`:''}
+            </div>
+          </div>`;
+        })()}
       </div>
       <div class="pp-card" style="display:flex;flex-direction:column">
         <div class="pp-card-head"><span class="pp-card-title">Quick links</span></div>
@@ -3318,6 +3357,7 @@ function renderProjPageBody(){
                     ${singleSO?`<span style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em;border-left:3px solid var(--red);padding-left:6px;white-space:nowrap">SO: ${singleSO}</span>`:''}
                     <input value="${naming.replace(/"/g,'&quot;')}" placeholder="Naming convention..." style="font-family:var(--mono);font-size:11px;padding:3px 8px;border:1px solid var(--gray-200);border-radius:4px;flex:1;min-width:120px;box-sizing:border-box" onblur="${singleSO?`saveSODetail('${proj.id}','${singleSO}','naming_convention',this.value)`:`saveProjField('${proj.id}','naming_convention',this.value)`}" onchange="${singleSO?`saveSODetail('${proj.id}','${singleSO}','naming_convention',this.value)`:`saveProjField('${proj.id}','naming_convention',this.value)`}">
                     <input value="${address.replace(/"/g,'&quot;')}" placeholder="Installation address..." style="font-family:var(--font);font-size:11px;padding:3px 8px;border:1px solid var(--gray-200);border-radius:4px;flex:2;min-width:160px;box-sizing:border-box" onblur="${singleSO?`saveSODetail('${proj.id}','${singleSO}','address',this.value)`:`saveProjField('${proj.id}','address',this.value)`}" onchange="${singleSO?`saveSODetail('${proj.id}','${singleSO}','address',this.value)`:`saveProjField('${proj.id}','address',this.value)`}">
+                    ${singleSO?`<button onclick="openSOConfigModal('${proj.id}','${singleSO}')" style="font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font);white-space:nowrap">⚙ Config</button>`:''}
                   </div>
                 </td></tr>`;
                 return headerRow+(msHtml||'<tr><td colspan="4" style="text-align:center;padding:2rem;color:var(--gray-300)">No milestones — add them in Project Overview</td></tr>');
@@ -3333,6 +3373,7 @@ function renderProjPageBody(){
                     <input value="${naming.replace(/"/g,'&quot;')}" placeholder="Naming convention..." style="font-family:var(--mono);font-size:11px;padding:3px 8px;border:1px solid var(--gray-200);border-radius:4px;flex:1;min-width:120px;box-sizing:border-box" onblur="saveSODetail('${proj.id}','${so}','naming_convention',this.value)" onchange="saveSODetail('${proj.id}','${so}','naming_convention',this.value)">
                     <input value="${address.replace(/"/g,'&quot;')}" placeholder="Installation address..." style="font-family:var(--font);font-size:11px;padding:3px 8px;border:1px solid var(--gray-200);border-radius:4px;flex:2;min-width:160px;box-sizing:border-box" onblur="saveSODetail('${proj.id}','${so}','address',this.value)" onchange="saveSODetail('${proj.id}','${so}','address',this.value)">
                     <button onclick="pushSODatesToAll('${proj.id}','${so}')" style="font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font);white-space:nowrap">📅 Push to all</button>
+                    <button onclick="openSOConfigModal('${proj.id}','${so}')" style="font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font);white-space:nowrap">⚙ Config</button>
                   </div>
                 </td></tr>`;
                 return soHeader+soMs.map(buildPPMsRow).join('');
@@ -3458,10 +3499,68 @@ async function saveSODetail(projId,so,field,val){
       project_id:projId,so_tag:so,
       address:field==='address'?val:(proj?.address||''),
       naming_convention:field==='naming_convention'?val:(proj?.naming_convention||''),
+      form_factor:field==='form_factor'?val:(proj?.form_factor||''),
+      qa_task_url:field==='qa_task_url'?val:(proj?.qa_task_url||''),
+      odoo_url:field==='odoo_url'?val:(proj?.odoo_url||''),
+      install_ticket_url:field==='install_ticket_url'?val:(proj?.install_ticket_url||''),
+      ui_task_url:field==='ui_task_url'?val:(proj?.ui_task_url||''),
     }).select().single();
     if(data)soDetails.push(data);
   }
   showPPSaved();
+}
+
+function openSOConfigModal(projId,so){
+  const proj=projects.find(p=>p.id===projId);
+  if(!proj)return;
+  const saved=soDetails.find(d=>d.project_id===projId&&d.so_tag===so);
+  const formFactor=saved?.form_factor??proj.form_factor??'';
+  const qaUrl=saved?.qa_task_url??proj.qa_task_url??'';
+  const odooUrl=saved?.odoo_url??proj.odoo_url??'';
+  const installUrl=saved?.install_ticket_url??proj.install_ticket_url??'';
+  const uiUrl=saved?.ui_task_url??proj.ui_task_url??'';
+  const types=getProductTypes();
+  const selectedTypes=formFactor.split(',').map(s=>s.trim()).filter(Boolean);
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:480px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
+    <div class="modal-head"><span class="modal-title">⚙ Configuration — SO ${so}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="field full" style="margin-bottom:12px">
+        <label>Configuration / Form factor <span style="font-size:10px;color:var(--gray-400);font-weight:400">— select all that apply for this SO</span></label>
+        <select id="soc-formfactor" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:110px">
+          ${types.map(t=>`<option${selectedTypes.includes(t)?' selected':''}>${t}</option>`).join('')}
+        </select>
+        <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
+      </div>
+      <div class="field full" style="margin-bottom:10px"><label>QA Task URL</label><input id="soc-qa" value="${qaUrl.replace(/"/g,'&quot;')}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px"></div>
+      <div class="field full" style="margin-bottom:10px"><label>Odoo Task URL</label><input id="soc-odoo" value="${odooUrl.replace(/"/g,'&quot;')}" placeholder="https://signifisolutions.odoo.com/..." style="font-family:var(--mono);font-size:12px"></div>
+      <div class="field full" style="margin-bottom:10px"><label>Installation Ticket URL</label><input id="soc-install" value="${installUrl.replace(/"/g,'&quot;')}" placeholder="https://..." style="font-family:var(--mono);font-size:12px"></div>
+      <div class="field full"><label>Jira / UI Task URL</label><input id="soc-ui" value="${uiUrl.replace(/"/g,'&quot;')}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px"></div>
+    </div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveSOConfig('${projId}','${so}')">Save</button></div>
+  </div></div>`;
+}
+
+async function saveSOConfig(projId,so){
+  const formFactor=[...document.getElementById('soc-formfactor').selectedOptions].map(o=>o.value).join(', ');
+  const qaUrl=document.getElementById('soc-qa').value.trim();
+  const odooUrl=document.getElementById('soc-odoo').value.trim();
+  const installUrl=document.getElementById('soc-install').value.trim();
+  const uiUrl=document.getElementById('soc-ui').value.trim();
+  const existing=soDetails.find(d=>d.project_id===projId&&d.so_tag===so);
+  const updates={form_factor:formFactor,qa_task_url:qaUrl,odoo_url:odooUrl,install_ticket_url:installUrl,ui_task_url:uiUrl};
+  if(existing){
+    await sb.from('so_details').update({...updates,updated_at:new Date().toISOString()}).eq('id',existing.id);
+    Object.assign(existing,updates);
+  } else {
+    const proj=projects.find(p=>p.id===projId);
+    const{data}=await sb.from('so_details').insert({
+      project_id:projId,so_tag:so,
+      address:proj?.address||'',naming_convention:proj?.naming_convention||'',
+      ...updates,
+    }).select().single();
+    if(data)soDetails.push(data);
+  }
+  closeModal();showToast('SO '+so+' config saved ✓');
 }
 async function saveProjField(projId,field,val){
   await sb.from('projects').update({[field]:val||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',projId);
@@ -3855,7 +3954,13 @@ function getDocDate(key){if(!selectedDocProjId)return'';const m=milestones.find(
 // Gets a link for Generate Docs — checks project record first, then project_links table
 function getDocLink(label){
   const p=getDocProj();
-  // Check direct project record fields first
+  // If a specific SO is selected, check that SO's overrides first
+  if(selectedDocSO){
+    const soDet=soDetails.find(d=>d.project_id===p.id&&d.so_tag===selectedDocSO);
+    const SO_MAP={'Odoo Task':soDet?.odoo_url,'Jira / UI Task':soDet?.ui_task_url,'QA Task':soDet?.qa_task_url,'Installation Ticket':soDet?.install_ticket_url};
+    if(SO_MAP[label])return SO_MAP[label];
+  }
+  // Check direct project record fields next
   const DIRECT={'Odoo Task':p.odoo_url,'Jira / UI Task':p.ui_task_url,'QA Task':p.qa_task_url,'Product Template':p.product_template_url,'Badge Reader':p.badge_reader_url,'Employee List':p.employee_list_url,'Facility Site Survey':p.facility_survey_url,'IT Site Survey':p.it_survey_url};
   if(DIRECT[label])return DIRECT[label]||'';
   // Fall back to project_links table (set via project page)
