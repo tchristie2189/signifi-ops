@@ -2798,6 +2798,7 @@ function toggleAllSOView(){
   const modal=document.getElementById('modal-root');
   const proj=projects.find(p=>p.id===ppProjId);
   if(!proj)return;
+  if(window._allSOSourceProjId!==ppProjId){window._allSOSourceOverride=null;window._allSOSourceProjId=ppProjId;}
 
   // Support both SO-split (so_tag on milestones) and campaign children (separate projects per SO)
   const soListFromField=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
@@ -2864,13 +2865,21 @@ function toggleAllSOView(){
     +'<th style="padding:8px 10px;font-size:11px;color:var(--gray-500);background:var(--gray-50);text-align:center">Match all</th>'
     +'</tr>';
 
-  // "First SO" is always the leftmost SO in the merged list that actually HAS milestones — consistent across all rows
-  const sourceSO=soHeaders.find(so=>pMs.some(m=>m.so_tag===so))||soHeaders[0];
+  // Source SO defaults to whichever has data, but the person can override via dropdown below
+  const defaultSourceSO=soHeaders.find(so=>pMs.some(m=>m.so_tag===so))||soHeaders[0];
+  const activeSourceSO=window._allSOSourceOverride||defaultSourceSO;
+
+  const sourceSelector='<div style="padding:8px 16px;background:#fff7ed;border-bottom:1px solid #fed7aa;display:flex;align-items:center;gap:8px">'
+    +'<span style="font-size:11px;color:#92400e;font-weight:600">📌 Source SO (used by Match all buttons):</span>'
+    +'<select onchange="window._allSOSourceOverride=this.value;toggleAllSOView()" style="font-size:12px;padding:3px 10px;border:1px solid #d97706;border-radius:6px;background:white;color:#92400e;font-weight:600">'
+    +soHeaders.map(so=>'<option value="'+so+'"'+(so===activeSourceSO?' selected':'')+'>'+so+'</option>').join('')
+    +'</select>'
+    +'</div>';
 
   const tbody=rowDefs.map(({key,label})=>{
     const row=getMsForSO(key);
-    // Source date always comes from sourceSO (the same SO for every row) for consistency
-    const sourceM=Object.values(row).find(m=>m.key===key&&m.label===label&&m.so_tag===sourceSO)||row[sourceSO];
+    // Source date comes from the selected source SO (same SO for every row, person-controlled)
+    const sourceM=Object.values(row).find(m=>m.key===key&&m.label===label&&m.so_tag===activeSourceSO)||row[activeSourceSO];
     const firstDate=sourceM?.date||'';
     return'<tr style="border-bottom:1px solid var(--gray-100)">'
       +'<td style="padding:6px 10px;font-size:12px;font-weight:500;white-space:nowrap">'+label+'</td>'
@@ -2879,18 +2888,19 @@ function toggleAllSOView(){
         const d=m?.date?daysDiff(m.date):null;
         const clr=!m?'color:var(--gray-300)':isMilestoneEffectivelyDone(m)?'color:var(--success);font-weight:600':d!==null&&d<0?'color:var(--red);font-weight:600':d!==null&&d<=7?'color:#d97706':'color:var(--gray-700)';
         const dateStr=m?.date?'<div style="font-size:12px">'+fmt(m.date)+'</div><div style="font-size:10px;opacity:0.7">'+(isMilestoneEffectivelyDone(m)?'Done ✓':d===0?'Today':d!==null?(d<0?Math.abs(d)+'d ago':'in '+d+'d'):'')+'</div>':'<span style="color:var(--gray-300)">—</span>';
-        return'<td style="padding:6px 10px;text-align:center;'+clr+'">'+dateStr+'</td>';
+        return'<td style="padding:6px 10px;text-align:center;'+clr+(so===activeSourceSO?';background:#fff7ed':'')+'">'+dateStr+'</td>';
       }).join('')
-      // Push to all button — uses first SO's date as source
-      +'<td style="padding:4px 8px;text-align:center">'+(firstDate?'<button onclick="pushMsKeyToAllSOs(\''+key+'\',\''+firstDate+'\',\''+ppProjId+'\',\''+label.replace(/'/g,"\\'")+'\')" style="font-size:10px;padding:3px 8px;border-radius:6px;border:1px solid var(--gray-200);background:white;color:var(--blue);cursor:pointer;font-family:var(--font)" title="Match all SOs to '+fmt(firstDate)+'">Match all</button>':'')+'</td>'
+      +'<td style="padding:4px 8px;text-align:center">'+(firstDate?'<button onclick="pushMsKeyToAllSOs(\''+key+'\',\''+firstDate+'\',\''+ppProjId+'\',\''+label.replace(/'/g,"\\'")+'\')" style="font-size:10px;padding:3px 8px;border-radius:6px;border:1px solid var(--gray-200);background:white;color:var(--blue);cursor:pointer;font-family:var(--font)" title="Push '+activeSourceSO+' date to all other SOs">Match all</button>':'')+'</td>'
       +'</tr>';
   }).join('');
 
   modal.innerHTML='<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:min(95vw,1000px);max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">'
     +'<div class="modal-head"><span class="modal-title">📊 All SO Milestones — '+proj.name+'</span><button class="modal-close" onclick="closeModal()">×</button></div>'
-    +'<div style="font-size:11px;color:var(--blue);background:var(--blue-bg);border-bottom:1px solid #bfdbfe;padding:8px 16px">💡 Click <strong>Match all</strong> on any row to push that milestone\'s date to all SOs</div>'
+    +mismatchBanner
+    +sourceSelector
+    +'<div style="font-size:11px;color:var(--blue);background:var(--blue-bg);border-bottom:1px solid #bfdbfe;padding:8px 16px">💡 Click <strong>Match all</strong> on any row to push <strong>'+activeSourceSO+'</strong>\'s date for that milestone to all other SOs</div>'
     +'<div style="overflow-x:auto;padding:0"><table style="width:100%;border-collapse:collapse"><thead>'+thead+'</thead><tbody>'+tbody+'</tbody></table></div>'
-    +'<div class="modal-actions"><button onclick="pushAllMilestoneKeysToAllSOs(\''+ppProjId+'\')" style="font-size:12px;padding:6px 14px;border-radius:var(--radius);border:none;background:var(--red);color:white;cursor:pointer;font-family:var(--font);font-weight:600">⚡ Match ALL milestones to first SO</button><button class="btn" onclick="closeModal()">Close</button></div>'
+    +'<div class="modal-actions"><button onclick="pushAllMilestoneKeysToAllSOs(\''+ppProjId+'\',\''+activeSourceSO+'\')" style="font-size:12px;padding:6px 14px;border-radius:var(--radius);border:none;background:var(--red);color:white;cursor:pointer;font-family:var(--font);font-weight:600">⚡ Match ALL milestones from '+activeSourceSO+'</button><button class="btn" onclick="closeModal()">Close</button></div>'
     +'</div></div>';
 }
 
@@ -2927,26 +2937,24 @@ async function pushMsKeyToAllSOs(key,date,projId,label){
   toggleAllSOView();
 }
 
-async function pushAllMilestoneKeysToAllSOs(projId){
-  if(!confirm('Match ALL milestones across all SOs to the first SO\'s dates?\n\nThis overwrites all SO dates.'))return;
+async function pushAllMilestoneKeysToAllSOs(projId,explicitSourceSO){
   const proj=projects.find(p=>p.id===projId);
   const soListFromField=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
   const tagsPresent=[...new Set(milestones.filter(m=>m.project_id===projId&&m.so_tag).map(m=>m.so_tag))];
   const soList=[...new Set([...soListFromField,...tagsPresent])];
-  // Source SO = first one in the list that actually has milestones
-  const firstSO=soList.find(so=>milestones.some(m=>m.project_id===projId&&m.so_tag===so))||soList[0];
+  const firstSO=explicitSourceSO||soList.find(so=>milestones.some(m=>m.project_id===projId&&m.so_tag===so))||soList[0];
+  if(!confirm('Match ALL milestones across all SOs to '+firstSO+'\'s dates?\n\nThis overwrites dates on all other SOs.'))return;
   const sourceMilestones=milestones.filter(m=>m.project_id===projId&&m.so_tag===firstSO);
   let updated=0;
   for(const src of sourceMilestones){
     if(!src.date)continue;
     for(const so of soList.filter(s=>s!==firstSO)){
-      // Match by key AND label to handle duplicate keys
       const tgt=milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.key===src.key&&m.label===src.label)
                ||milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.label===src.label);
       if(tgt){await sb.from('milestones').update({date:src.date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',tgt.id);tgt.date=src.date;updated++;}
     }
   }
-  showToast('Matched '+updated+' milestones across all SOs ✓');
+  showToast('Matched '+updated+' milestones from '+firstSO+' to other SOs ✓');
   closeModal();
   await loadAll();
 }
