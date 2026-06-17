@@ -2445,6 +2445,31 @@ async function saveEditProj(id){
   // Sync PM change to vinyl_schedule rows linked to this project
   const newPm=document.getElementById('ep-pm')?.value;
   if(newPm)await sb.from('vinyl_schedule').update({pm:newPm}).eq('project_id',id).eq('is_standalone',false);
+
+  // AUTO-ADD MILESTONES FOR NEWLY ADDED SOs
+  // If this project is already SO-split and the SO field gained new SOs, clone milestones for them
+  const newSoNumber=document.getElementById('ep-so').value.trim();
+  const newSoList=newSoNumber.split(',').map(s=>s.trim()).filter(Boolean);
+  const existingTags=[...new Set(milestones.filter(m=>m.project_id===id&&m.so_tag).map(m=>m.so_tag))];
+  const brandNewSOs=newSoList.filter(so=>!existingTags.includes(so));
+  if(existingTags.length>0&&brandNewSOs.length>0){
+    // This project is SO-split and has new SOs added — auto-clone milestones
+    const templateSO=existingTags[0];
+    const templateMs=milestones.filter(m=>m.project_id===id&&m.so_tag===templateSO);
+    if(templateMs.length){
+      const newRows=[];
+      for(const so of brandNewSOs){
+        for(const m of templateMs){
+          newRows.push({project_id:id,key:m.key,label:m.label,date:null,so_tag:so,changed_by:currentUserName});
+        }
+      }
+      await sb.from('milestones').insert(newRows);
+      showToast('Saved ✓ · Auto-added '+templateMs.length+' milestones for new SO'+(brandNewSOs.length>1?'s':'')+' ('+brandNewSOs.join(', ')+')');
+      closeModal();await loadAll();
+      return;
+    }
+  }
+
   closeModal();showToast('Saved ✓');await loadAll();
 }
 // ── SO SPLITTING ────────────────────────────────────────────
@@ -2775,7 +2800,7 @@ function toggleAllSOView(){
   if(!proj)return;
 
   // Support both SO-split (so_tag on milestones) and campaign children (separate projects per SO)
-  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soListFromField=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
   const children=getChildren(ppProjId); // campaign children
 
   // Determine mode: so_tag split or campaign children
@@ -2784,12 +2809,10 @@ function toggleAllSOView(){
   const isCampaign=children.length>0;
 
   if(!isSoSplit&&!isCampaign){
-    // Multi-SO but not yet split — prompt to split first
-    const modal=document.getElementById('modal-root');
     modal.innerHTML='<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:420px" onclick="event.stopPropagation()">'
       +'<div class="modal-head"><span class="modal-title">📊 All SO Milestones</span><button class="modal-close" onclick="closeModal()">×</button></div>'
       +'<div style="padding:20px;font-size:13px;color:var(--gray-600);line-height:1.6">'
-      +'<strong>'+proj.name+'</strong> has '+soList.length+' SOs but milestones haven\'t been split yet.<br><br>'
+      +'<strong>'+proj.name+'</strong> has '+soListFromField.length+' SOs but milestones haven\'t been split yet.<br><br>'
       +'Split milestones by SO to manage and compare each independently.'
       +'</div>'
       +'<div class="modal-actions">'
@@ -2801,15 +2824,18 @@ function toggleAllSOView(){
   }
 
   let soHeaders=[];
-  let getMsForSO; // fn(key) → {so:milestone} map
+  let getMsForSO;
 
   if(isSoSplit){
-    soHeaders=soList;
+    // CRITICAL: derive SO list from BOTH the so_number field AND actual so_tag values present
+    // This catches drift (e.g. so_number says S17843 but milestones tagged S17842)
+    const tagsPresent=[...new Set(pMs.map(m=>m.so_tag))];
+    const merged=[...new Set([...soListFromField,...tagsPresent])];
+    soHeaders=merged;
     const msMap={};
     pMs.forEach(m=>{if(!msMap[m.key])msMap[m.key]={};msMap[m.key][m.so_tag]=m;});
     getMsForSO=(key)=>msMap[key]||{};
   } else {
-    // Campaign: each child is one SO
     soHeaders=children.map(c=>c.so_number||c.name);
     const msMap={};
     children.forEach(c=>{
@@ -2822,23 +2848,32 @@ function toggleAllSOView(){
     getMsForSO=(key)=>msMap[key]||{};
   }
 
-  // Collect all unique milestone keys in order
+  // Collect all unique milestone keys+labels in order (use key+label combo to avoid dupes mismatching)
   const allMs=isSoSplit?pMs:milestones.filter(m=>children.some(c=>c.id===m.project_id));
-  const keys=[...new Set(allMs.map(m=>m.key))];
-  const labels=Object.fromEntries(allMs.map(m=>[m.key,m.label]));
+  const seen=new Set();
+  const rowDefs=[];
+  allMs.forEach(m=>{const k=m.key+'|'+m.label;if(!seen.has(k)){seen.add(k);rowDefs.push({key:m.key,label:m.label});}});
+
+  // Detect SOs missing entirely from milestones (so_number has them but no milestones exist)
+  const missingSOs=isSoSplit?soListFromField.filter(so=>!pMs.some(m=>m.so_tag===so)):[];
+  const mismatchBanner=missingSOs.length?'<div style="font-size:11px;color:#92400e;background:#fffbeb;border-bottom:1px solid #d97706;padding:8px 16px">⚠️ '+missingSOs.length+' SO'+(missingSOs.length>1?'s':'')+' ('+missingSOs.join(', ')+') '+(missingSOs.length>1?'have':'has')+' no milestones yet. <button onclick="addMissingSOMilestones(\''+ppProjId+'\',\''+missingSOs.join(',')+'\')" style="font-size:11px;padding:2px 8px;border-radius:4px;border:1px solid #d97706;background:white;color:#92400e;cursor:pointer;font-family:var(--font);margin-left:6px;font-weight:600">+ Add milestones for these SOs</button></div>':'';
 
   const thead='<tr>'
     +'<th style="text-align:left;padding:8px 10px;font-size:11px;color:var(--gray-500);background:var(--gray-50)">Milestone</th>'
-    +soHeaders.map(so=>'<th style="padding:8px 10px;font-size:11px;color:var(--red);font-weight:700;background:var(--gray-50);text-align:center">'+so+'</th>').join('')
-    +'<th style="padding:8px 10px;font-size:11px;color:var(--gray-500);background:var(--gray-50);text-align:center">Push all</th>'
+    +soHeaders.map(so=>'<th style="padding:8px 10px;font-size:11px;color:var(--red);font-weight:700;background:var(--gray-50);text-align:center">'+so+(missingSOs.includes(so)?' ⚠️':'')+'</th>').join('')
+    +'<th style="padding:8px 10px;font-size:11px;color:var(--gray-500);background:var(--gray-50);text-align:center">Match all</th>'
     +'</tr>';
 
-  const tbody=keys.map(key=>{
+  // "First SO" is always the leftmost SO in the merged list that actually HAS milestones — consistent across all rows
+  const sourceSO=soHeaders.find(so=>pMs.some(m=>m.so_tag===so))||soHeaders[0];
+
+  const tbody=rowDefs.map(({key,label})=>{
     const row=getMsForSO(key);
-    const firstSo=soHeaders.find(so=>row[so]?.date);
-    const firstDate=firstSo?row[firstSo].date:'';
+    // Source date always comes from sourceSO (the same SO for every row) for consistency
+    const sourceM=Object.values(row).find(m=>m.key===key&&m.label===label&&m.so_tag===sourceSO)||row[sourceSO];
+    const firstDate=sourceM?.date||'';
     return'<tr style="border-bottom:1px solid var(--gray-100)">'
-      +'<td style="padding:6px 10px;font-size:12px;font-weight:500;white-space:nowrap">'+( labels[key]||key)+'</td>'
+      +'<td style="padding:6px 10px;font-size:12px;font-weight:500;white-space:nowrap">'+label+'</td>'
       +soHeaders.map(so=>{
         const m=row[so];
         const d=m?.date?daysDiff(m.date):null;
@@ -2847,7 +2882,7 @@ function toggleAllSOView(){
         return'<td style="padding:6px 10px;text-align:center;'+clr+'">'+dateStr+'</td>';
       }).join('')
       // Push to all button — uses first SO's date as source
-      +'<td style="padding:4px 8px;text-align:center">'+(firstDate?'<button onclick="pushMsKeyToAllSOs(\''+key+'\',\''+firstDate+'\',\''+ppProjId+'\',\''+( labels[key]||'').replace(/'/g,"\\'")+'\')" style="font-size:10px;padding:3px 8px;border-radius:6px;border:1px solid var(--gray-200);background:white;color:var(--blue);cursor:pointer;font-family:var(--font)" title="Match all SOs to '+fmt(firstDate)+'">Match all</button>':'')+'</td>'
+      +'<td style="padding:4px 8px;text-align:center">'+(firstDate?'<button onclick="pushMsKeyToAllSOs(\''+key+'\',\''+firstDate+'\',\''+ppProjId+'\',\''+label.replace(/'/g,"\\'")+'\')" style="font-size:10px;padding:3px 8px;border-radius:6px;border:1px solid var(--gray-200);background:white;color:var(--blue);cursor:pointer;font-family:var(--font)" title="Match all SOs to '+fmt(firstDate)+'">Match all</button>':'')+'</td>'
       +'</tr>';
   }).join('');
 
@@ -2862,7 +2897,9 @@ function toggleAllSOView(){
 async function pushMsKeyToAllSOs(key,date,projId,label){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
-  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soListFromField=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const tagsPresent=[...new Set(milestones.filter(m=>m.project_id===projId&&m.so_tag).map(m=>m.so_tag))];
+  const soList=[...new Set([...soListFromField,...tagsPresent])];
   const children=getChildren(projId);
   let updated=0;
   if(milestones.some(m=>m.project_id===projId&&m.so_tag)){
@@ -2893,20 +2930,50 @@ async function pushMsKeyToAllSOs(key,date,projId,label){
 async function pushAllMilestoneKeysToAllSOs(projId){
   if(!confirm('Match ALL milestones across all SOs to the first SO\'s dates?\n\nThis overwrites all SO dates.'))return;
   const proj=projects.find(p=>p.id===projId);
-  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
-  const firstSO=soList[0];
+  const soListFromField=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const tagsPresent=[...new Set(milestones.filter(m=>m.project_id===projId&&m.so_tag).map(m=>m.so_tag))];
+  const soList=[...new Set([...soListFromField,...tagsPresent])];
+  // Source SO = first one in the list that actually has milestones
+  const firstSO=soList.find(so=>milestones.some(m=>m.project_id===projId&&m.so_tag===so))||soList[0];
   const sourceMilestones=milestones.filter(m=>m.project_id===projId&&m.so_tag===firstSO);
   let updated=0;
   for(const src of sourceMilestones){
     if(!src.date)continue;
-    for(const so of soList.slice(1)){
-      const tgt=milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.key===src.key);
+    for(const so of soList.filter(s=>s!==firstSO)){
+      // Match by key AND label to handle duplicate keys
+      const tgt=milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.key===src.key&&m.label===src.label)
+               ||milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.label===src.label);
       if(tgt){await sb.from('milestones').update({date:src.date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',tgt.id);tgt.date=src.date;updated++;}
     }
   }
   showToast('Matched '+updated+' milestones across all SOs ✓');
   closeModal();
   await loadAll();
+}
+
+async function addMissingSOMilestones(projId,missingSOsStr){
+  const proj=projects.find(p=>p.id===projId);
+  if(!proj)return;
+  const missingSOs=missingSOsStr.split(',').filter(Boolean);
+  if(!missingSOs.length)return;
+  // Use the SO with the most complete milestone set as the template
+  const allTags=[...new Set(milestones.filter(m=>m.project_id===projId&&m.so_tag).map(m=>m.so_tag))];
+  const templateSO=allTags.find(so=>!missingSOs.includes(so))||allTags[0];
+  if(!templateSO){showToast('No template SO found to copy from');return;}
+  const templateMs=milestones.filter(m=>m.project_id===projId&&m.so_tag===templateSO);
+  if(!templateMs.length){showToast('Template SO has no milestones');return;}
+  if(!confirm('Add '+templateMs.length+' milestones to '+missingSOs.length+' SO'+(missingSOs.length>1?'s':'')+' ('+missingSOs.join(', ')+')?\n\nDates will be blank — set them after.'))return;
+  const newRows=[];
+  for(const so of missingSOs){
+    for(const m of templateMs){
+      newRows.push({project_id:projId,key:m.key,label:m.label,date:null,so_tag:so,changed_by:currentUserName});
+    }
+  }
+  const{error}=await sb.from('milestones').insert(newRows);
+  if(error){alert('Error: '+error.message);return;}
+  showToast('Added milestones for '+missingSOs.length+' SO(s) ✓');
+  await loadAll();
+  toggleAllSOView();
 }
 
 async function unlinkFromMaster(childId){
