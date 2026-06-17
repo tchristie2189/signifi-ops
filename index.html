@@ -3648,29 +3648,30 @@ async function persistDocState(pid){
   if(!pid)return;
   const state=getDocState();
   const val=JSON.stringify(state);
-  const existing=ppData?.sections?.['gendoc_state'];
-  if(existing){
-    await sb.from('project_sections').update({content:val}).eq('id',existing.id);
-  } else {
-    const{data}=await sb.from('project_sections').insert({project_id:pid,section_key:'gendoc_state',content:val}).select().single();
-    if(data&&ppData?.sections)ppData.sections['gendoc_state']=data;
+  try{
+    const{data:existing}=await sb.from('project_sections').select('id').eq('project_id',pid).eq('section_key','gendoc_state').maybeSingle();
+    if(existing){
+      await sb.from('project_sections').update({content:val}).eq('id',existing.id);
+    } else {
+      await sb.from('project_sections').insert({project_id:pid,section_key:'gendoc_state',content:val});
+    }
+  }catch(e){
+    console.warn('persistDocState failed',e);
   }
 }
 async function loadDocState(pid){
   if(!pid)return;
-  // Try ppData first (already loaded on project page)
-  let saved=ppData?.sections?.['gendoc_state'];
-  if(!saved){
-    // Fetch directly
-    const{data}=await sb.from('project_sections').select('*').eq('project_id',pid).eq('section_key','gendoc_state').single();
-    saved=data;
-    if(data&&ppData?.sections)ppData.sections['gendoc_state']=data;
-  }
-  if(saved?.content){
-    try{
-      const parsed=JSON.parse(saved.content);
-      docFormState[pid]=parsed;
-    }catch(e){}
+  try{
+    const{data,error}=await sb.from('project_sections').select('*').eq('project_id',pid).eq('section_key','gendoc_state').maybeSingle();
+    if(error){console.warn('loadDocState error',error);return;}
+    if(data?.content){
+      try{
+        const parsed=JSON.parse(data.content);
+        docFormState[pid]=parsed;
+      }catch(e){console.warn('loadDocState parse error',e);}
+    }
+  }catch(e){
+    console.warn('loadDocState failed',e);
   }
 }
 function restoreDocFormState(){
