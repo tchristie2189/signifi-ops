@@ -1,6 +1,6 @@
 {
   "rewrites": [
-    { "source": "/checkin", "destination": "/checkin.html" },
+    { "source": "/checkin", "destination": "/signifi-ops-checkin.html" },
     { "source": "/client-status", "destination": "/client-status.html" },
     { "source": "/signifi-quality", "destination": "/signifi-quality.html" },
     { "source": "/signifi-migrate", "destination": "/signifi-migrate-historical.html" },
