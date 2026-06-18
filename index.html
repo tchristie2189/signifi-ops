@@ -429,7 +429,7 @@ const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod'
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
 const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date','Print Day','Vacation'];
 
-let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={};
+let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={},extensionRequests=[];
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
 let soDetails=[];
 let milestoneDeviations={}; // keyed by project_id → {milestone_key: deviation_row}
@@ -642,7 +642,7 @@ function renderTab(){
 
 // ── DATA ───────────────────────────────────────────────────
 async function loadAll(){
-  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod]=await Promise.all([
+  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
@@ -654,11 +654,13 @@ async function loadAll(){
     sb.from('project_links').select('project_id,label,url,category,id,sort_order'),
     sb.from('milestone_deviations').select('*'),
     sb.from('so_details').select('*'),
+    sb.from('extension_requests').select('*').order('created_at',{ascending:false}),
   ]);
   projects=pr.data||[];milestones=ms.data||[];activityLog=lg.data||[];
   checkinStatus={};(ci.data||[]).forEach(c=>{checkinStatus[c.milestone_id]=c;});
   milestoneDone={};(md.data||[]).forEach(d=>{milestoneDone[d.milestone_id]=d;});
   soDetails=sod.data||[];
+  extensionRequests=ext.data||[];
   milestoneHistory={};
   (mh.data||[]).forEach(h=>{
     if(!milestoneHistory[h.milestone_id])milestoneHistory[h.milestone_id]=[];
@@ -1949,14 +1951,29 @@ function renderCheckinOverview(){
     return[...projectMs,...adHocForDept];
   }
 
+  function ageLabel(iso){
+    if(!iso)return'';
+    const mins=Math.round((Date.now()-new Date(iso).getTime())/60000);
+    if(mins<60)return mins+'m ago';
+    const hrs=Math.round(mins/60);
+    if(hrs<24)return hrs+'h ago';
+    return Math.round(hrs/24)+'d ago';
+  }
+
   function slDots(mId){
     const ci=checkinStatus[mId]||{};
     const sl=ci.stoplight||'';
     const chk=ci.checked||false;
-    return'<div style="display:flex;align-items:center;gap:5px">'+
+    const dotsRow='<div style="display:flex;align-items:center;gap:5px">'+
       ['green','yellow','red'].map(c=>'<div style="width:18px;height:18px;border-radius:50%;background:'+SL_COLORS[c]+';opacity:'+(sl===c?1:0.15)+'" title="'+(c==='green'?'On track':c==='yellow'?'In trouble':'Escalation')+'"></div>').join('')+
       (chk?'<span style="font-size:12px;color:var(--success);font-weight:600;margin-left:2px">✓</span>':'<span style="font-size:11px;color:var(--gray-300);margin-left:2px">○</span>')+
     '</div>';
+    const metaBits=[];
+    if(sl&&ci.stoplight_by)metaBits.push(ci.stoplight_by+' · '+ageLabel(ci.stoplight_at));
+    if(chk&&ci.checked_by)metaBits.push('Done: '+ci.checked_by+' · '+ageLabel(ci.checked_at));
+    const metaHtml=metaBits.length?'<div style="font-size:9px;color:var(--gray-400);margin-top:2px">'+metaBits.join(' · ')+'</div>':'';
+    const noteHtml=ci.notes?'<div style="font-size:10px;color:'+(sl==='red'?'var(--red)':'var(--gray-500)')+';margin-top:3px;font-style:italic;max-width:220px">💬 "'+ci.notes.replace(/</g,'&lt;')+'"</div>':'';
+    return dotsRow+metaHtml+noteHtml;
   }
 
   const thStyle='padding:7px 12px;font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;text-align:left;border-bottom:1px solid var(--gray-100);background:var(--gray-50)';
@@ -2003,16 +2020,162 @@ function renderCheckinOverview(){
     '</div>';
   }).join('');
 
+  // Build an "Escalations" rollup across ALL active red check-ins (not just this/next week)
+  // so a part-missing flag from yesterday doesn't silently scroll out of view.
+  const allActiveMs=depts.flatMap(d=>[...getDeptMs(d,base),...getDeptMs(d,addD(base,7))]);
+  const escalations=Object.entries(checkinStatus).filter(([mId,ci])=>ci.stoplight==='red').map(([mId,ci])=>{
+    const m=milestones.find(x=>x.id===mId)||allActiveMs.find(x=>x.id===mId);
+    const proj=m?projects.find(p=>p.id===m.project_id):null;
+    return{mId,ci,m,proj};
+  }).filter(x=>x.m).sort((a,b)=>new Date(a.ci.stoplight_at||0)-new Date(b.ci.stoplight_at||0));
+
+  const escalationsHtml=escalations.length?'<div style="background:#450a0a;border:1px solid #7f1d1d;border-radius:var(--radius);padding:12px 16px;margin-bottom:1rem">'+
+    '<div style="font-size:12px;font-weight:700;color:#fca5a5;margin-bottom:8px">🔴 '+escalations.length+' active escalation'+(escalations.length>1?'s':'')+'</div>'+
+    escalations.map(({ci,m,proj})=>{
+      const ageMins=ci.stoplight_at?Math.round((Date.now()-new Date(ci.stoplight_at).getTime())/60000):0;
+      const ageStr=ageMins<60?ageMins+'m':ageMins<1440?Math.round(ageMins/60)+'h':Math.round(ageMins/1440)+'d';
+      return'<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:6px 0;border-top:1px solid #7f1d1d;font-size:12px;color:#fecaca">'+
+        '<div><strong>'+(proj?proj.name:m.label)+'</strong>'+(proj?.so_number?' <span style="font-family:var(--mono);font-size:10px;opacity:0.7">'+proj.so_number+'</span>':'')+' — '+m.label+
+        (ci.notes?'<div style="font-style:italic;margin-top:2px;opacity:0.9">💬 "'+ci.notes.replace(/</g,'&lt;')+'"</div>':'')+'</div>'+
+        '<div style="white-space:nowrap;margin-left:12px;text-align:right;opacity:0.8">'+(ci.dept||'')+'<br>'+(ci.stoplight_by||'')+' · '+ageStr+' ago</div>'+
+      '</div>';
+    }).join('')+
+  '</div>':'';
+
+  // Pending extension requests — surfaced prominently so they don't get missed
+  const pendingExt=extensionRequests.filter(r=>r.status==='pending');
+  const pendingExtHtml=pendingExt.length?'<div style="background:#1e293b;border:1px solid #3b82f6;border-radius:var(--radius);padding:12px 16px;margin-bottom:1rem">'+
+    '<div style="font-size:12px;font-weight:700;color:#93c5fd;margin-bottom:8px">⏳ '+pendingExt.length+' pending extension request'+(pendingExt.length>1?'s':'')+'</div>'+
+    pendingExt.map(r=>{
+      const proj=projects.find(p=>p.id===r.project_id);
+      const m=milestones.find(x=>x.id===r.milestone_id);
+      const ageMins=Math.round((Date.now()-new Date(r.created_at).getTime())/60000);
+      const ageStr=ageMins<60?ageMins+'m':ageMins<1440?Math.round(ageMins/60)+'h':Math.round(ageMins/1440)+'d';
+      return'<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:7px 0;border-top:1px solid #334155;font-size:12px;color:#cbd5e1">'+
+        '<div><strong>'+(proj?proj.name:'—')+'</strong>'+(r.so_tag?' <span style="font-family:var(--mono);font-size:10px;opacity:0.7">'+r.so_tag+'</span>':'')+' — +'+r.days+' day'+(r.days>1?'s':'')+' on '+(m?m.label:'')+
+        '<div style="font-style:italic;margin-top:2px;opacity:0.85">💬 "'+r.reason.replace(/</g,'&lt;')+'"</div></div>'+
+        '<div style="white-space:nowrap;margin-left:12px;text-align:right">'+
+          '<div style="opacity:0.7;font-size:11px">'+r.dept+' · '+(r.requested_by||'')+' · '+ageStr+' ago</div>'+
+          '<button onclick="openExtensionReview(\''+r.id+'\')" style="margin-top:4px;font-size:11px;padding:4px 12px;border-radius:var(--radius);border:1px solid #3b82f6;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500">Review →</button>'+
+        '</div>'+
+      '</div>';
+    }).join('')+
+  '</div>':'';
+
   el.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">'+
     '<div><div style="font-size:16px;font-weight:600">🚦 Department check-in</div>'+
     '<div style="font-size:12px;color:var(--gray-500);margin-top:2px">Dept leads update via <strong>signifi-ops.vercel.app/checkin</strong></div></div>'+
     pmDropdown('renderCheckinOverview')+pmDropdown('renderCheckinOverview')+salesDropdown('renderCheckinOverview')+'<button class="btn" style="font-size:11px;padding:4px 10px" onclick="snapshotCheckin()" title="Save this week\'s stoplights to history">📸 Snapshot week</button>'+'<button class="btn-export" onclick="loadAll()">↻ Refresh</button></div>'+
+    pendingExtHtml+
+    escalationsHtml+
     '<div style="background:var(--blue-bg);border:1px solid #bfdbfe;border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;font-size:11px;color:var(--blue)">'+
     '<strong>Dept passcodes:</strong> Production: <code>prod2026</code> · UI: <code>ui2026</code> · Inventory: <code>inv2026</code> · Procurement: <code>proc2026</code> · MO: <code>mo2026</code> · QA: <code>qa2026</code> · Shipping: <code>ship2026</code> · Deployment: <code>deploy2026</code></div>'+
     weeksHtml;
 }
 
 // ── CHECKIN SNAPSHOT ──────────────────────────────────────
+// ── EXTENSION REQUEST REVIEW & APPROVAL ──────────────────────────────────
+function computeExtensionPreview(req){
+  const proj=projects.find(p=>p.id===req.project_id);
+  const trigger=milestones.find(m=>m.id===req.milestone_id);
+  if(!proj||!trigger)return null;
+  // Scope to the SAME so_tag as the triggering milestone itself (not just whether the
+  // request happens to have one recorded) — this protects against partially-migrated
+  // projects where some milestones have a so_tag and others don't, which would otherwise
+  // let a no-so_tag request silently match and shift every SO's chain at once.
+  const triggerSoTag=trigger.so_tag||null;
+  const chain=milestones.filter(m=>m.project_id===req.project_id&&(m.so_tag||null)===triggerSoTag&&m.date);
+  const sorted=[...chain].sort((a,b)=>a.date.localeCompare(b.date));
+  const triggerDate=trigger.date;
+  const rows=sorted.map(m=>{
+    const shifts=m.date>=triggerDate; // on/after the trigger date moves with it
+    const oldDate=m.date;
+    const newDate=shifts?isoD(addD(new Date(oldDate+'T00:00:00'),req.days)):oldDate;
+    const alreadyDone=isMilestoneDone(m);
+    const violation=shifts&&alreadyDone?'This milestone is already marked done — shifting it may not make sense.':null;
+    return{milestoneId:m.id,label:m.label,oldDate,newDate,shifts,violation};
+  });
+  return{proj,trigger,rows};
+}
+
+function openExtensionReview(reqId){
+  const req=extensionRequests.find(r=>r.id===reqId);
+  if(!req){showToast('Request not found — try refreshing');return;}
+  const preview=computeExtensionPreview(req);
+  if(!preview){
+    document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:420px" onclick="event.stopPropagation()">
+      <div class="modal-head"><span class="modal-title">⏳ Extension request</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+      <div class="modal-body">
+        <div style="font-size:12px;background:var(--gray-50);border-radius:var(--radius);padding:10px 12px;margin-bottom:10px">
+          <strong>${req.dept}</strong> requested <strong>+${req.days} day${req.days>1?'s':''}</strong>
+          <div style="margin-top:4px;font-style:italic;color:var(--gray-600)">💬 "${req.reason.replace(/</g,'&lt;')}"</div>
+          <div style="margin-top:4px;font-size:11px;color:var(--gray-400)">Requested by ${req.requested_by||'—'} · ${new Date(req.created_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</div>
+        </div>
+        <p style="font-size:12px;color:var(--gray-500)">This request isn't tied to a milestone the hub can auto-shift (likely an ad hoc shipping/installation item, or it's been deleted) — no date preview is available. You can still log a decision below; if approved, you'll need to update that item's date manually.</p>
+      </div>
+      <div class="modal-actions"><button class="btn" onclick="resolveExtensionRequest('${reqId}','rejected')">Reject</button><button class="btn btn-primary" onclick="resolveExtensionRequest('${reqId}','approved')">Approve (no auto date change)</button></div>
+    </div></div>`;
+    return;
+  }
+  const{proj,trigger,rows}=preview;
+  const violations=rows.filter(r=>r.violation);
+  const rowsHtml=rows.map(r=>`<div style="display:grid;grid-template-columns:1fr 90px 14px 90px;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--gray-50);font-size:12px${r.shifts?'':';opacity:0.45'}">
+    <div>${r.label}${r.violation?` <span title="${r.violation.replace(/"/g,'&quot;')}" style="color:var(--red);font-size:11px">⚠️</span>`:''}</div>
+    <div style="font-family:var(--mono);font-size:11px">${fmt(r.oldDate)}</div>
+    <div style="text-align:center;color:var(--gray-300)">${r.shifts?'→':''}</div>
+    <input type="date" value="${r.newDate}" id="extprev-${r.milestoneId}" ${r.shifts?'':'disabled'} style="font-size:11px;padding:3px 5px;border:1px solid var(--gray-300);border-radius:4px;${r.shifts?'':'background:var(--gray-50);color:var(--gray-400)'}">
+  </div>`).join('');
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:520px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
+    <div class="modal-head"><span class="modal-title">⏳ Extension request — ${proj.name}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="font-size:12px;background:var(--gray-50);border-radius:var(--radius);padding:10px 12px;margin-bottom:12px">
+        <strong>${req.dept}</strong> requested <strong>+${req.days} day${req.days>1?'s':''}</strong> on <strong>${trigger.label}</strong>${req.so_tag?' (SO '+req.so_tag+')':''}
+        <div style="margin-top:4px;font-style:italic;color:var(--gray-600)">💬 "${req.reason.replace(/</g,'&lt;')}"</div>
+        <div style="margin-top:4px;font-size:11px;color:var(--gray-400)">Requested by ${req.requested_by||'—'} · ${new Date(req.created_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</div>
+      </div>
+      ${violations.length?`<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;font-size:11px;color:var(--red)">⚠️ ${violations.length} item${violations.length>1?'s':''} flagged below — review before approving.</div>`:''}
+      <div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Proposed timeline (editable)</div>
+      <div style="display:grid;grid-template-columns:1fr 90px 14px 90px;gap:6px;font-size:10px;color:var(--gray-400);text-transform:uppercase;padding-bottom:4px;border-bottom:1px solid var(--gray-200)">
+        <div>Milestone</div><div>Current</div><div></div><div>New</div>
+      </div>
+      ${rowsHtml}
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="resolveExtensionRequest('${reqId}','rejected')">Reject</button>
+      <button class="btn btn-primary" onclick="resolveExtensionRequest('${reqId}','approved')">Approve & apply dates</button>
+    </div>
+  </div></div>`;
+}
+
+async function resolveExtensionRequest(reqId,decision){
+  const req=extensionRequests.find(r=>r.id===reqId);
+  if(!req)return;
+  let datesWereUpdated=false;
+  if(decision==='approved'){
+    const preview=computeExtensionPreview(req);
+    if(preview){
+      // Read back any edits the PM made in the preview inputs before committing
+      const updates=preview.rows.filter(r=>r.shifts).map(r=>{
+        const el=document.getElementById('extprev-'+r.milestoneId);
+        const finalDate=el?el.value:r.newDate;
+        return{milestoneId:r.milestoneId,oldDate:r.oldDate,newDate:finalDate,label:r.label};
+      }).filter(u=>u.newDate&&u.newDate!==u.oldDate);
+      for(const u of updates){
+        await sb.from('milestones').update({date:u.newDate}).eq('id',u.milestoneId);
+        const m=milestones.find(x=>x.id===u.milestoneId);if(m)m.date=u.newDate;
+        await sb.from('milestone_history').insert({milestone_id:u.milestoneId,project_id:req.project_id,old_date:u.oldDate,new_date:u.newDate,changed_by:currentUserName,reason:'Extension request: '+req.reason+' (approved, +'+req.days+'d requested by '+(req.requested_by||req.dept)+')'});
+      }
+      datesWereUpdated=updates.length>0;
+      await logActivity('approved extension',preview.proj.name,preview.proj.so_number,req.project_id,null,null);
+    }
+  }
+  await sb.from('extension_requests').update({status:decision,resolved_by:currentUserName,resolved_at:new Date().toISOString()}).eq('id',reqId);
+  req.status=decision;
+  closeModal();
+  showToast(decision==='approved'?(datesWereUpdated?'✓ Approved — dates updated':'✓ Approved'):'Request rejected');
+  await loadAll();
+}
+
 async function snapshotCheckin(){
   if(!confirm('Save this week\'s stoplights to history?'))return;
   const wStart=isoD(monday(today()));
@@ -3004,17 +3167,6 @@ async function addMissingSOMilestones(projId,missingSOsStr){
   showToast('Added milestones for '+missingSOs.length+' SO(s) ✓');
   await loadAll();
   toggleAllSOView();
-}
-
-async function unlinkFromMaster(childId){
-  if(!confirm('Unlink this project from its master?\n\nIt will become a standalone project. The master project will no longer show it as a child.'))return;
-  const{error}=await sb.from('projects').update({parent_project_id:null,is_master:false}).eq('id',childId);
-  if(error){alert('Error: '+error.message);return;}
-  const proj=projects.find(p=>p.id===childId);
-  if(proj){proj.parent_project_id=null;}
-  showToast('Unlinked from master ✓');
-  await loadAll();
-  renderProjPage();
 }
 
 function switchProjPageBySO(so){
