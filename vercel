@@ -1,6 +1,0 @@
-{
-  "rewrites": [
-    { "source": "/checkin", "destination": "/signifi-ops-checkin.html" },
-    { "source": "/", "destination": "/signifi-ops-index.html" }
-  ]
-}
