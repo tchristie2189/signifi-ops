@@ -136,7 +136,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .ev-arr{background:#dbeafe;border-left:3px solid #2563eb;}
 .ev-prod{background:#ede9fe;border-left:3px solid #7c3aed;}
 .ev-qa{background:#fef3c7;border-left:3px solid #d97706;}
-.ev-fqa{background:#e0f7fa;border-left:3px solid #0891b2;}
+.ev-fqc{background:#e0f7fa;border-left:3px solid #0891b2;}
 .ev-uat{background:#dcfce7;border-left:3px solid #16a34a;}
 .ev-inst{background:#fce7f3;border-left:3px solid #db2777;}
 .ev-other{background:var(--gray-50);border-left:3px solid var(--gray-300);}
@@ -425,8 +425,8 @@ const SUPABASE_URL='https://oykgpkolliqjeznblayv.supabase.co';
 const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95a2dwa29sbGlxamV6bmJsYXl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNTI3ODgsImV4cCI6MjA5NTYyODc4OH0.kkOBhxyaqLG7PLPNI0SwPNwQSWmbpFjDoP2VQp33_X4';
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 
-const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end','final-qa':'Final QA',uat:'UAT',installation:'Installation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','po-release':'PO Release','mo-release':'MO Release',other:'Other'};
-const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa','final-qa':'ev-fqa',uat:'ev-uat',installation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
+const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end','final-qc':'Final QC',uat:'UAT',installation:'Installation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','po-release':'PO Release','mo-release':'MO Release',other:'Other'};
+const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa','final-qc':'ev-fqc',uat:'ev-uat',installation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
 const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date','Print Day','Vacation'];
 
@@ -1922,7 +1922,7 @@ function stringToColor(str){let h=0;for(let i=0;i<str.length;i++){h=str.charCode
 
 
 // ── DEPT CHECK-IN OVERVIEW ────────────────────────────────
-const DEPT_KEYS={'Production':['production-start','production-end'],'Software / UI':['other'],'Inventory':['arrival'],'Procurement':['po-release'],'MO Release':['mo-release'],'Quality':['quality-start','quality-end','final-qa','vinyl'],'Shipping':['shipping','delivery'],'Deployment':['installation']};
+const DEPT_KEYS={'Production':['production-start','production-end'],'Software / UI':['other'],'Inventory':['arrival'],'Procurement':['po-release'],'MO Release':['mo-release'],'Quality':['quality-start','quality-end','final-qc','vinyl'],'Shipping':['shipping','delivery'],'Deployment':['installation']};
 const DEPT_LABEL_MATCH={'Software / UI':['UI start','UI end'],'Inventory':['Inventory pick'],'Procurement':['Parts ordering start','Parts arrival']};
 const DEPT_COLORS={'Production':'#7c3aed','Software / UI':'#2563eb','Inventory':'#0891b2','Procurement':'#d97706','MO Release':'#6b6b6b','Quality':'#d97706','Shipping':'#059669','Deployment':'#db2777'};
 const SL_COLORS={green:'#22c55e',yellow:'#eab308',red:'#ef4444'};
@@ -2349,14 +2349,14 @@ function renderIntake(){
         <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#d97706"></div>Quality & Testing</div>
           <div class="field"><label>Quality start *</label><input id="i-qs" type="date"></div>
           <div class="field"><label>Quality end *</label><input id="i-qe" type="date"></div>
-          <div class="field"><label>Final QA</label><input id="i-fqa" type="date"></div>
+          <div class="field"><label>Final QC</label><input id="i-fqa" type="date"></div>
           <div class="field"><label>Vinyl / branding</label><input id="i-vinyl" type="date"></div>
           <div class="field"><label>UAT date *</label><input id="i-uat" type="date"></div>
           <div class="field" style="margin-top:6px"><label>Notes</label><textarea id="i-notes-quality" placeholder="Quality & testing notes..." style="min-height:55px"></textarea></div>
         </div>
 
         <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#059669"></div>Shipping</div>
-          <div class="field"><label>Pack & ship *</label><input id="i-ship" type="date"></div>
+          <div class="field"><label>Pack & ship *</label><input id="i-ship" type="date" onchange="const fqa=document.getElementById('i-fqa');if(this.value&&!fqa.value){const d=new Date(this.value+'T00:00:00');d.setDate(d.getDate()-1);fqa.value=d.toISOString().split('T')[0];}"></div>
           <div class="field"><label>Delivery date</label><input id="i-del" type="date"></div>
           <div class="field" style="margin-top:6px"><label>Notes</label><textarea id="i-notes-shipping" placeholder="Shipping notes..." style="min-height:55px"></textarea></div>
         </div>
@@ -2419,7 +2419,7 @@ async function saveIntake(){
     {id:'i-ui-e',key:'other',label:'UI end'},
     {id:'i-qs',key:'quality-start',label:'Quality start'},
     {id:'i-qe',key:'quality-end',label:'Quality end'},
-    {id:'i-fqa',key:'final-qa',label:'Final QA'},
+    {id:'i-fqa',key:'final-qc',label:'Final QC'},
     {id:'i-vinyl',key:'vinyl',label:'Vinyl / branding'},
     {id:'i-uat',key:'uat',label:'UAT'},
     {id:'i-ship',key:'shipping',label:'Pack & ship'},
@@ -4940,7 +4940,17 @@ function renderSettings(){
         </div>
       </div>
     </div>
-    ${migrationSection}`;
+    ${migrationSection}
+    <div class="section" style="max-width:700px;margin-top:16px">
+      <div class="section-head"><div class="section-title">🔵 Final QC — Add to all projects</div></div>
+      <div style="padding:1.5rem">
+        <div style="background:#e0f7fa;border:1px solid #0891b2;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:#0e7490;line-height:1.6">
+          Adds a <strong>Final QC</strong> milestone dated <strong>1 day before Pack &amp; ship</strong> to every active project that has a shipping date but no Final QC milestone yet. For SO-split projects it adds one per SO. Safe to run multiple times — skips any project/SO that already has one.
+        </div>
+        <button onclick="addFinalQCToAllProjects()" style="font-size:13px;font-weight:600;padding:9px 20px;border-radius:var(--radius);border:none;background:#0891b2;color:white;cursor:pointer;font-family:var(--font)">⚡ Add Final QC to all projects</button>
+        <div id="fqc-migration-log" style="margin-top:12px;font-size:12px;color:var(--gray-500)"></div>
+      </div>
+    </div>`;
 }
 
 async function migrateCampaignToSO(masterId){
@@ -5009,6 +5019,53 @@ async function migrateAllCampaigns(){
   }
   showToast('All campaigns migrated ✓');
   renderSettings();
+}
+
+async function addFinalQCToAllProjects(){
+  const logEl=document.getElementById('fqc-migration-log');
+  if(logEl)logEl.textContent='Running...';
+  const activeProjs=projects.filter(p=>p.status!=='complete'&&p.status!=='archived'&&!p.parent_project_id);
+  let added=0,skipped=0;
+  const inserts=[];
+  for(const proj of activeProjs){
+    const projMs=milestones.filter(m=>m.project_id===proj.id);
+    const hasSoTags=projMs.some(m=>m.so_tag);
+    if(hasSoTags){
+      // SO-split — handle per SO
+      const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+      const tagsSeen=[...new Set(projMs.map(m=>m.so_tag).filter(Boolean))];
+      const allSOs=[...new Set([...soList,...tagsSeen])];
+      for(const so of allSOs){
+        const soMs=projMs.filter(m=>m.so_tag===so);
+        const shipMs=soMs.find(m=>m.key==='shipping'&&m.date);
+        if(!shipMs){skipped++;continue;}
+        const alreadyHas=soMs.some(m=>m.key==='final-qc');
+        if(alreadyHas){skipped++;continue;}
+        const qcDate=isoD(addD(new Date(shipMs.date+'T00:00:00'),-1));
+        inserts.push({project_id:proj.id,so_tag:so,key:'final-qc',label:'Final QC',date:qcDate,original_date:qcDate,changed_by:currentUserName});
+        added++;
+      }
+    } else {
+      // Non-split
+      const shipMs=projMs.find(m=>m.key==='shipping'&&m.date);
+      if(!shipMs){skipped++;continue;}
+      const alreadyHas=projMs.some(m=>m.key==='final-qc');
+      if(alreadyHas){skipped++;continue;}
+      const qcDate=isoD(addD(new Date(shipMs.date+'T00:00:00'),-1));
+      inserts.push({project_id:proj.id,so_tag:null,key:'final-qc',label:'Final QC',date:qcDate,original_date:qcDate,changed_by:currentUserName});
+      added++;
+    }
+  }
+  if(!inserts.length){
+    if(logEl)logEl.textContent=`Nothing to add — ${skipped} project/SO(s) already have Final QC or have no shipping date.`;
+    showToast('Nothing to add');return;
+  }
+  if(!confirm(`Add Final QC (1 day before shipping) to ${added} project/SO(s)?\n\n${inserts.map(r=>{const p=projects.find(x=>x.id===r.project_id);return(p?.name||r.project_id)+(r.so_tag?' ('+r.so_tag+')':'')+' → '+fmt(r.date);}).join('\n')}`))return;
+  const{error}=await sb.from('milestones').insert(inserts);
+  if(error){alert('Error: '+error.message);return;}
+  if(logEl)logEl.textContent=`✓ Added ${added} Final QC milestone(s). Skipped ${skipped} (already had one or no shipping date).`;
+  showToast(`Added Final QC to ${added} project/SO(s) ✓`);
+  await loadAll();
 }
 
 let _ptList=null;
@@ -5190,13 +5247,13 @@ async function toggleArchive(id,currentStatus){
 // ── TEMPLATES ──────────────────────────────────────────────
 const TEMPLATES=[
   {id:'standard-unit',name:'Standard unit build',desc:'Typical Signifi unit — 10 week cycle from MO release to installation',
-    offsets:{'po-release':0,'arrival':14,'production-start':21,'production-end':42,'quality-start':42,'quality-end':49,'final-qa':50,'vinyl':51,'uat':52,'shipping':53,'delivery':57,'installation':64},
+    offsets:{'po-release':0,'arrival':14,'production-start':21,'production-end':42,'quality-start':42,'quality-end':49,'final-qc':50,'vinyl':51,'uat':52,'shipping':53,'delivery':57,'installation':64},
     stages:['Readiness','Production','QA','UAT','Ship','Install']},
   {id:'fast-track',name:'Fast track (6 weeks)',desc:'Compressed timeline for urgent orders — parallel workstreams',
-    offsets:{'po-release':0,'arrival':7,'production-start':10,'production-end':25,'quality-start':25,'quality-end':30,'final-qa':31,'vinyl':32,'uat':33,'shipping':34,'delivery':37,'installation':43},
+    offsets:{'po-release':0,'arrival':7,'production-start':10,'production-end':25,'quality-start':25,'quality-end':30,'final-qc':31,'vinyl':32,'uat':33,'shipping':34,'delivery':37,'installation':43},
     stages:['Readiness','Production','QA','Ship','Install']},
   {id:'software-only',name:'Software / UI only',desc:'No hardware build — UI development, UAT and deployment',
-    offsets:{'po-release':0,'ui-start':3,'ui-end':21,'quality-start':21,'quality-end':28,'final-qa':29,'uat':30,'delivery':36,'installation':36},
+    offsets:{'po-release':0,'ui-start':3,'ui-end':21,'quality-start':21,'quality-end':28,'final-qc':29,'uat':30,'delivery':36,'installation':36},
     stages:['UI dev','QA','UAT','Deploy']},
   {id:'blank',name:'Blank — set all dates manually',desc:'Start from scratch with no pre-filled dates',offsets:{},stages:[]},
 ];
@@ -5205,7 +5262,7 @@ let selectedTemplate=null;
 
 function renderTemplates(){
   const el=document.getElementById('tab-templates');
-  const TYPE_LABEL={'po-release':'MO / PO Release','arrival':'Parts arrival','production-start':'Production start','production-end':'Production end','quality-start':'Quality start','quality-end':'Quality end','final-qa':'Final QA','vinyl':'Vinyl / branding','uat':'UAT','ui-start':'UI start','ui-end':'UI end','shipping':'Pack & ship','delivery':'Delivery','installation':'Installation'};
+  const TYPE_LABEL={'po-release':'MO / PO Release','arrival':'Parts arrival','production-start':'Production start','production-end':'Production end','quality-start':'Quality start','quality-end':'Quality end','final-qc':'Final QC','vinyl':'Vinyl / branding','uat':'UAT','ui-start':'UI start','ui-end':'UI end','shipping':'Pack & ship','delivery':'Delivery','installation':'Installation'};
   const cards=TEMPLATES.map(t=>`
     <div class="template-card${selectedTemplate===t.id?' template-active':''}" onclick="selectTemplate('${t.id}')">
       <div class="template-card-name">${t.name}</div>
@@ -5239,7 +5296,7 @@ function applyTemplateToIntake(){
   const t=TEMPLATES.find(x=>x.id===selectedTemplate);if(!t)return;
   const poEl=document.getElementById('i-po');if(!poEl||!poEl.value){alert('Please enter the MO/PO release date first.');return;}
   const base=new Date(poEl.value+'T00:00:00');
-  const KEY_MAP={'po-release':'i-po','mo-release':'i-mo','arrival':'i-parts-end','production-start':'i-ps','production-end':'i-pe','quality-start':'i-qs','quality-end':'i-qe','final-qa':'i-fqa','vinyl':'i-vinyl','uat':'i-uat','ui-start':'i-ui-s','ui-end':'i-ui-e','shipping':'i-ship','delivery':'i-del','installation':'i-inst'};
+  const KEY_MAP={'po-release':'i-po','mo-release':'i-mo','arrival':'i-parts-end','production-start':'i-ps','production-end':'i-pe','quality-start':'i-qs','quality-end':'i-qe','final-qc':'i-fqa','vinyl':'i-vinyl','uat':'i-uat','ui-start':'i-ui-s','ui-end':'i-ui-e','shipping':'i-ship','delivery':'i-del','installation':'i-inst'};
   Object.entries(t.offsets).forEach(([key,days])=>{
     const inputId=KEY_MAP[key];if(!inputId)return;
     const el=document.getElementById(inputId);if(!el||el.id==='i-po')return;
@@ -5656,7 +5713,7 @@ body{font-family:'DM Sans',sans-serif;background:#f1f5f9;color:#0f172a;-webkit-p
     });
     if(lastMonth>=0)monthCells.push({label:new Date(cols[cols.length-1].getFullYear(),lastMonth,1).toLocaleDateString('en-US',{month:'short'}),span:monthSpan,start:monthStart});
     // Colour per milestone key
-    const COL={'po-release':'#8b5cf6','arrival':'#8b5cf6','production-start':'#7c3aed','production-end':'#7c3aed','other':'#0891b2','quality-start':'#d97706','quality-end':'#d97706','final-qa':'#0891b2','vinyl':'#db2777','uat':'#16a34a','shipping':'#059669','delivery':'#059669','training':'#f59e0b','installation':'#e11d48'};
+    const COL={'po-release':'#8b5cf6','arrival':'#8b5cf6','production-start':'#7c3aed','production-end':'#7c3aed','other':'#0891b2','quality-start':'#d97706','quality-end':'#d97706','final-qc':'#0891b2','vinyl':'#db2777','uat':'#16a34a','shipping':'#059669','delivery':'#059669','training':'#f59e0b','installation':'#e11d48'};
     const monthRow='<tr><td class="label-col"></td><td class="date-col"></td><td class="status-col"></td>'+monthCells.map(mc=>`<th colspan="${mc.span}" style="text-align:left;font-size:9px;font-weight:700;color:#64748b;padding:2px 0 4px 3px;letter-spacing:0.06em;text-transform:uppercase">${mc.label}</th>`).join('')+'</tr>';
     const dayRow='<tr style="border-bottom:1px solid #f1f5f9"><td class="label-col"></td><td class="date-col"></td><td class="status-col"></td>'+cols.map(d=>{const isT=sameDay(d,t);return`<th style="${isT?'color:#C8102E;font-weight:700':''}">${d.getDate()}</th>`;}).join('')+'</tr>';
     const msGanttRows=msDated.map(m=>{
