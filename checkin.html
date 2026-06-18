@@ -175,7 +175,7 @@ const DEPT_CONFIG={
   'inv2026':{name:'Inventory',color:'#0891b2',milestoneKeys:['arrival'],labelMatch:['Inventory pick'],labels:{'arrival':'Inventory pick'}},
   'proc2026':{name:'Procurement',color:'#d97706',milestoneKeys:['po-release'],labelMatch:['Parts ordering start','Parts arrival'],labels:{'po-release':'PO Release'}},
   'mo2026':{name:'MO Release (Niraj)',color:'#6b6b6b',milestoneKeys:['mo-release'],labels:{'mo-release':'MO Release'}},
-  'qa2026':{name:'Quality',color:'#d97706',milestoneKeys:['quality-start','quality-end','vinyl'],labels:{'quality-start':'QA start','quality-end':'QA end','vinyl':'Vinyl / branding'}},
+  'qa2026':{name:'Quality',color:'#d97706',milestoneKeys:['quality-start','quality-end','final-qc','vinyl'],labels:{'quality-start':'QA start','quality-end':'QA end','final-qc':'Final QC','vinyl':'Vinyl / branding'}},
   'ship2026':{name:'Shipping',color:'#059669',milestoneKeys:['shipping','delivery'],labels:{'shipping':'Ship date','delivery':'Delivery date'}},
   'deploy2026':{name:'Deployment',color:'#db2777',milestoneKeys:['installation'],labels:{'installation':'Installation date'}},
 };
@@ -293,11 +293,27 @@ function render(){
     });
   }
 
-  // Group project milestones by project
+  // Group project milestones by project, then deduplicate by label within each project.
+  // For SO-split projects (e.g. Unisys with 20 SOs), every SO gets its own "Build start"
+  // milestone row — but Production gives one status for the whole build, not one per SO.
+  // We keep only the earliest-dated milestone per unique label per project, and use that
+  // single row to represent the whole label. The checkin_status key is the milestone id
+  // of the representative row, which is consistent on reload since we always pick earliest.
   const byProject={};
   deptMilestones.forEach(m=>{
     if(!byProject[m.project_id])byProject[m.project_id]=[];
     byProject[m.project_id].push(m);
+  });
+  // Deduplicate: within each project, keep only one row per unique label (earliest date)
+  Object.keys(byProject).forEach(pid=>{
+    const seen={};
+    byProject[pid]=byProject[pid]
+      .sort((a,b)=>(a.date||'').localeCompare(b.date||''))
+      .filter(m=>{
+        if(seen[m.label])return false;
+        seen[m.label]=true;
+        return true;
+      });
   });
 
   // Summary counts (project milestones + ad hoc)
@@ -318,6 +334,12 @@ function render(){
       <div><div class="sb-val sb-yellow">${yellows}</div><div class="sb-label">In trouble</div></div>
       <div><div class="sb-val sb-red">${reds}</div><div class="sb-label">Escalation</div></div>
     </div>`:'';
+
+  const thisBase=monday(today());
+  const nextBase=monday(addD(today(),7));
+  const fmtRange=(s,e)=>fmt(isoD(s))+' – '+fmt(isoD(e));
+  document.getElementById('wt-this').textContent='This week  '+fmtRange(thisBase,addD(thisBase,4));
+  document.getElementById('wt-next').textContent='Next week  '+fmtRange(nextBase,addD(nextBase,4));
 
   const wLabel=currentWeek==='this'?'this week':'next week';
   const ciContent=document.getElementById('ci-content');
