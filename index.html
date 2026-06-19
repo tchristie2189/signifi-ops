@@ -3272,7 +3272,7 @@ function renderProjPageBody(){
         const rows=entries.length?entries.map((e,i)=>
           '<div class="pp-link-item" style="padding-left:'+(i>0?'110px':'0')+'">'
           +(i===0?labelHtml:'<span class="pp-link-label" style="opacity:0"> </span>')
-          +'<input class="pp-link-input" value="'+e.url.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="updatePPLink(\''+item.label+'\','+i+',this.value)" onblur="updatePPLink(\''+item.label+'\','+i+',this.value)">'
+          +'<input class="pp-link-input" id="ppl-new-'+e.id+'" value="'+e.url.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="updatePPLink(\''+item.label+'\','+i+',this.value)" onblur="updatePPLink(\''+item.label+'\','+i+',this.value)">'
           +(e.url?'<a href="'+e.url+'" target="_blank" class="pp-link-go">↗</a>':'<span class="pp-link-go"> </span>')
           +'<button onclick="removePPLink(\''+item.label+'\','+i+')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px">✕</button>'
           +'</div>').join('')
@@ -3713,10 +3713,30 @@ function openSOConfigModal(projId,so){
         </select>
         <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
       </div>
-      <div class="field full" style="margin-bottom:10px"><label>QA Task URL</label><input id="soc-qa" value="${qaUrl.replace(/"/g,'&quot;')}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px"></div>
-      <div class="field full" style="margin-bottom:10px"><label>Odoo Task URL</label><input id="soc-odoo" value="${odooUrl.replace(/"/g,'&quot;')}" placeholder="https://signifisolutions.odoo.com/..." style="font-family:var(--mono);font-size:12px"></div>
-      <div class="field full" style="margin-bottom:10px"><label>Installation Ticket URL</label><input id="soc-install" value="${installUrl.replace(/"/g,'&quot;')}" placeholder="https://..." style="font-family:var(--mono);font-size:12px"></div>
-      <div class="field full"><label>Jira / UI Task URL</label><input id="soc-ui" value="${uiUrl.replace(/"/g,'&quot;')}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px"></div>
+      <div class="field full" style="margin-bottom:10px"><label>QA Task URL</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="soc-qa" value="${qaUrl.replace(/"/g,'&quot;')}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px;flex:1" oninput="const a=document.getElementById('soc-qa-go');a.href=this.value;a.style.display=this.value?'inline':'none'">
+          <a id="soc-qa-go" href="${qaUrl}" target="_blank" style="font-size:14px;text-decoration:none;display:${qaUrl?'inline':'none'}" title="Open link">↗</a>
+        </div>
+      </div>
+      <div class="field full" style="margin-bottom:10px"><label>Odoo Task URL</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="soc-odoo" value="${odooUrl.replace(/"/g,'&quot;')}" placeholder="https://signifisolutions.odoo.com/..." style="font-family:var(--mono);font-size:12px;flex:1" oninput="const a=document.getElementById('soc-odoo-go');a.href=this.value;a.style.display=this.value?'inline':'none'">
+          <a id="soc-odoo-go" href="${odooUrl}" target="_blank" style="font-size:14px;text-decoration:none;display:${odooUrl?'inline':'none'}" title="Open link">↗</a>
+        </div>
+      </div>
+      <div class="field full" style="margin-bottom:10px"><label>Installation Ticket URL</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="soc-install" value="${installUrl.replace(/"/g,'&quot;')}" placeholder="https://..." style="font-family:var(--mono);font-size:12px;flex:1" oninput="const a=document.getElementById('soc-install-go');a.href=this.value;a.style.display=this.value?'inline':'none'">
+          <a id="soc-install-go" href="${installUrl}" target="_blank" style="font-size:14px;text-decoration:none;display:${installUrl?'inline':'none'}" title="Open link">↗</a>
+        </div>
+      </div>
+      <div class="field full"><label>Jira / UI Task URL</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="soc-ui" value="${uiUrl.replace(/"/g,'&quot;')}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px;flex:1" oninput="const a=document.getElementById('soc-ui-go');a.href=this.value;a.style.display=this.value?'inline':'none'">
+          <a id="soc-ui-go" href="${uiUrl}" target="_blank" style="font-size:14px;text-decoration:none;display:${uiUrl?'inline':'none'}" title="Open link">↗</a>
+        </div>
+      </div>
     </div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveSOConfig('${projId}','${so}')">Save</button></div>
   </div></div>`;
@@ -3794,8 +3814,19 @@ async function updatePPLink(label,idx,url){
   showPPSaved();
 }
 async function addPPLink(label){
-  const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url:'',category:'',sort_order:ppData.links.filter(l=>l.label===label).length}).select().single();
-  if(data){ppData.links.push(data);renderProjPageBody(ppProjId);}
+  const{data,error}=await sb.from('project_links').insert({project_id:ppProjId,label,url:'',category:'',sort_order:ppData.links.filter(l=>l.label===label).length}).select().single();
+  if(error){alert('Error adding link: '+error.message);return;}
+  if(data){
+    ppData.links.push(data);
+    renderProjPageBody(ppProjId);
+    // Auto-focus the new empty input so it's obvious a new row was added —
+    // otherwise it's an empty box identical to any other empty box, and
+    // clicking the button looks like it did nothing.
+    setTimeout(()=>{
+      const target=document.getElementById('ppl-new-'+data.id);
+      if(target)target.focus();
+    },50);
+  }
 }
 async function removePPLink(label,idx){
   const entries=(ppData.links||[]).filter(l=>l.label===label);
