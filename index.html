@@ -3818,7 +3818,16 @@ async function addPPLink(label){
   if(error){alert('Error adding link: '+error.message);return;}
   if(data){
     ppData.links.push(data);
-    renderProjPageBody(ppProjId);
+    // The "+ Add link" button can be clicked from two different places: inline on
+    // the Project Page, or inside the separate Quick Links popout modal. Each has
+    // its own DOM — re-rendering the page body does nothing for the modal, which
+    // is why clicking it from the popout looked like it did nothing. Refresh
+    // whichever one is actually open.
+    if(document.querySelector('[data-modal="links-popout"]')){
+      openLinksPopout();
+    } else {
+      renderProjPageBody(ppProjId);
+    }
     // Auto-focus the new empty input so it's obvious a new row was added —
     // otherwise it's an empty box identical to any other empty box, and
     // clicking the button looks like it did nothing.
@@ -3833,7 +3842,11 @@ async function removePPLink(label,idx){
   if(!entries[idx])return;
   await sb.from('project_links').delete().eq('id',entries[idx].id);
   ppData.links=ppData.links.filter(l=>l.id!==entries[idx].id);
-  renderProjPageBody(ppProjId);
+  if(document.querySelector('[data-modal="links-popout"]')){
+    openLinksPopout();
+  } else {
+    renderProjPageBody(ppProjId);
+  }
 }
 
 // ── PM TASKS ────────────────────────────────────────────────
@@ -5458,7 +5471,7 @@ function openLinksPopout(){
   }).join('');
   document.getElementById('modal-root').innerHTML=`
   <div class="modal-backdrop" onclick="closeModal()">
-    <div class="modal" style="width:600px;max-height:85vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
+    <div class="modal" data-modal="links-popout" style="width:600px;max-height:85vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
       <div class="modal-head"><span class="modal-title">🔗 Quick links — ${proj.name||''}</span><button class="modal-close" onclick="closeModal()">×</button></div>
       <div style="overflow-y:auto;flex:1;padding:12px 0">${catsHtml}</div>
       <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>
