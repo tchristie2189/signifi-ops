@@ -718,7 +718,10 @@ async function loadAll(){
     const soList=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
     // One row per SO if multiple, otherwise one row with full SO string
     const entries=soList.length>1?soList:[p.so_number||''];
-    return entries.map((so,j)=>({id:null,project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),so,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+j+1,is_standalone:false}));
+    return entries.map((so,j)=>{
+      const soDet=soDetails.find(d=>d.project_id===p.id&&d.so_tag===so);
+      return{id:null,project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),so,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:soDet?.form_factor||p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+j+1,is_standalone:false};
+    });
   });
   // Merge saved rows with fresh project data — saved row dates take priority over milestone dates
   vinylSchedule=savedVinyl.map(v=>{
@@ -727,13 +730,15 @@ async function loadAll(){
     // Find milestone matching this SO (so_tag) if split, otherwise untagged
     const vm=p?milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'&&(v.so?m.so_tag===v.so:!m.so_tag)):null;
     const sh=p?milestones.find(m=>m.project_id===p.id&&m.key==='shipping'&&(v.so?m.so_tag===v.so:!m.so_tag)):null;
+    const soDet=p?soDetails.find(d=>d.project_id===p.id&&d.so_tag===v.so):null;
     // Saved vinyl row date takes priority — only fall back to milestone if vinyl row has no date
     return{...v,
       vinylType:p?.vinyl_type||v.vinyl_type||'',
       date:v.date||vm?.date||'',
       shipDate:v.ship_date||sh?.date||'',
       pm:p?.pm||v.pm||'',
-      formFactor:v.form_factor||p?.form_factor||'',
+      formFactor:v.form_factor||soDet?.form_factor||p?.form_factor||'',
+      form_factor_manual:!!v.form_factor_manual,
       name:v.name||p?.name||'',
       so:v.so||p?.so_number||'',
       client:v.client||p?.client||''
@@ -1521,7 +1526,7 @@ function renderVinyl(){
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vinylDateSync('${item.id||'idx:'+origIdx}',this.value,'vinyl')" title="Syncs with project overview"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vinylDateSync('${item.id||'idx:'+origIdx}',this.value,'ship')" title="Syncs with project overview"></td>
       <td style="${readStyle}">${item.pm||'—'}</td>
-      <td><select class="sched-select" multiple style="min-width:140px;height:58px;font-size:11px" title="Hold Ctrl/Cmd to select multiple" onchange="vsMulti('${item.id || origIdx}','formFactor',this)">${getProductTypes().map(t=>'<option'+((','+item.formFactor+',').includes(','+t+',')?' selected':'')+'>'+t+'</option>').join('')}</select></td>
+      <td><div style="display:flex;align-items:flex-start;gap:4px"><select class="sched-select" multiple style="min-width:120px;height:58px;font-size:11px" title="${item.form_factor_manual?'Manually set — will not be overwritten by SO Config saves':'Hold Ctrl/Cmd to select multiple'}" onchange="vsMulti('${item.id || origIdx}','formFactor',this)">${getProductTypes().map(t=>'<option'+((','+item.formFactor+',').includes(','+t+',')?' selected':'')+'>'+t+'</option>').join('')}</select>${item.project_id&&item.so?`<button onclick="openSOConfigModal('${item.project_id}','${item.so}')" title="Open SO Config" style="font-size:11px;padding:2px 5px;border-radius:4px;border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font);line-height:1.2;white-space:nowrap">⚙</button>`:''}</div>${item.form_factor_manual?'<div style="font-size:9px;color:var(--gray-400);margin-top:2px">manual</div>':''}</td>
       <td><select class="sched-select" onchange="vs('${item.id || origIdx}','status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
       <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">✕</button></td>
     </tr>`;
@@ -1683,8 +1688,10 @@ function vs(itemId,k,v){
   item[k]=v;
   const colMap={so:'so',client:'client',name:'name',vinylType:'vinyl_type',shipDate:'ship_date',pm:'pm',formFactor:'form_factor',status:'status'};
   const col=colMap[k]||k;
+  const extra={};
+  if(k==='formFactor'){item.form_factor_manual=true;extra.form_factor_manual=true;}
   if(item.id){
-    sb.from('vinyl_schedule').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('vs save error',error);});
+    sb.from('vinyl_schedule').update({[col]:v,...extra,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('vs save error',error);});
   } else {
     // Virtual row — insert to DB first
     sb.from('vinyl_schedule').insert({
@@ -1693,7 +1700,7 @@ function vs(itemId,k,v){
       form_factor:item.formFactor||'',status:item.status||'Scheduled',
       date:item.date||null,ship_date:item.shipDate||null,
       priority:item.priority||99,is_standalone:false,
-      updated_at:new Date().toISOString(),[col]:v
+      updated_at:new Date().toISOString(),...extra,[col]:v
     }).select().single().then(({data})=>{if(data)item.id=data.id;});
   }
   // Instantly update row colour for Print Day / Vacation
@@ -3763,6 +3770,15 @@ async function saveSOConfig(projId,so){
     if(data)soDetails.push(data);
   }
   closeModal();showToast('SO '+so+' config saved ✓');
+  // Push live update to any existing vinyl_schedule rows for this project/SO,
+  // so Config changes show up immediately without needing "Sync from projects" —
+  // but never clobber a row someone manually overrode directly on the Vinyl tab
+  const matchingVinylRows=vinylSchedule.filter(v=>v.id&&v.project_id===projId&&v.so===so&&!v.form_factor_manual);
+  if(matchingVinylRows.length){
+    await Promise.all(matchingVinylRows.map(v=>sb.from('vinyl_schedule').update({form_factor:formFactor}).eq('id',v.id)));
+    matchingVinylRows.forEach(v=>{v.form_factor=formFactor;v.formFactor=formFactor;});
+    renderTab();
+  }
 }
 async function saveProjField(projId,field,val){
   await sb.from('projects').update({[field]:val||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',projId);
