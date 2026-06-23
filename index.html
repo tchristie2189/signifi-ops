@@ -1669,11 +1669,15 @@ async function syncVinylFromProjects(){
       // Only check project-linked rows (never standalone/ad hoc)
       const alreadyExists=vinylSchedule.filter(v=>!v.is_standalone).some(v=>v.project_id===p.id&&(v.so===so||soList.length===1));
       if(!alreadyExists){
+        // Form factor: per-SO override (so_details) first, fall back to master project field —
+        // this was previously hardcoded to the master field only, so SO Config changes never showed up here.
+        const soDet=soList.length>1?soDetails.find(d=>d.project_id===p.id&&d.so_tag===so):null;
+        const formFactor=soDet?.form_factor||p.form_factor||'';
         toAdd.push({
           project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),
           so,client:p.client||'',vinyl_type:p.vinyl_type||'',
           date:vm.date,ship_date:sh?.date||null,
-          pm:p.pm||'',form_factor:p.form_factor||'',
+          pm:p.pm||'',form_factor:formFactor,
           status:'Scheduled',priority:vinylSchedule.length+toAdd.length+1,
           is_standalone:false,updated_at:new Date().toISOString()
         });
@@ -3756,10 +3760,12 @@ function openSOConfigModal(projId,so){
     <div class="modal-body">
       <div class="field full" style="margin-bottom:12px">
         <label>Configuration / Form factor <span style="font-size:10px;color:var(--gray-400);font-weight:400">— select all that apply for this SO</span></label>
-        <select id="soc-formfactor" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:110px">
-          ${types.map(t=>`<option${selectedTypes.includes(t)?' selected':''}>${t}</option>`).join('')}
-        </select>
-        <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
+        <div id="soc-formfactor-list" style="display:flex;flex-direction:column;gap:4px;max-height:160px;overflow-y:auto;border:1px solid var(--gray-200);border-radius:var(--radius);padding:8px">
+          ${types.map(t=>`<label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:3px 4px;border-radius:4px;cursor:pointer" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='transparent'">
+            <input type="checkbox" class="soc-ff-check" value="${t.replace(/"/g,'&quot;')}" ${selectedTypes.includes(t)?'checked':''} style="width:14px;height:14px">
+            <span>${t}</span>
+          </label>`).join('')}
+        </div>
       </div>
       <div class="field full" style="margin-bottom:10px"><label>QA Task URL</label>
         <div style="display:flex;gap:6px;align-items:center">
@@ -3791,7 +3797,7 @@ function openSOConfigModal(projId,so){
 }
 
 async function saveSOConfig(projId,so){
-  const formFactor=[...document.getElementById('soc-formfactor').selectedOptions].map(o=>o.value).join(', ');
+  const formFactor=[...document.querySelectorAll('.soc-ff-check:checked')].map(c=>c.value).join(', ');
   const qaUrl=document.getElementById('soc-qa').value.trim();
   const odooUrl=document.getElementById('soc-odoo').value.trim();
   const installUrl=document.getElementById('soc-install').value.trim();
@@ -3809,6 +3815,16 @@ async function saveSOConfig(projId,so){
       ...updates,
     }).select().single();
     if(data)soDetails.push(data);
+  }
+  // Push form factor forward to any existing vinyl_schedule row for this project/SO —
+  // otherwise Config changes silently never reach the Vinyl schedule until the next
+  // full sync, and a manually-edited vinyl row would never reflect this update at all.
+  const vinylRow=vinylSchedule.find(v=>v.project_id===projId&&(so?v.so===so:true));
+  if(vinylRow&&vinylRow.formFactor!==formFactor){
+    vinylRow.formFactor=formFactor;
+    if(vinylRow.id){
+      await sb.from('vinyl_schedule').update({form_factor:formFactor,updated_at:new Date().toISOString()}).eq('id',vinylRow.id);
+    }
   }
   closeModal();showToast('SO '+so+' config saved ✓');
 }
