@@ -718,10 +718,7 @@ async function loadAll(){
     const soList=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
     // One row per SO if multiple, otherwise one row with full SO string
     const entries=soList.length>1?soList:[p.so_number||''];
-    return entries.map((so,j)=>{
-      const soDet=soDetails.find(d=>d.project_id===p.id&&d.so_tag===so);
-      return{id:null,project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),so,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:soDet?.form_factor||p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+j+1,is_standalone:false};
-    });
+    return entries.map((so,j)=>({id:null,project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),so,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+j+1,is_standalone:false}));
   });
   // Merge saved rows with fresh project data — saved row dates take priority over milestone dates
   vinylSchedule=savedVinyl.map(v=>{
@@ -730,15 +727,13 @@ async function loadAll(){
     // Find milestone matching this SO (so_tag) if split, otherwise untagged
     const vm=p?milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'&&(v.so?m.so_tag===v.so:!m.so_tag)):null;
     const sh=p?milestones.find(m=>m.project_id===p.id&&m.key==='shipping'&&(v.so?m.so_tag===v.so:!m.so_tag)):null;
-    const soDet=p?soDetails.find(d=>d.project_id===p.id&&d.so_tag===v.so):null;
     // Saved vinyl row date takes priority — only fall back to milestone if vinyl row has no date
     return{...v,
       vinylType:p?.vinyl_type||v.vinyl_type||'',
       date:v.date||vm?.date||'',
       shipDate:v.ship_date||sh?.date||'',
       pm:p?.pm||v.pm||'',
-      formFactor:v.form_factor||soDet?.form_factor||p?.form_factor||'',
-      form_factor_manual:!!v.form_factor_manual,
+      formFactor:v.form_factor||p?.form_factor||'',
       name:v.name||p?.name||'',
       so:v.so||p?.so_number||'',
       client:v.client||p?.client||''
@@ -959,7 +954,6 @@ function renderGlance(){
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
           ${h?healthRing(p.id):''}
-          <button onclick="openEditProj('${p.id}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)">✏ Edit</button>
           <button onclick="goToProjPage('${p.id}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)" title="Open project page">↗ Project page</button>
           <button onclick="toggleArchive('${p.id}','${p.status}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)">${isComplete?'↩ Restore':'✓ Complete'}</button>
 
@@ -1527,7 +1521,7 @@ function renderVinyl(){
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vinylDateSync('${item.id||'idx:'+origIdx}',this.value,'vinyl')" title="Syncs with project overview"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vinylDateSync('${item.id||'idx:'+origIdx}',this.value,'ship')" title="Syncs with project overview"></td>
       <td style="${readStyle}">${item.pm||'—'}</td>
-      <td><div style="display:flex;align-items:flex-start;gap:4px"><select class="sched-select" multiple style="min-width:120px;height:58px;font-size:11px" title="${item.form_factor_manual?'Manually set — will not be overwritten by SO Config saves':'Hold Ctrl/Cmd to select multiple'}" onchange="vsMulti('${item.id || origIdx}','formFactor',this)">${getProductTypes().map(t=>'<option'+((','+item.formFactor+',').includes(','+t+',')?' selected':'')+'>'+t+'</option>').join('')}</select>${item.project_id&&item.so?`<button onclick="openSOConfigModal('${item.project_id}','${item.so}')" title="Open SO Config" style="font-size:11px;padding:2px 5px;border-radius:4px;border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font);line-height:1.2;white-space:nowrap">⚙</button>`:''}</div>${item.form_factor_manual?'<div style="font-size:9px;color:var(--gray-400);margin-top:2px">manual</div>':''}</td>
+      <td><select class="sched-select" multiple style="min-width:140px;height:58px;font-size:11px" title="Hold Ctrl/Cmd to select multiple" onchange="vsMulti('${item.id || origIdx}','formFactor',this)">${getProductTypes().map(t=>'<option'+((','+item.formFactor+',').includes(','+t+',')?' selected':'')+'>'+t+'</option>').join('')}</select></td>
       <td><select class="sched-select" onchange="vs('${item.id || origIdx}','status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
       <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">✕</button></td>
     </tr>`;
@@ -1689,10 +1683,8 @@ function vs(itemId,k,v){
   item[k]=v;
   const colMap={so:'so',client:'client',name:'name',vinylType:'vinyl_type',shipDate:'ship_date',pm:'pm',formFactor:'form_factor',status:'status'};
   const col=colMap[k]||k;
-  const extra={};
-  if(k==='formFactor'){item.form_factor_manual=true;extra.form_factor_manual=true;}
   if(item.id){
-    sb.from('vinyl_schedule').update({[col]:v,...extra,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('vs save error',error);});
+    sb.from('vinyl_schedule').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('vs save error',error);});
   } else {
     // Virtual row — insert to DB first
     sb.from('vinyl_schedule').insert({
@@ -1701,7 +1693,7 @@ function vs(itemId,k,v){
       form_factor:item.formFactor||'',status:item.status||'Scheduled',
       date:item.date||null,ship_date:item.shipDate||null,
       priority:item.priority||99,is_standalone:false,
-      updated_at:new Date().toISOString(),...extra,[col]:v
+      updated_at:new Date().toISOString(),[col]:v
     }).select().single().then(({data})=>{if(data)item.id=data.id;});
   }
   // Instantly update row colour for Print Day / Vacation
@@ -2521,7 +2513,6 @@ function openEditProj(id){
         <div class="field"><label>Solutions</label><input id="ep-solutions" value="${proj.solutions||''}" placeholder="Solutions contact"></div>
         <div class="field"><label>Sales</label><input id="ep-sales" list="ep-sales-list" value="${proj.sales||''}" placeholder="Sales contact"><datalist id="ep-sales-list"><option>Adnan Aga</option><option>Michael Harrison</option><option>Danny Pack</option><option>Julianna Reynolds</option><option>Michelle Hernandez</option><option>Kevin Bell</option><option>Shoubi Rastegar</option><option>Daniel Nowak</option></datalist></div>
         <div class="field"><label>Account Manager</label><input id="ep-am" list="ep-am-list" value="${proj.account_manager||''}" placeholder="Account Manager"><datalist id="ep-am-list"><option>Ian Harrison</option><option>Daniel Pini</option><option>Michelle Hernandez</option><option>Tyler Stevenson</option><option>Pamela Gilliam</option></datalist></div>
-        <div class="field"><label>QA Person</label><input id="ep-qa-person" value="${proj.qa_person||''}" placeholder="QA contact name"></div>
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
         <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${proj.naming_convention||''}</textarea></div>
         <div class="field full"><label>Installation address</label><input id="ep-address" value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
@@ -2580,6 +2571,8 @@ function openEditProj(id){
           </label>
           <input id="ep-it-survey" value="${proj.it_survey_url||''}" placeholder="https://..." style="font-family:var(--mono);font-size:12px">
         </div>
+        <div class="field"><label>Naming convention</label><input id="ep-naming" value="${proj.naming_convention||''}" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono)"></div>
+        <div class="field full"><label>Installation Address</label><input id="ep-address" value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
         <div class="field full">
           <label style="display:flex;align-items:center;justify-content:space-between">Kickoff Deck URL
             <button type="button" onclick="clearEpField('ep-kickoff-deck')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
@@ -2626,7 +2619,6 @@ async function saveEditProj(id){
     solutions:document.getElementById('ep-solutions')?.value.trim()||null,
     sales:document.getElementById('ep-sales')?.value.trim()||null,
     account_manager:document.getElementById('ep-am')?.value.trim()||null,
-    qa_person:document.getElementById('ep-qa-person')?.value.trim()||null,
     channel_partner:document.getElementById('ep-cp')?.value.trim()||null,
     status:document.getElementById('ep-status').value,
     notes:document.getElementById('ep-notes').value,
@@ -3432,7 +3424,6 @@ function renderProjPageBody(){
 
       </div>
       <div style="display:flex;flex-direction:column;gap:7px;align-items:flex-end;flex-shrink:0" class="no-print">
-        <button onclick="openEditProj('${proj.id}')" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #555;background:white;color:#111;cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">✏ Edit</button>
         <button onclick="openLinksPopout()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #3b82f6;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🔗 Quick links</button>
         ${(ppHasSoTags||isMaster(proj)||(proj.so_number||"").split(",").filter(s=>s.trim()).length>1)?`<button onclick="toggleAllSOView()" id="btn-show-all-so" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #16a34a;background:#14532d;color:#86efac;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📊 All SO milestones</button>`:''}
         ${isChild(proj)?`<button onclick="unlinkFromMaster('${proj.id}')" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #dc2626;background:#450a0a;color:#fca5a5;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🔗 Unlink from master</button>`:''}
@@ -3772,15 +3763,6 @@ async function saveSOConfig(projId,so){
     if(data)soDetails.push(data);
   }
   closeModal();showToast('SO '+so+' config saved ✓');
-  // Push live update to any existing vinyl_schedule rows for this project/SO,
-  // so Config changes show up immediately without needing "Sync from projects" —
-  // but never clobber a row someone manually overrode directly on the Vinyl tab
-  const matchingVinylRows=vinylSchedule.filter(v=>v.id&&v.project_id===projId&&v.so===so&&!v.form_factor_manual);
-  if(matchingVinylRows.length){
-    await Promise.all(matchingVinylRows.map(v=>sb.from('vinyl_schedule').update({form_factor:formFactor}).eq('id',v.id)));
-    matchingVinylRows.forEach(v=>{v.form_factor=formFactor;v.formFactor=formFactor;});
-    renderTab();
-  }
 }
 async function saveProjField(projId,field,val){
   await sb.from('projects').update({[field]:val||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',projId);
@@ -4076,7 +4058,7 @@ function getDocState(){
   return s;
 }
 // Fields auto-filled from project record — never restore these from state
-const AUTO_FILL_FIELDS=new Set(['if-so','if-address','qf-address','if-naming','qf-naming','qf-so','if-kiosk','uf-kiosk','qf-kiosk','if-client','if-ship','if-del','if-inst','if-vinyl','if-odoo','if-ui-task','if-qa-task','if-template','if-badge','if-employee','qf-ship','qf-vinyl','qf-jira-task','qf-jira-product','qf-jira-badge','qf-employee','uf-client']);
+const AUTO_FILL_FIELDS=new Set(['qf-address','qf-naming','qf-so','uf-kiosk','qf-kiosk','if-ship','if-del','if-vinyl','if-odoo','if-template','if-badge','if-employee','qf-ship','qf-vinyl','qf-jira-task','qf-jira-product','qf-jira-badge','qf-employee','uf-client']);
 
 let _docSaveTimer=null;
 function saveDocFormState(immediate=false){
@@ -4141,6 +4123,11 @@ function restoreDocFormState(){
     const outEl=document.getElementById('doc-output-'+activeDocTab);
     const contEl=document.getElementById('doc-content-'+activeDocTab);
     if(outEl&&contEl){outEl.style.display='block';contEl.textContent=out;}
+  }
+  const subj=getDocState()[activeDocTab]?.__subject;
+  if(subj){
+    const subjEl=document.getElementById('doc-subject-'+activeDocTab);
+    if(subjEl)subjEl.textContent=subj;
   }
 }
 
@@ -4225,57 +4212,102 @@ function fldTA(id,label,placeholder,val=''){
   return`<div class="field full"><label>${label}</label><textarea id="${id}" placeholder="${placeholder}" style="min-height:70px;font-size:12px" onblur="saveDocFormState(true)">${val}</textarea></div>`;
 }
 
+const DEFAULT_INSTALL_SCOPE=`Scope of Work:
+
+1. On-Site Meeting
+   • Meet with the designated POC upon arrival at the installation site.
+
+2. Kiosk Installation and Setup
+   • Physically install the unit(s) at the designated location, per layout guidelines.
+   • Connect the kiosk to the internet via the provided network configuration.
+   • Conduct an end-to-end technical test to confirm the machine is properly connected and functional.
+
+3. Planogram Updates
+   • Stock the machine with the designated products per the client-approved planogram.
+   • Validate the updated planogram with test vends to ensure accurate product placement and dispensing.
+
+4. Testing and Validation
+   • Perform end-to-end workflow testing, including planogram, and validate transactions on the Vision platform with the support of the Signifi Support Team.
+   • Ensure vend testing is successfully completed and confirm all transactions are recorded correctly.
+   • Test all locker compartments — doors, power ports, and ethernet ports, where applicable.
+
+5. Troubleshooting and Support
+   • Reach out to the Signifi Support Team for any required troubleshooting related to network, hardware, or software issues.
+
+6. Orientation and Client Assistance
+   • Provide an orientation session for the on-site contact or local staff to familiarize them with the kiosk's operations.
+   • Assist the client in conducting their own workflow tests to ensure satisfaction with performance.
+
+7. Client Sign-off and Documentation
+   • Obtain the client's sign-off on the User Acceptance Checklist.
+   • Take photographs of the fully installed kiosk, the surrounding area, and the signed-off checklist.
+
+8. Completion and Reporting
+   • Submit the completed installation checklist and any photos to the Signifi Support Team, or attach to this ticket.
+   • Prepare and send an installation completion letter to the Project Manager or attach it to this ticket.`;
+function pullField(label,val,editHint){
+  // Read-only display for fields that must always reflect the live project record —
+  // no separate doc input to drift out of sync. Edit via Project Page / Edit Project.
+  return`<div class="field full"><label>${label} <span style="font-size:10px;color:var(--gray-400);font-weight:400">(from project — ${editHint})</span></label>
+    <div style="font-size:12px;padding:8px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--gray-50);color:${val?'var(--gray-800)':'var(--gray-400)'};min-height:36px">${val||'— not set —'}</div>
+  </div>`;
+}
 function renderInstallForm(){
   const p=getDocProj();
-  const delivDate=getDocDate('delivery');
   const instDate=getDocDate('installation');
-  const vinylDate=getDocDate('vinyl');
-  const shipDate=getDocDate('shipping');
+  const soDet=selectedDocSO?soDetails.find(d=>d.project_id===p.id&&d.so_tag===selectedDocSO):null;
+  const naming=soDet?.naming_convention??p.naming_convention??'';
+  const address=soDet?.address??p.address??'';
+  const formFactor=soDet?.form_factor||[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'';
+  const soNum=selectedDocSO||p.so_number||'';
+  const qaTaskUrl=getDocLink('QA Task');
   return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()" onfocusout="saveDocFormState(true)">
-    <div class="doc-section-lbl">Project identifiers (auto-filled from hub)</div>
-    ${fld('if-so','Sales Order (SO)','SO-XXXXX','','text',selectedDocSO||p.so_number||'')}
-    ${fld('if-client','End Client (CX)','e.g. Google','','text',p.client||'')}
-    ${(()=>{const soDet=selectedDocSO?soDetails.find(d=>d.project_id===p.id&&d.so_tag===selectedDocSO):null;const naming=soDet?.naming_convention??p.naming_convention??'';const address=soDet?.address??p.address??'';return fld('if-naming','Naming convention'+(selectedDocSO?' (SO: '+selectedDocSO+')':''),'e.g. GPIX-B2B-SUN-CA-ENC','full','text',naming)+fld('if-address','Installation address'+(selectedDocSO?' (SO: '+selectedDocSO+')':''),'e.g. 440 N Wolfe Rd','full','text',address);})()}
-    <div class="doc-section-lbl">Dates (auto-filled)</div>
-    ${fld('if-ship','Shipping date','','','text',shipDate)}
-    ${fld('if-del','Delivery date','','','text',delivDate)}
-    ${fld('if-inst','Requested installation date','','','text',instDate)}
-    ${fld('if-vinyl','Vinyl date','','','text',vinylDate)}
-    <div class="doc-section-lbl">Unit configuration</div>
-    ${fld('if-cp','Channel Partner (CP)','e.g. Direct, TD Synnex...','')}
-    ${fld('if-kiosk','Kiosk type / product','e.g. Retail Enclosure, V8 SparkXL...','','text',[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'')}
-    ${fld('if-elevator','Vending unit elevator','e.g. Enhanced, Standard','')}
-    ${fld('if-screen','Screen size','e.g. 42" (1080x1920)','')}
-    ${fld('if-workflow','Workflow','e.g. Retail Vending, Pick-up, Drop-off','full')}
+    <div class="doc-section-lbl">Additional unit configuration (appears at top of ticket)</div>
     ${fld('if-auth','Authentication / payment device','e.g. Badge reader, Barcode scanner','full')}
     ${fld('if-payconfig','Payment device configuration','','')}
     ${fld('if-lang','Language','e.g. English','')}
     ${fldSelect('if-ada','ADA keypad',['No','Yes'])}
     ${fld('if-hosting','Hosting','e.g. Default Multi-Tenant','')}
-    ${fld('if-connectivity','Internet connectivity','e.g. LAN (Primary)','')}
     ${fld('if-survey','IT site survey','e.g. Optconnect','')}
     ${fld('if-voltage','Voltage','e.g. 110V','')}
     ${fld('if-plug','Plug type','e.g. Type B','')}
     ${fld('if-orientation','Orientation','e.g. Per approved retail layout','full')}
-    <div class="doc-section-lbl">Point of contact</div>
-    ${fld('if-poc-name','POC name & title','e.g. Joshua Emperador, Inside Sales Lead','full')}
-    ${fld('if-poc-email','POC email','e.g. j@google.com','')}
-    ${fld('if-poc-phone','POC phone','','')}
-    <div class="doc-section-lbl">Links (auto-filled from project edit — update via Project Overview → Edit or Project Page)</div>
-    ${fld('if-odoo','Odoo task link','https://signifisolutions.odoo.com/...','full','text',getDocLink('Odoo Task'))}
-    ${fld('if-ui-task','UI task link (Jira)','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Jira / UI Task'))}
-    ${fld('if-qa-task','QA task link (Jira)','https://signifisolutions.atlassian.net/...','full','text',getDocLink('QA Task'))}
-    ${fld('if-template','Product template link','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Product Template'))}
-    ${fld('if-badge','Badge reader link','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Badge Reader'))}
-    ${fld('if-employee','Employee list link','https://...','full','text',getDocLink('Employee List'))}
-    ${fld('if-vinyl-odoo','Vinyl render Odoo link','https://signifisolutions.odoo.com/...','full','text',getDocLink('Vinyl Render Odoo'))}
-    ${fldTA('if-scope','Scope of work (leave blank for standard)','1. Deliver and install...\n2. Position unit...')}
-    ${fldTA('if-special','Special requirements','Any special notes...')}
+    ${pullField('PM',p.pm||'','edit via Project Overview → Edit')}
+    ${pullField('Sales',p.sales||'','edit via Project Overview → Edit')}
+    <div class="doc-section-lbl">1. Installation address</div>
+    ${pullField('Installation address'+(selectedDocSO?' (SO: '+selectedDocSO+')':''),address,'edit via Project Page')}
+    <div class="doc-section-lbl">2. On-site point of contact</div>
+    ${fld('if-poc-name','POC name','e.g. Henry Lo 駱弘輝','full')}
+    ${fld('if-poc-phone','POC phone number','e.g. +886 912-708-652','')}
+    ${fld('if-poc-email','POC email','','')}
+    <div class="doc-section-lbl">3. Requested installation date</div>
+    ${fld('if-inst','Requested installation date','','','text',instDate)}
+    <div class="doc-section-lbl">4. Unit / form factor</div>
+    ${pullField('What type of unit is being installed?',formFactor,'edit via Project Page → Config')}
+    <div class="doc-section-lbl">5–6. SO & client</div>
+    ${pullField('Sales order (SO) number',soNum,'edit via Project Overview → Edit')}
+    ${pullField('Channel Partner',p.channel_partner||'','edit via Project Overview → Edit')}
+    ${pullField('End Client (CX)',p.client||'','edit via Project Overview → Edit')}
+    <div class="doc-section-lbl">7. Network connectivity</div>
+    ${fld('if-connectivity','What is the network connectivity?','e.g. LAN Connectivity','full')}
+    <div class="doc-section-lbl">8. Kiosk ID</div>
+    ${pullField('Kiosk ID (Naming Convention)',naming,'edit via Project Page')}
+    <div class="doc-section-lbl">9. QA Task URL</div>
+    ${pullField('QA Task URL',qaTaskUrl,'edit via Project Page → Config, or Quick Links')}
+    <div class="doc-section-lbl">10. Scope of work</div>
+    ${fldTA('if-scope','Scope of work — edit as needed for this job','',DEFAULT_INSTALL_SCOPE)}
+    <div class="doc-section-lbl">11. Special instructions</div>
+    ${fldTA('if-special','Any special instructions','Any special notes...')}
   </div>
-  <button class="btn-red" style="font-size:12px;padding:8px 20px;margin-top:4px" onclick="generateDoc('install')">Generate installation ticket →</button>
+  <button class="btn-red" style="font-size:12px;padding:8px 20px;margin-top:4px" onclick="confirmInstallAttachments()">Generate installation ticket →</button>
   <div id="doc-output-install" style="display:none;margin-top:1rem">
+    <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div style="font-size:12px;min-width:0"><span style="font-weight:600;color:var(--gray-500)">Subject: </span><span id="doc-subject-install" style="font-family:var(--mono)"></span></div>
+      <button class="btn" style="font-size:11px;padding:5px 12px;white-space:nowrap" onclick="copySubject('install')">📋 Copy subject</button>
+    </div>
     <div class="doc-output" id="doc-text-install">
-      <button class="copy-btn" onclick="copyDoc('install')">📋 Copy</button>
+      <button class="copy-btn" onclick="copyDoc('install')">📋 Copy plain text</button>
+      <button class="copy-btn" style="right:140px" onclick="copyDocHTML('install')">✨ Copy formatted</button>
       <span id="doc-content-install"></span>
     </div>
   </div>`;
@@ -4376,6 +4408,25 @@ function g(id){
   }
   return'';
 }
+function confirmInstallAttachments(){
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="event.stopPropagation()"><div class="modal" style="width:420px" onclick="event.stopPropagation()">
+    <div class="modal-head"><span class="modal-title">📎 Before you generate</span></div>
+    <div class="modal-body">
+      <div style="font-size:13px;line-height:1.6;color:var(--gray-700)">
+        Did you add <strong>all pictures and surveys</strong> to the installation ticket?
+        <div style="font-size:11px;color:var(--gray-500);margin-top:8px">This includes: planogram, machine orientation photos, and any site surveys (item 20 on the ticket). Tickets generated without these often come back for rework.</div>
+      </div>
+      <label style="display:flex;align-items:flex-start;gap:8px;margin-top:14px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="install-attach-ack" style="margin-top:2px" onchange="document.getElementById('install-attach-continue').disabled=!this.checked">
+        <span>Yes, I've attached all pictures and surveys for this installation.</span>
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button id="install-attach-continue" class="btn btn-primary" disabled onclick="closeModal();generateDoc('install')">Generate installation ticket →</button>
+    </div>
+  </div></div>`;
+}
 function generateDoc(type){
   try{
   // Make sure the right form is rendered before generating
@@ -4390,100 +4441,83 @@ function generateDoc(type){
   const safeDate=id=>{const el=document.getElementById(id);if(!el||!el.value)return'';try{return fmt(el.value);}catch(e){return el.value;}};
   let text='';
   if(type==='install'){
-    const scope=g('if-scope')||`SCOPE OF WORK — KIOSK INSTALLATION AND VALIDATION
-──────────────────────────────────────────────────
-──────────────────────────────────────────────────
-1. Kiosk Installation and Setup
-   • Unbox and assemble the Kiosk at the designated site.
-   • Make sure all parts and accessories are there.
-   • Set up the kiosk in its assigned spot, following location guidelines and safety rules.
-
-2. Network Connection
-   • Connect the kiosk to the internet using a wireless setup.
-   • Check network status on the kiosk interface to confirm it's connected.
-   • Verify the kiosk can communicate with Signifi servers.
-
-3. End-to-End Technical Test
-   • Power up the kiosk and make sure everything initializes correctly.
-   • Confirm all hardware (screen, card reader, receipt printer, etc.) is working.
-
-4. Troubleshooting (If Needed)
-   • Identify and document any network, hardware, or software issues.
-   • Contact the Signifi Support Team for help troubleshooting.
-   • Apply fixes and re-test to make sure everything's good to go.
-
-5. Planogram Workflow Tests
-   • Verify the planogram setup matches the product inventory.
-   • Run through end-to-end workflow tests.
-   • Validate these workflows on the Vision platform, working with the support team if needed.
-   • Double-check planogram numbers for accuracy.
-
-6. Kiosk Orientation for On-Site Contact / Local Staff
-   • Give local staff a quick rundown of how to operate the kiosk.
-   • Show them how to refill products and handle common issues.
-   • Make sure they're comfortable using the kiosk and can troubleshoot minor problems.
-
-7. Assist Client with Workflow Testing
-   • Help the client run through typical workflow scenarios.
-   • Answer any questions and address concerns during testing.
-   • Ensure the client is satisfied with how everything's working.
-
-8. Get Sign-Off on the User Acceptance Checklist
-   • Go over the checklist with the client, detailing everything that's been tested and validated.
-   • Address any final questions or issues.
-   • Get the client's signature to confirm their approval.
-
-9. Documentation and Reporting
-   • Take clear pictures of the fully installed kiosk.
-   • Snap an image of the signed User Acceptance Checklist.
-   • Attach all images to the installation ticket or send them to the Signifi Support Team.
-   • Send an Installation Completion Letter to the PM or attach it to the ticket.`;
+    const instP=proj||getDocProj();
+    const instSoDet=selectedDocSO?soDetails.find(d=>d.project_id===instP.id&&d.so_tag===selectedDocSO):null;
+    const instNaming=instSoDet?.naming_convention??instP.naming_convention??'';
+    const instAddress=instSoDet?.address??instP.address??'';
+    const instFormFactor=instSoDet?.form_factor||[instP.product_type,instP.form_factor].filter(Boolean).join(' — ')||'';
+    const instSoNum=selectedDocSO||instP.so_number||'';
+    const sectionDivider='-----------------------------------------------';
     text=`INSTALLATION TICKET
-${'─'.repeat(50)}
-Sales Order (SO): ${safeGet('if-so')||proj?.so_number||''}
-PM: ${g('if-pm')||proj?.pm||''}
-SDM: ${getDocProj()?.sdm||''}
-Solutions: ${getDocProj()?.solutions||''}
-Sales: ${getDocProj()?.sales||''}
-Account Manager: ${getDocProj()?.account_manager||''}
+${sectionDivider}
+PM: ${instP.pm||''}
+Sales: ${instP.sales||''}
+${sectionDivider}
 
-1. Naming Convention: ${g('if-naming')}
-2. Installation Address: ${g('if-address')}
-2. Channel Partner (CP): ${g('if-cp')}
-3. End Client (CX): ${g('if-client')}
-4. Shipping Date: ${g('if-ship')}
-5. Delivery Date: ${g('if-del')}
-6. Requested Installation Date: ${g('if-inst')}
-7. Vinyl Date: ${g('if-vinyl')}
-7. Kiosk Type: ${g('if-kiosk')}
-9. Vending Unit Elevator: ${g('if-elevator')}
-10. Screen Size: ${g('if-screen')}
-11. Workflow: ${g('if-workflow')}
-12. Authentication/Payment Device: ${g('if-auth')}
-13. Payment Device Configuration: ${g('if-payconfig')}
-14. Language: ${g('if-lang')}
-15. ADA Keypad: ${g('if-ada')}
-16. Hosting: ${g('if-hosting')}
-17. Internet Connectivity: ${g('if-connectivity')}
-18. IT Site Survey: ${g('if-survey')}
-19. Product Template: ${g('if-template')}
-20. UI Task Link: ${g('if-ui-task')}
-21. Orientation: ${g('if-orientation')}
-22. Voltage: ${g('if-voltage')}
-23. Plug Type: ${g('if-plug')}
-24. Point of Contact (POC): ${g('if-poc-name')} ${g('if-poc-email')} ${g('if-poc-phone')}
-25. QA Task: ${g('if-qa-task')}
-${g('if-badge')?`26. Badge Reader Link: ${g('if-badge')}`:''}
-${g('if-employee')?`27. Employee List: ${g('if-employee')}`:''}
-${g('if-vinyl-odoo')?`28. Vinyl Render Odoo: ${g('if-vinyl-odoo')}`:''}
-${g('if-odoo')?`
-Odoo Task: ${g('if-odoo')}`:''}
+1. INSTALLATION ADDRESS
+${instAddress}
 
-Scope of Work:
-${scope}
-${g('if-special')?`
-Special Requirements:
-${g('if-special')}`:''}`;
+2. ON-SITE POC — NAME, PHONE NUMBER & EMAIL
+Name: ${g('if-poc-name')}
+Phone: ${g('if-poc-phone')}
+Email: ${g('if-poc-email')}
+
+3. REQUESTED INSTALLATION DATE
+${g('if-inst')}
+
+4. WHAT TYPE OF UNIT IS BEING INSTALLED?
+${instFormFactor}
+
+5. WHAT IS THE SO NUMBER?
+${instSoNum}
+
+6. WHO IS THE CHANNEL PARTNER AND/OR END CLIENT?
+Channel Partner: ${instP.channel_partner||''} / End Client: ${instP.client||''}
+
+7. WHAT IS THE NETWORK CONNECTIVITY?
+${g('if-connectivity')}
+
+8. LIST THE KIOSK ID (NAMING CONVENTION)
+${instNaming}
+
+9. PROVIDE QA TASK URL
+${getDocLink('QA Task')}
+
+10. AUTHENTICATION / PAYMENT DEVICE
+${g('if-auth')}
+
+11. PAYMENT DEVICE CONFIGURATION
+${g('if-payconfig')}
+
+12. LANGUAGE
+${g('if-lang')}
+
+13. ADA KEYPAD
+${g('if-ada')}
+
+14. HOSTING
+${g('if-hosting')}
+
+15. IT SITE SURVEY
+${g('if-survey')}
+
+16. VOLTAGE
+${g('if-voltage')}
+
+17. PLUG TYPE
+${g('if-plug')}
+
+18. ORIENTATION
+${g('if-orientation')}
+
+19. WHAT IS THE SCOPE OF WORK (FULL DESCRIPTION)
+${g('if-scope')||DEFAULT_INSTALL_SCOPE}
+
+20. ANY SPECIAL INSTRUCTIONS
+${g('if-special')||'(none)'}
+
+21. ATTACH PLANOGRAM, MACHINE ORIENTATION, SITE SURVEYS
+${g('if-odoo')?`Odoo Task: ${g('if-odoo')}\n`:''}${g('if-badge')?`Badge Reader Link: ${g('if-badge')}\n`:''}${g('if-employee')?`Employee List: ${g('if-employee')}\n`:''}${g('if-vinyl-odoo')?`Vinyl Render Odoo: ${g('if-vinyl-odoo')}`:''}`;
   } else if(type==='ui'){
     text=`UI REQUEST
 ${'─'.repeat(50)}
@@ -4542,6 +4576,33 @@ ${g('qf-special')?`\nSpecial Requirements:\n${g('qf-special')}`:''}`;
   const ds=getDocState();
   if(!ds[type])ds[type]={};
   ds[type].__output=text;
+  if(type==='install'){
+    const htmlP=getDocProj();
+    const htmlSoDet=selectedDocSO?soDetails.find(d=>d.project_id===htmlP.id&&d.so_tag===selectedDocSO):null;
+    const namingForSubject=htmlSoDet?.naming_convention??htmlP.naming_convention??'';
+    const subjectParts=['Installation Request',htmlP.client||'',namingForSubject||'',g('if-inst')||''].filter(Boolean);
+    const subject=subjectParts.join(' - ');
+    ds[type].__subject=subject;
+    const subjEl=document.getElementById('doc-subject-install');
+    if(subjEl)subjEl.textContent=subject;
+    ds[type].__outputHtml=buildInstallHTML({
+      pm:htmlP.pm||'',sales:htmlP.sales||'',
+      address:htmlSoDet?.address??htmlP.address??'',
+      pocName:g('if-poc-name'),pocPhone:g('if-poc-phone'),pocEmail:g('if-poc-email'),
+      instDate:g('if-inst'),
+      formFactor:htmlSoDet?.form_factor||[htmlP.product_type,htmlP.form_factor].filter(Boolean).join(' — ')||'',
+      soNum:selectedDocSO||htmlP.so_number||'',
+      cp:htmlP.channel_partner||'',client:htmlP.client||'',
+      connectivity:g('if-connectivity'),
+      naming:namingForSubject,
+      qaTask:getDocLink('QA Task'),
+      auth:g('if-auth'),payconfig:g('if-payconfig'),lang:g('if-lang'),ada:g('if-ada'),
+      hosting:g('if-hosting'),survey:g('if-survey'),voltage:g('if-voltage'),plug:g('if-plug'),orientation:g('if-orientation'),
+      scope:g('if-scope')||DEFAULT_INSTALL_SCOPE,
+      special:g('if-special')||'(none)',
+      odoo:g('if-odoo'),badge:g('if-badge'),employee:g('if-employee'),vinylOdoo:g('if-vinyl-odoo'),
+    });
+  }
   }catch(e){alert('Generate doc error: '+e.message);}
 }
 
@@ -4579,6 +4640,77 @@ function generateAllDocs(){
   el.querySelector('.section > div').appendChild(allOutput);
   allOutput.scrollIntoView({behavior:'smooth',block:'start'});
   showToast('All three docs generated ✓');
+}
+function buildInstallHTML(d){
+  const esc=s=>(s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const nl2br=s=>esc(s).replace(/\n/g,'<br>');
+  const row=(num,label,bodyHtml)=>`
+    <tr><td style="padding:14px 0 4px 0;border-top:1px solid #e2e8f0">
+      <div style="font-size:13px;font-weight:700;color:#0E101A;margin-bottom:6px">${num}. ${esc(label)}</div>
+      <div style="font-size:13px;color:#334155;line-height:1.5">${bodyHtml||'<span style="color:#94a3b8">—</span>'}</div>
+    </td></tr>`;
+  const box=(label,bodyHtml)=>`
+    <tr><td style="padding-top:14px">
+      <div style="font-size:13px;font-weight:700;color:#0E101A;margin-bottom:8px">${esc(label)}</div>
+      <div style="border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;padding:14px 16px;font-size:13px;color:#334155;line-height:1.6">${bodyHtml}</div>
+    </td></tr>`;
+  return `<div style="font-family:Arial,Helvetica,sans-serif;max-width:640px">
+    <div style="font-size:18px;font-weight:700;color:#E22F4A;margin-bottom:10px;letter-spacing:0.3px">INSTALLATION TICKET</div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:6px"><tr>
+      <td style="font-size:13px;padding:3px 0"><strong>PM:</strong> ${esc(d.pm)}</td>
+      <td style="font-size:13px;padding:3px 0"><strong>Sales:</strong> ${esc(d.sales)}</td>
+    </tr></table>
+    <table style="width:100%;border-collapse:collapse">
+      ${row(1,'Installation Address',nl2br(d.address))}
+      ${row(2,'On-Site POC — Name, Phone Number & Email',`Name: ${esc(d.pocName)}<br>Phone: ${esc(d.pocPhone)}<br>Email: ${esc(d.pocEmail)}`)}
+      ${row(3,'Requested Installation Date',esc(d.instDate))}
+      ${row(4,'What type of unit is being installed?',esc(d.formFactor))}
+      ${row(5,'What is the SO number?',esc(d.soNum))}
+      ${row(6,'Who is the Channel Partner and/or End Client?',`Channel Partner: ${esc(d.cp)} / End Client: ${esc(d.client)}`)}
+      ${row(7,'What is the Network Connectivity?',esc(d.connectivity))}
+      ${row(8,'List the Kiosk ID (Naming Convention)',esc(d.naming))}
+      ${row(9,'Provide QA Task URL',d.qaTask?`<a href="${esc(d.qaTask)}" style="color:#2563eb">${esc(d.qaTask)}</a>`:'')}
+      ${row(10,'Authentication / Payment Device',esc(d.auth))}
+      ${row(11,'Payment Device Configuration',esc(d.payconfig))}
+      ${row(12,'Language',esc(d.lang))}
+      ${row(13,'ADA Keypad',esc(d.ada))}
+      ${row(14,'Hosting',esc(d.hosting))}
+      ${row(15,'IT Site Survey',esc(d.survey))}
+      ${row(16,'Voltage',esc(d.voltage))}
+      ${row(17,'Plug Type',esc(d.plug))}
+      ${row(18,'Orientation',esc(d.orientation))}
+      ${box('19. What is the Scope of Work (Full Description)',nl2br(d.scope))}
+      ${box('20. Any Special Instructions',nl2br(d.special))}
+      ${row(21,'Attach Planogram, machine orientation, site surveys',[d.odoo?`Odoo Task: <a href="${esc(d.odoo)}" style="color:#2563eb">${esc(d.odoo)}</a>`:'',d.badge?`Badge Reader Link: <a href="${esc(d.badge)}" style="color:#2563eb">${esc(d.badge)}</a>`:'',d.employee?`Employee List: <a href="${esc(d.employee)}" style="color:#2563eb">${esc(d.employee)}</a>`:'',d.vinylOdoo?`Vinyl Render Odoo: <a href="${esc(d.vinylOdoo)}" style="color:#2563eb">${esc(d.vinylOdoo)}</a>`:''].filter(Boolean).join('<br>'))}
+    </table>
+  </div>`;
+}
+function copyDocHTML(type){
+  const html=getDocState()[type]?.__outputHtml;
+  if(!html){showToast('Generate the ticket first');return;}
+  const blob=new Blob([html],{type:'text/html'});
+  const item=new ClipboardItem({'text/html':blob});
+  navigator.clipboard.write([item]).then(()=>showToast('Copied formatted ✓ — paste into your email')).catch(()=>{
+    // Fallback: render into a temp contenteditable, select it, and copy
+    const tmp=document.createElement('div');
+    tmp.contentEditable='true';
+    tmp.style.position='fixed';tmp.style.left='-9999px';
+    tmp.innerHTML=html;
+    document.body.appendChild(tmp);
+    const range=document.createRange();range.selectNodeContents(tmp);
+    const sel=window.getSelection();sel.removeAllRanges();sel.addRange(range);
+    document.execCommand('copy');
+    sel.removeAllRanges();
+    document.body.removeChild(tmp);
+    showToast('Copied formatted ✓ — paste into your email');
+  });
+}
+function copySubject(type){
+  const subject=getDocState()[type]?.__subject||document.getElementById('doc-subject-'+type)?.textContent||'';
+  if(!subject){showToast('Generate the ticket first');return;}
+  navigator.clipboard.writeText(subject).then(()=>showToast('Subject copied ✓')).catch(()=>{
+    const ta=document.createElement('textarea');ta.value=subject;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast('Subject copied ✓');
+  });
 }
 function copyDocText(elId){
   const el=document.getElementById(elId);
