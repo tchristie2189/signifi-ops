@@ -788,6 +788,7 @@ async function loadAll(){
 let glanceFilter='active'; // 'active' or 'archived'
 // Per-page hide completed state
 let hideCompleted={glance:false,overview:false,week:false,production:false,quality:false,shipping:false,installation:false,briefing:false,vinyl:false,planogram:false};
+let hideNoVinylDate=false;
 
 // Helper — filters out completed projects based on per-page toggle
 const PM_LIST=['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'];
@@ -849,6 +850,9 @@ function activeProjects(page){
 function hideCompletedBtn(page){
   const active=hideCompleted[page];
   return`<button onclick="hideCompleted['${page}']=!hideCompleted['${page}'];renderTab()" style="font-size:11px;padding:4px 12px;border-radius:20px;border:1px solid ${active?'var(--black)':'var(--gray-300)'};background:${active?'var(--black)':'var(--white)'};color:${active?'white':'var(--gray-500)'};cursor:pointer;font-family:var(--font);font-weight:500">${active?'✓ ':''} Hide completed</button>`;
+}
+function hideNoVinylDateBtn(){
+  return`<button onclick="hideNoVinylDate=!hideNoVinylDate;renderVinyl()" style="font-size:11px;padding:4px 12px;border-radius:20px;border:1px solid ${hideNoVinylDate?'var(--black)':'var(--gray-300)'};background:${hideNoVinylDate?'var(--black)':'var(--white)'};color:${hideNoVinylDate?'white':'var(--gray-500)'};cursor:pointer;font-family:var(--font);font-weight:500">${hideNoVinylDate?'✓ ':''} Hide no vinyl date</button>`;
 }
 
 function renderGlance(){
@@ -1506,7 +1510,17 @@ function renderVinyl(){
     if(isMaster(p)){const kids=getChildren(p.id);if(kids.length)return vinylSchedule.some(vv=>kids.some(c=>c.id===vv.project_id))===false||false;}
     return true;
   });
-  const filtered=applyVinylFilter(source);
+  let filtered=applyVinylFilter(source);
+  if(hideNoVinylDate)filtered=filtered.filter(v=>v.date);
+  // Rows with no vinyl date always sink to the bottom, regardless of which
+  // column was last sorted — a blank date shouldn't compete for a position
+  // in the middle of an otherwise date-ordered (or any-ordered) schedule.
+  filtered=[...filtered].sort((a,b)=>{
+    const aBlank=!a.date,bBlank=!b.date;
+    if(aBlank&&!bBlank)return 1;
+    if(!aBlank&&bBlank)return -1;
+    return 0; // preserve existing relative order otherwise (stable sort)
+  });
   const activeFilters=[vinylFilter.status,vinylFilter.search,vinylFilter.dateFrom,vinylFilter.dateTo].filter(Boolean).length;
   const rows=filtered.map((item,i)=>{
     const origIdx=vinylSchedule.indexOf(item);
@@ -1521,13 +1535,13 @@ function renderVinyl(){
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vinylDateSync('${item.id||'idx:'+origIdx}',this.value,'vinyl')" title="Syncs with project overview"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.shipDate||''}" onchange="vinylDateSync('${item.id||'idx:'+origIdx}',this.value,'ship')" title="Syncs with project overview"></td>
       <td style="${readStyle}">${item.pm||'—'}</td>
-      <td><select class="sched-select" multiple style="min-width:140px;height:58px;font-size:11px" title="Hold Ctrl/Cmd to select multiple" onchange="vsMulti('${item.id || origIdx}','formFactor',this)">${getProductTypes().map(t=>'<option'+((','+item.formFactor+',').includes(','+t+',')?' selected':'')+'>'+t+'</option>').join('')}</select></td>
+      <td>${vinylFormFactorCell(item,origIdx)}</td>
       <td><select class="sched-select" onchange="vs('${item.id || origIdx}','status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
       <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">✕</button></td>
     </tr>`;
   }).join('');
   el.innerHTML=`<div class="section">
-    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderVinyl')}${salesDropdown('renderVinyl')}${hideCompletedBtn('vinyl')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
+    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderVinyl')}${salesDropdown('renderVinyl')}${hideCompletedBtn('vinyl')}${hideNoVinylDateBtn()}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
     <!-- FILTER BAR -->
     <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
       <input placeholder="🔍 Search name, SO, client..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:210px" value="${vinylFilter.search}" oninput="vinylFilter.search=this.value;renderVinyl()">
@@ -1672,6 +1686,40 @@ async function syncVinylFromProjects(){
   if(error){alert('Error: '+error.message);return;}
   showToast('Restored '+toAdd.length+' row'+(toAdd.length>1?'s':'')+' — ad hoc rows untouched ✓');
   await loadAll();
+}
+function vinylFormFactorCell(item,origIdx){
+  const selected=(item.formFactor||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const display=selected.length?selected.join(', '):'<span style="color:var(--gray-400)">— none —</span>';
+  const key=item.id||origIdx;
+  return`<div style="display:flex;align-items:center;gap:6px;max-width:160px">
+    <span style="font-size:11px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${selected.join(', ').replace(/"/g,'&quot;')}">${display}</span>
+    <button onclick="openVinylFormFactorPicker('${key}',event)" style="font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid var(--gray-300);background:var(--white);color:var(--gray-600);cursor:pointer;font-family:var(--font);white-space:nowrap;flex-shrink:0">✏️</button>
+  </div>`;
+}
+function openVinylFormFactorPicker(itemId,evt){
+  evt?.stopPropagation();
+  const item=typeof itemId==='number'||/^\d+$/.test(itemId)?vinylSchedule[itemId]:vinylSchedule.find(x=>x.id===itemId)||vinylSchedule[itemId];
+  if(!item)return;
+  const selected=(item.formFactor||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const types=getProductTypes();
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:340px" onclick="event.stopPropagation()">
+    <div class="modal-head"><span class="modal-title">Form factor</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto">
+        ${types.map(t=>`<label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:5px 6px;border-radius:6px;cursor:pointer" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='transparent'">
+          <input type="checkbox" value="${t.replace(/"/g,'&quot;')}" ${selected.includes(t)?'checked':''} style="width:15px;height:15px">
+          <span>${t}</span>
+        </label>`).join('')}
+      </div>
+    </div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveVinylFormFactorPicker('${itemId}')">Save</button></div>
+  </div></div>`;
+}
+function saveVinylFormFactorPicker(itemId){
+  const checked=[...document.querySelectorAll('#modal-root input[type="checkbox"]:checked')].map(c=>c.value);
+  vs(itemId,'formFactor',checked.join(', '));
+  closeModal();
+  renderVinyl();
 }
 function vsMulti(itemId,k,selectEl){
   const selected=[...selectEl.selectedOptions].map(o=>o.value).filter(Boolean).join(', ');
