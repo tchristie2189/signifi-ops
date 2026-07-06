@@ -389,7 +389,12 @@ function ciRow(id,m,dept){
   const stoplight=ci.stoplight||'';
   const lbl=m._adhoc?m.label:(dept.labels[m.key]||m.label);
   const noteHtml=ci.notes?`<div style="font-size:11px;color:var(--gray-500);margin-top:3px;font-style:italic">💬 "${ci.notes.replace(/</g,'&lt;')}" ${ci.stoplight_by?`— ${ci.stoplight_by}`:''}</div>`:'';
-  const addNoteLink=(!ci.notes&&stoplight)?`<div style="margin-top:3px"><button onclick="openNoteModal('${id}',false)" style="background:none;border:none;cursor:pointer;color:var(--blue);font-size:10px;padding:0;font-family:var(--font)">+ Add note</button></div>`:'';
+  const safeId=id.replace(/[^a-zA-Z0-9]/g,'_');
+  const notesFieldHtml=`<div style="margin-top:6px">
+    <textarea id="note-${safeId}" placeholder="Add notes for the dashboard..." rows="2"
+      style="width:100%;font-family:var(--font);font-size:11px;padding:6px 9px;border:1px solid var(--gray-300);border-radius:6px;resize:none;color:var(--black);background:var(--white);line-height:1.4"
+      onblur="saveInlineNote('${id}',this.value)">${(ci.notes||'').replace(/</g,'&lt;')}</textarea>
+  </div>`;
   const isShipping=dept.passcode==='ship2026';
   const isDeployment=dept.passcode==='deploy2026';
   // Resolve install ticket URL: ad hoc carries it directly; project rows check so_details then projects
@@ -411,7 +416,7 @@ function ciRow(id,m,dept){
     <div class="ci-info">
       <div class="ci-label">${lbl}${m._adhoc?` <span style="font-size:9px;color:var(--gray-400)">${m.client||m.so||''}</span>`:''}</div>
       <div class="ci-date ${dateCls}">${dateLabel}</div>
-      ${noteHtml}${addNoteLink}${ticketHtml}${shipStatusHtml}
+      ${ticketHtml}${notesFieldHtml}${shipStatusHtml}
     </div>
     <div class="stoplight">
       <div class="sl-btn sl-green${stoplight==='green'?' active':''}" title="On track" onclick="setStoplight('${id}','green',this)"></div>
@@ -628,8 +633,26 @@ async function saveCheckinShipStatus(m,status){
 // Store current items for save callbacks
 window._ciItemMap={};
 
+async function saveInlineNote(milestoneId,note){
+  const existing=checkins[milestoneId];
+  const now=new Date().toISOString();
+  const payload={notes:note||null,updated_at:now};
+  if(existing){
+    await sb.from('checkin_status').update(payload).eq('milestone_id',milestoneId);
+    checkins[milestoneId]={...existing,...payload};
+  } else {
+    const m=window._ciItemMap?.[milestoneId];
+    const{data}=await sb.from('checkin_status').insert({
+      milestone_id:milestoneId,project_id:m?.project_id||null,
+      stoplight:null,checked:false,dept:currentDept?.name||'',
+      ...payload
+    }).select().single();
+    if(data)checkins[milestoneId]=data;
+  }
+  // Don't re-render on blur to avoid losing focus mid-typing
+}
+
 function signOut(){
-  sessionStorage.removeItem('ci_pass');
   sessionStorage.removeItem('ci_name');
   currentDept=null;currentUserName=null;
   document.getElementById('main-wrap').style.display='none';
