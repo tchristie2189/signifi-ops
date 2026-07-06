@@ -232,14 +232,16 @@ function getGreeting(){const h=new Date().getHours();return h<12?'morning':h<17?
 
 // ── DATA ──────────────────────────────────────────────────
 async function loadCheckinData(){
-  const[pr,ms,ci,ah]=await Promise.all([
+  const[pr,ms,ci,ah,sod]=await Promise.all([
     sb.from('projects').select('*').neq('status','complete').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('checkin_status').select('*'),
     sb.from('adhoc_schedule').select('*').order('created_at'),
+    sb.from('so_details').select('*'),
   ]);
   projects=pr.data||[];
   milestones=ms.data||[];
+  window._soDetails=sod.data||[];
   checkins={};
   (ci.data||[]).forEach(c=>{checkins[c.milestone_id]=c;});
   // Also index by adhoc id for ad hoc stoplights
@@ -378,6 +380,7 @@ function render(){
 }
 
 function ciRow(id,m,dept){
+  window._ciItemMap[id]=m; // store for save callbacks
   const ci=checkins[id]||{};
   const d=daysDiff(m.date);
   const dateCls=d<0?'overdue':d===0?'today':d<=3?'soon':'';
@@ -387,11 +390,17 @@ function ciRow(id,m,dept){
   const lbl=m._adhoc?m.label:(dept.labels[m.key]||m.label);
   const noteHtml=ci.notes?`<div style="font-size:11px;color:var(--gray-500);margin-top:3px;font-style:italic">💬 "${ci.notes.replace(/</g,'&lt;')}" ${ci.stoplight_by?`— ${ci.stoplight_by}`:''}</div>`:'';
   const addNoteLink=(!ci.notes&&stoplight)?`<div style="margin-top:3px"><button onclick="openNoteModal('${id}',false)" style="background:none;border:none;cursor:pointer;color:var(--blue);font-size:10px;padding:0;font-family:var(--font)">+ Add note</button></div>`:'';
+  const isShipping=dept.passcode==='ship2026';
+  const shipStatusHtml=isShipping?`<div style="margin-top:6px">
+    <select id="ss-${id.replace(/[^a-zA-Z0-9]/g,'_')}" onchange="const itm=window._ciItemMap['${id}'];if(itm)saveCheckinShipStatus(itm,this.value)" style="font-size:11px;padding:3px 8px;border:1px solid var(--gray-300);border-radius:20px;font-family:var(--font);font-weight:600;cursor:pointer;background:white;color:var(--gray-700)">
+      ${SHIP_STATUS_OPTS.map(o=>`<option value="${o}"${o===getCheckinShippingStatus(m)?' selected':''}>${o}</option>`).join('')}
+    </select>
+  </div>`:'';
   return`<div class="ci-row" style="align-items:flex-start;padding-top:10px;padding-bottom:10px">
     <div class="ci-info">
       <div class="ci-label">${lbl}${m._adhoc?` <span style="font-size:9px;color:var(--gray-400)">${m.client||m.so||''}</span>`:''}</div>
       <div class="ci-date ${dateCls}">${dateLabel}</div>
-      ${noteHtml}${addNoteLink}
+      ${noteHtml}${addNoteLink}${shipStatusHtml}
     </div>
     <div class="stoplight">
       <div class="sl-btn sl-green${stoplight==='green'?' active':''}" title="On track" onclick="setStoplight('${id}','green',this)"></div>
@@ -565,6 +574,48 @@ async function submitExtensionRequest(){
   closeExtensionModal();
   showToast('⏳ Request sent — PM will review the new timeline');
 }
+
+// ── SHIPPING STATUS (CHECKIN) ──────────────────────────────
+const SHIP_STATUS_OPTS=['Pending','Scheduled','Shipped','Delivered'];
+function shipStatusChipCls(s){return s==='Delivered'?'chip-done':s==='Shipped'?'chip-atrisk':s==='Scheduled'?'chip-active':'chip-future';}
+function getCheckinShippingStatus(m){
+  if(m._adhoc){
+    const r=(window._adHocShipping||[]).find(x=>'adhoc-ship-'+x.id===m._id);
+    return r?.status||'Pending';
+  }
+  const soTag=m.so_tag||null;
+  const proj=projects.find(p=>p.id===m.project_id);
+  if(soTag){const soDet=(window._soDetails||[]).find(d=>d.project_id===m.project_id&&d.so_tag===soTag);if(soDet?.shipping_status)return soDet.shipping_status;}
+  if(proj?.shipping_status)return proj.shipping_status;
+  // Auto-compute from milestone state (checkin has milestone data)
+  const shipMs=milestones.find(x=>x.project_id===m.project_id&&x.key==='shipping'&&(soTag?x.so_tag===soTag:true));
+  const delivMs=milestones.find(x=>x.project_id===m.project_id&&x.key==='delivery'&&(soTag?x.so_tag===soTag:true));
+  const isDone=(ms)=>ms&&checkins[ms.id]?.checked&&checkins[ms.id]?.stoplight==='green';
+  if(delivMs&&isDone(delivMs))return'Delivered';
+  if(shipMs&&isDone(shipMs))return'Shipped';
+  if(shipMs&&shipMs.date)return'Scheduled';
+  return'Pending';
+}
+async function saveCheckinShipStatus(m,status){
+  if(m._adhoc){
+    const ahId=m._id.replace('adhoc-ship-','');
+    await sb.from('adhoc_schedule').update({status}).eq('id',ahId);
+    const r=(window._adHocShipping||[]).find(x=>x.id==ahId);if(r)r.status=status;
+  } else {
+    const soTag=m.so_tag||null;
+    if(soTag){
+      const existing=(window._soDetails||[]).find(d=>d.project_id===m.project_id&&d.so_tag===soTag);
+      if(existing){await sb.from('so_details').update({shipping_status:status,updated_at:new Date().toISOString()}).eq('id',existing.id);existing.shipping_status=status;}
+      else{const{data}=await sb.from('so_details').insert({project_id:m.project_id,so_tag:soTag,shipping_status:status}).select().single();if(data)(window._soDetails||[]).push(data);}
+    } else {
+      await sb.from('projects').update({shipping_status:status}).eq('id',m.project_id);
+      const p=projects.find(x=>x.id===m.project_id);if(p)p.shipping_status=status;
+    }
+  }
+  render();
+}
+// Store current items for save callbacks
+window._ciItemMap={};
 
 function signOut(){
   sessionStorage.removeItem('ci_pass');
