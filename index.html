@@ -1246,6 +1246,7 @@ function renderWeek(){
     if(weekDeptFilter==='adhoc')return m._adhoc;
     if(m._adhoc)return false;
     const deptKeyMap={shipping:['shipping','delivery'],arrival:['arrival','parts-arrival'],production:['production-start','production-end','inventory-pick'],qa:['quality-start','quality-end'],uat:['uat'],vinyl:['vinyl'],installation:['training','installation']};
+    if(weekDeptFilter==='ui')return m.key==='other'&&/ui\s*(start|end)/i.test(m.label||'');
     return (deptKeyMap[weekDeptFilter]||[]).includes(m.key);
   }):allMsWithAdhoc;
   const daysHtml=[0,1,2,3,4].map(i=>{
@@ -1275,6 +1276,7 @@ function renderWeek(){
         <option value="arrival"${weekDeptFilter==='arrival'?' selected':''}>📦 Arrival</option>
         <option value="production"${weekDeptFilter==='production'?' selected':''}>🏭 Production</option>
         <option value="qa"${weekDeptFilter==='qa'?' selected':''}>✅ QA</option>
+        <option value="ui"${weekDeptFilter==='ui'?' selected':''}>🖥 UI</option>
         <option value="uat"${weekDeptFilter==='uat'?' selected':''}>🖥 UAT</option>
         <option value="vinyl"${weekDeptFilter==='vinyl'?' selected':''}>🎨 Vinyl</option>
         <option value="installation"${weekDeptFilter==='installation'?' selected':''}>🔧 Installation</option>
@@ -2026,11 +2028,13 @@ const DEPT_LABEL_MATCH={'Software / UI':['UI start','UI end'],'Inventory':['Inve
 const DEPT_COLORS={'Production':'#7c3aed','Software / UI':'#2563eb','Inventory':'#0891b2','Procurement':'#d97706','MO Release':'#6b6b6b','Quality':'#d97706','Shipping':'#059669','Deployment':'#db2777'};
 const SL_COLORS={green:'#22c55e',yellow:'#eab308',red:'#ef4444'};
 
+let checkinDeptFilter=''; // dept filter for check-in overview
+
 function renderCheckinOverview(){
   const el=document.getElementById('tab-checkin');
   const base=monday(today());
   const weeks=[{label:'This week',start:base},{label:'Next week',start:addD(base,7)}];
-  const apci=filterBySales(filterByPM(activeProjects('checkin')));
+  const apci=filterByPM(activeProjects('checkin'));
   const depts=Object.keys(DEPT_KEYS);
 
   function getDeptMs(dept,wStart){
@@ -2042,31 +2046,18 @@ function renderCheckinOverview(){
       if(!m.date)return false;
       const d=new Date(m.date+'T00:00:00');
       if(d<wStart||d>wEnd)return false;
-      if(keys.includes(m.key)){
-        if(!lbls.length)return true;
-        return lbls.some(l=>(m.label||'').toLowerCase().includes(l.toLowerCase()));
-      }
+      if(keys.includes(m.key)){if(!lbls.length)return true;return lbls.some(l=>(m.label||'').toLowerCase().includes(l.toLowerCase()));}
       return false;
     });
-    // Add ad hoc items for shipping/deployment depts
+    // Deduplicate SO-split: one row per unique label per project (earliest date wins)
+    const seen={};const deduped=[];
+    [...projectMs].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(m=>{
+      const k=m.project_id+'|'+m.label;if(!seen[k]){seen[k]=true;deduped.push(m);}
+    });
     const adHocForDept=[];
-    if(dept==='Shipping'){
-      (adHocRows.shipping||[]).forEach(r=>{
-        const d=r.shipDate||r.ship_date||'';
-        if(!d)return;
-        const dt=new Date(d+'T00:00:00');
-        if(dt>=wStart&&dt<=wEnd)adHocForDept.push({id:'adhoc-ship-'+r.id,label:r.name,date:d,key:'shipping',project_id:null,_adhoc:true,_raw:r});
-      });
-    }
-    if(dept==='Deployment'){
-      (adHocRows.installation||[]).forEach(r=>{
-        const d=r.installDate||r.install_date||'';
-        if(!d)return;
-        const dt=new Date(d+'T00:00:00');
-        if(dt>=wStart&&dt<=wEnd)adHocForDept.push({id:'adhoc-inst-'+r.id,label:r.name,date:d,key:'installation',project_id:null,_adhoc:true,_raw:r});
-      });
-    }
-    return[...projectMs,...adHocForDept];
+    if(dept==='Shipping'){(adHocRows.shipping||[]).forEach(r=>{const d=r.shipDate||r.ship_date||'';if(!d)return;const dt=new Date(d+'T00:00:00');if(dt>=wStart&&dt<=wEnd)adHocForDept.push({id:'adhoc-ship-'+r.id,label:r.name,date:d,key:'shipping',project_id:null,_adhoc:true,_raw:r});});}
+    if(dept==='Deployment'){(adHocRows.installation||[]).forEach(r=>{const d=r.installDate||r.install_date||'';if(!d)return;const dt=new Date(d+'T00:00:00');if(dt>=wStart&&dt<=wEnd)adHocForDept.push({id:'adhoc-inst-'+r.id,label:r.name,date:d,key:'installation',project_id:null,_adhoc:true,_raw:r});});}
+    return[...deduped,...adHocForDept];
   }
 
   function ageLabel(iso){
@@ -2082,65 +2073,101 @@ function renderCheckinOverview(){
     const ci=checkinStatus[mId]||{};
     const sl=ci.stoplight||'';
     const chk=ci.checked||false;
-    const dotsRow='<div style="display:flex;align-items:center;gap:5px">'+
-      ['green','yellow','red'].map(c=>'<div style="width:18px;height:18px;border-radius:50%;background:'+SL_COLORS[c]+';opacity:'+(sl===c?1:0.15)+'" title="'+(c==='green'?'On track':c==='yellow'?'In trouble':'Escalation')+'"></div>').join('')+
-      (chk?'<span style="font-size:12px;color:var(--success);font-weight:600;margin-left:2px">✓</span>':'<span style="font-size:11px;color:var(--gray-300);margin-left:2px">○</span>')+
+    const dots='<div style="display:flex;align-items:center;gap:4px">'+
+      ['green','yellow','red'].map(c=>'<div style="width:16px;height:16px;border-radius:50%;background:'+SL_COLORS[c]+';opacity:'+(sl===c?1:0.15)+'"></div>').join('')+
+      (chk?'<span style="font-size:11px;color:var(--success);font-weight:700;margin-left:3px">✓</span>':'<span style="font-size:11px;color:var(--gray-300);margin-left:3px">○</span>')+
     '</div>';
-    const metaBits=[];
-    if(sl&&ci.stoplight_by)metaBits.push(ci.stoplight_by+' · '+ageLabel(ci.stoplight_at));
-    if(chk&&ci.checked_by)metaBits.push('Done: '+ci.checked_by+' · '+ageLabel(ci.checked_at));
-    const metaHtml=metaBits.length?'<div style="font-size:9px;color:var(--gray-400);margin-top:2px">'+metaBits.join(' · ')+'</div>':'';
-    const noteHtml=ci.notes?'<div style="font-size:10px;color:'+(sl==='red'?'var(--red)':'var(--gray-500)')+';margin-top:3px;font-style:italic;max-width:220px">💬 "'+ci.notes.replace(/</g,'&lt;')+'"</div>':'';
-    return dotsRow+metaHtml+noteHtml;
+    const who=(sl&&ci.stoplight_by)?'<div style="font-size:9px;color:var(--gray-400);margin-top:2px">'+ci.stoplight_by+' · '+ageLabel(ci.stoplight_at)+'</div>':'';
+    return dots+who;
   }
 
-  const thStyle='padding:7px 12px;font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;text-align:left;border-bottom:1px solid var(--gray-100);background:var(--gray-50)';
+  const filteredDepts=checkinDeptFilter?[checkinDeptFilter]:depts;
 
   const weeksHtml=weeks.map(w=>{
-    const allMs=depts.flatMap(d=>getDeptMs(d,w.start));
+    const allMs=filteredDepts.flatMap(d=>getDeptMs(d,w.start));
     const greens=allMs.filter(m=>checkinStatus[m.id]?.stoplight==='green').length;
     const yellows=allMs.filter(m=>checkinStatus[m.id]?.stoplight==='yellow').length;
     const reds=allMs.filter(m=>checkinStatus[m.id]?.stoplight==='red').length;
     const unchecked=allMs.filter(m=>!checkinStatus[m.id]?.stoplight).length;
-    const rows=depts.map(dept=>{
+    const total=allMs.length;
+
+    const deptSections=filteredDepts.map(dept=>{
       const dms=getDeptMs(dept,w.start);
-      if(!dms.length)return'<tr><td style="padding:7px 12px;font-size:12px;font-weight:600;color:'+DEPT_COLORS[dept]+';white-space:nowrap">'+dept+'</td><td colspan="5" style="padding:7px 12px;font-size:11px;color:var(--gray-300)">No milestones this week</td></tr>';
-      return dms.map((m,i)=>{
+      if(!dms.length)return'';
+      const color=DEPT_COLORS[dept]||'#6b6b6b';
+      const deptAllDone=dms.every(m=>checkinStatus[m.id]?.stoplight==='green'&&checkinStatus[m.id]?.checked);
+      const deptHasRed=dms.some(m=>checkinStatus[m.id]?.stoplight==='red');
+      const deptHasYellow=dms.some(m=>checkinStatus[m.id]?.stoplight==='yellow');
+      const deptIcon=deptAllDone?'✅':deptHasRed?'🔴':deptHasYellow?'🟡':'';
+
+      const cards=dms.map(m=>{
         const proj=projects.find(p=>p.id===m.project_id);
+        const ci=checkinStatus[m.id]||{};
+        const sl=ci.stoplight||'';
+        const chk=ci.checked||false;
         const d=daysDiff(m.date);
-        const dcss=d<0?'color:var(--red)':d===0?'color:var(--success);font-weight:600':d<=3?'color:var(--blue)':'color:var(--gray-500)';
-        const dlbl=d<0?Math.abs(d)+'d overdue':d===0?'Today':fmt(m.date);
+        const dateColor=d<0?'#991b1b':d===0?'#166534':d<=2?'#1d4ed8':'#475569';
+        const dateBg=d<0?'#fee2e2':d===0?'#dcfce7':d<=2?'#eff6ff':'#f1f5f9';
+        const dateLabel=d<0?Math.abs(d)+'d overdue':d===0?'Today':fmt(m.date);
+        const borderColor=sl==='green'?'#22c55e':sl==='yellow'?'#eab308':sl==='red'?'#ef4444':'#e2e8f0';
         const projName=proj?proj.name:(m._adhoc?m.label:'—');
-        const projSO=proj?proj.so_number:(m._adhoc?m._raw?.so||'':'');
-        const adHocBadge=m._adhoc?'<span style="font-size:9px;background:var(--blue);color:white;padding:1px 4px;border-radius:6px;margin-left:4px">Ad hoc</span>':'';
-        return'<tr style="border-bottom:1px solid var(--gray-50)'+(m._adhoc?';background:var(--blue-bg)':'')+'">'+
-          (i===0?'<td style="padding:7px 12px;font-size:12px;font-weight:600;color:'+DEPT_COLORS[dept]+';white-space:nowrap;vertical-align:top" rowspan="'+dms.length+'">'+dept+'</td>':'')+
-          '<td style="padding:6px 12px;font-size:12px;font-weight:500">'+projName+adHocBadge+'</td>'+
-          '<td style="padding:6px 12px;font-size:11px;color:var(--gray-500);font-family:var(--mono)">'+projSO+'</td>'+
-          '<td style="padding:6px 12px;font-size:11px">'+m.label+'</td>'+
-          '<td style="padding:6px 12px;font-size:11px;'+dcss+'">'+dlbl+'</td>'+
-          '<td style="padding:6px 12px">'+slDots(m.id)+'</td>'+
-        '</tr>';
+        // Compact SO — truncate long lists to first 2 then +N
+        const rawSO=proj?proj.so_number:(m._adhoc?m._raw?.so||'':'');
+        const soList=rawSO.split(',').map(s=>s.trim()).filter(Boolean);
+        const compactSO=soList.length>2?soList.slice(0,2).join(', ')+' <span style="color:var(--gray-400)">+'+( soList.length-2)+'</span>':rawSO;
+        const soHtml=rawSO?'<span style="font-family:var(--mono);font-size:10px;color:var(--red)">'+compactSO+'</span>':'';
+
+        // Note — prominent if exists
+        const noteHtml=ci.notes?`<div style="margin-top:6px;padding:5px 9px;background:${sl==='red'?'#fef2f2':sl==='yellow'?'#fffbeb':'#f8fafc'};border-radius:5px;border-left:3px solid ${sl==='red'?'#ef4444':sl==='yellow'?'#eab308':'#cbd5e1'}"><span style="font-size:11px;color:${sl==='red'?'#991b1b':sl==='yellow'?'#92400e':'#374151'}">💬 ${ci.notes.replace(/</g,'&lt;')}</span><span style="font-size:10px;color:var(--gray-400);margin-left:6px">${ci.stoplight_by?'— '+ci.stoplight_by:''}</span></div>`:'';
+        const whoChecked=chk&&ci.checked_by?`<span style="font-size:9px;color:var(--gray-400);margin-left:6px">Done by ${ci.checked_by}</span>`:'';
+
+        return`<div style="border:1px solid ${borderColor};border-left:3px solid ${borderColor};border-radius:8px;padding:10px 12px;background:white">
+          <div style="display:flex;align-items:flex-start;gap:8px">
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:3px">
+                <span style="font-size:12px;font-weight:600;color:var(--black)">${projName}</span>
+                ${soHtml}
+                ${m._adhoc?'<span style="font-size:9px;background:var(--blue);color:white;padding:1px 5px;border-radius:5px;font-weight:600">Ad hoc</span>':''}
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:8px;background:${dateBg};color:${dateColor}">${dateLabel}</span>
+                <span style="font-size:11px;color:var(--gray-500)">${m.label}</span>
+                ${whoChecked}
+              </div>
+              ${noteHtml}
+            </div>
+            <div style="flex-shrink:0">${slDots(m.id)}</div>
+          </div>
+        </div>`;
       }).join('');
-    }).join('');
-    return'<div class="section" style="margin-bottom:12px">'+
-      '<div class="section-head">'+
-        '<div class="section-title">'+w.label+' — '+fmt(isoD(w.start))+' to '+fmt(isoD(addD(w.start,4)))+'</div>'+
-        '<div style="display:flex;gap:8px;align-items:center">'+
-          (reds>0?'<span style="font-size:11px;font-weight:600;color:#ef4444">🔴 '+reds+' escalation'+(reds>1?'s':'')+'</span>':'')+
-          (yellows>0?'<span style="font-size:11px;font-weight:600;color:#eab308">🟡 '+yellows+' in trouble</span>':'')+
-          '<span style="font-size:11px;color:var(--gray-500)">'+greens+' on track · '+unchecked+' not checked</span>'+
-        '</div>'+
-      '</div>'+
-      (allMs.length?'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse"><thead><tr>'+
-        '<th style="'+thStyle+'">Dept</th><th style="'+thStyle+'">Project</th><th style="'+thStyle+'">SO</th><th style="'+thStyle+'">Milestone</th><th style="'+thStyle+'">Date</th><th style="'+thStyle+'">Status</th>'+
-      '</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="empty-state">No milestones this week.</div>')+
-    '</div>';
+
+      return`<div style="margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:7px;margin-bottom:6px;padding-bottom:5px;border-bottom:2px solid ${color}20">
+          <span style="font-size:12px;font-weight:700;color:${color}">${dept}</span>
+          <span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;background:${color}15;color:${color}">${dms.length}</span>
+          ${deptIcon?`<span style="font-size:12px">${deptIcon}</span>`:''}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:6px">${cards}</div>
+      </div>`;
+    }).filter(Boolean).join('');
+
+    return`<div class="section" style="margin-bottom:12px">
+      <div class="section-head">
+        <div class="section-title">${w.label} — ${fmt(isoD(w.start))} to ${fmt(isoD(addD(w.start,4)))}</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          ${reds>0?`<span style="font-size:11px;font-weight:600;color:#ef4444">🔴 ${reds} escalation${reds>1?'s':''}</span>`:''}
+          ${yellows>0?`<span style="font-size:11px;font-weight:600;color:#eab308">🟡 ${yellows} in trouble</span>`:''}
+          <span style="font-size:11px;color:var(--gray-500)">${greens} on track · ${unchecked} not checked · ${total} total</span>
+        </div>
+      </div>
+      <div style="padding:14px 16px">
+        ${deptSections||'<div class="empty-state">No milestones this week.</div>'}
+      </div>
+    </div>`;
   }).join('');
 
-  // Build an "Escalations" rollup across ALL active red check-ins (not just this/next week)
-  // so a part-missing flag from yesterday doesn't silently scroll out of view.
-  const allActiveMs=depts.flatMap(d=>[...getDeptMs(d,base),...getDeptMs(d,addD(base,7))]);
+  // Escalations panel
+  const allActiveMs=filteredDepts.flatMap(d=>[...getDeptMs(d,base),...getDeptMs(d,addD(base,7))]);
   const escalations=Object.entries(checkinStatus).filter(([mId,ci])=>ci.stoplight==='red').map(([mId,ci])=>{
     const m=milestones.find(x=>x.id===mId)||allActiveMs.find(x=>x.id===mId);
     const proj=m?projects.find(p=>p.id===m.project_id):null;
@@ -2152,15 +2179,18 @@ function renderCheckinOverview(){
     escalations.map(({ci,m,proj})=>{
       const ageMins=ci.stoplight_at?Math.round((Date.now()-new Date(ci.stoplight_at).getTime())/60000):0;
       const ageStr=ageMins<60?ageMins+'m':ageMins<1440?Math.round(ageMins/60)+'h':Math.round(ageMins/1440)+'d';
-      return'<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:6px 0;border-top:1px solid #7f1d1d;font-size:12px;color:#fecaca">'+
-        '<div><strong>'+(proj?proj.name:m.label)+'</strong>'+(proj?.so_number?' <span style="font-family:var(--mono);font-size:10px;opacity:0.7">'+proj.so_number+'</span>':'')+' — '+m.label+
-        (ci.notes?'<div style="font-style:italic;margin-top:2px;opacity:0.9">💬 "'+ci.notes.replace(/</g,'&lt;')+'"</div>':'')+'</div>'+
-        '<div style="white-space:nowrap;margin-left:12px;text-align:right;opacity:0.8">'+(ci.dept||'')+'<br>'+(ci.stoplight_by||'')+' · '+ageStr+' ago</div>'+
+      const rawSO=proj?.so_number||'';
+      const soList=rawSO.split(',').map(s=>s.trim()).filter(Boolean);
+      const compactSO=soList.length>2?soList.slice(0,2).join(', ')+'…':rawSO;
+      return'<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:8px 0;border-top:1px solid #7f1d1d;font-size:12px;color:#fecaca">'+
+        '<div><strong>'+(proj?proj.name:m.label)+'</strong>'+(compactSO?' <span style="font-family:var(--mono);font-size:10px;opacity:0.7">'+compactSO+'</span>':'')+' — '+m.label+
+        (ci.notes?'<div style="margin-top:4px;padding:4px 8px;background:rgba(255,255,255,0.08);border-radius:4px;font-style:italic;font-size:11px">💬 "'+ci.notes.replace(/</g,'&lt;')+'"</div>':'')+'</div>'+
+        '<div style="white-space:nowrap;margin-left:12px;text-align:right;opacity:0.8;font-size:11px">'+(ci.dept||'')+'<br>'+(ci.stoplight_by||'')+' · '+ageStr+' ago</div>'+
       '</div>';
     }).join('')+
   '</div>':'';
 
-  // Pending extension requests — surfaced prominently so they don't get missed
+  // Pending extensions
   const pendingExt=extensionRequests.filter(r=>r.status==='pending');
   const pendingExtHtml=pendingExt.length?'<div style="background:#1e293b;border:1px solid #3b82f6;border-radius:var(--radius);padding:12px 16px;margin-bottom:1rem">'+
     '<div style="font-size:12px;font-weight:700;color:#93c5fd;margin-bottom:8px">⏳ '+pendingExt.length+' pending extension request'+(pendingExt.length>1?'s':'')+'</div>'+
@@ -2171,7 +2201,7 @@ function renderCheckinOverview(){
       const ageStr=ageMins<60?ageMins+'m':ageMins<1440?Math.round(ageMins/60)+'h':Math.round(ageMins/1440)+'d';
       return'<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:7px 0;border-top:1px solid #334155;font-size:12px;color:#cbd5e1">'+
         '<div><strong>'+(proj?proj.name:'—')+'</strong>'+(r.so_tag?' <span style="font-family:var(--mono);font-size:10px;opacity:0.7">'+r.so_tag+'</span>':'')+' — +'+r.days+' day'+(r.days>1?'s':'')+' on '+(m?m.label:'')+
-        '<div style="font-style:italic;margin-top:2px;opacity:0.85">💬 "'+r.reason.replace(/</g,'&lt;')+'"</div></div>'+
+        '<div style="margin-top:3px;font-style:italic;opacity:0.85;font-size:11px">💬 "'+r.reason.replace(/</g,'&lt;')+'"</div></div>'+
         '<div style="white-space:nowrap;margin-left:12px;text-align:right">'+
           '<div style="opacity:0.7;font-size:11px">'+r.dept+' · '+(r.requested_by||'')+' · '+ageStr+' ago</div>'+
           '<button onclick="openExtensionReview(\''+r.id+'\')" style="margin-top:4px;font-size:11px;padding:4px 12px;border-radius:var(--radius);border:1px solid #3b82f6;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500">Review →</button>'+
@@ -2180,14 +2210,23 @@ function renderCheckinOverview(){
     }).join('')+
   '</div>':'';
 
-  el.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">'+
+  // Dept filter dropdown
+  const deptFilterHtml=`<select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="checkinDeptFilter=this.value;renderCheckinOverview()">
+    <option value="">All Depts</option>
+    ${depts.map(d=>`<option value="${d}"${checkinDeptFilter===d?' selected':''}>${d}</option>`).join('')}
+  </select>`;
+
+  el.innerHTML=
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:8px">'+
     '<div><div style="font-size:16px;font-weight:600">🚦 Department check-in</div>'+
     '<div style="font-size:12px;color:var(--gray-500);margin-top:2px">Dept leads update via <strong>signifi-ops.vercel.app/checkin</strong></div></div>'+
-    pmDropdown('renderCheckinOverview')+pmDropdown('renderCheckinOverview')+salesDropdown('renderCheckinOverview')+'<button class="btn" style="font-size:11px;padding:4px 10px" onclick="snapshotCheckin()" title="Save this week\'s stoplights to history">📸 Snapshot week</button>'+'<button class="btn-export" onclick="loadAll()">↻ Refresh</button></div>'+
-    pendingExtHtml+
-    escalationsHtml+
-    '<div style="background:var(--blue-bg);border:1px solid #bfdbfe;border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;font-size:11px;color:var(--blue)">'+
-    '<strong>Dept passcodes:</strong> Production: <code>prod2026</code> · UI: <code>ui2026</code> · Inventory: <code>inv2026</code> · Procurement: <code>proc2026</code> · MO: <code>mo2026</code> · QA: <code>qa2026</code> · Shipping: <code>ship2026</code> · Deployment: <code>deploy2026</code></div>'+
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+
+    pmDropdown('renderCheckinOverview')+deptFilterHtml+
+    '<button class="btn" style="font-size:11px;padding:4px 10px" onclick="snapshotCheckin()" title="Save this week\'s stoplights to history">📸 Snapshot</button>'+
+    '<button class="btn-export" onclick="loadAll()">↻ Refresh</button></div></div>'+
+    pendingExtHtml+escalationsHtml+
+    '<div style="background:var(--blue-bg);border:1px solid #bfdbfe;border-radius:var(--radius);padding:8px 14px;margin-bottom:1rem;font-size:11px;color:var(--blue)">'+
+    '<strong>Passcodes:</strong> Production: <code>prod2026</code> · UI: <code>ui2026</code> · Inventory: <code>inv2026</code> · Procurement: <code>proc2026</code> · MO: <code>mo2026</code> · QA: <code>qa2026</code> · Shipping: <code>ship2026</code> · Deployment: <code>deploy2026</code></div>'+
     weeksHtml;
 }
 
