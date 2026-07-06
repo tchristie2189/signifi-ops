@@ -283,7 +283,7 @@ function render(){
       const d=r.ship_date||'';
       if(!d)return;
       const dt=new Date(d+'T00:00:00');
-      if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-ship-'+r.id,_adhoc:true,label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||''});
+      if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-ship-'+r.id,_adhoc:true,label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||'',_ticketUrl:r.install_ticket_url||''});
     });
   }
   if(dept.passcode==='deploy2026'){
@@ -291,7 +291,7 @@ function render(){
       const d=r.install_date||'';
       if(!d)return;
       const dt=new Date(d+'T00:00:00');
-      if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-inst-'+r.id,_adhoc:true,label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||''});
+      if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-inst-'+r.id,_adhoc:true,label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||'',_ticketUrl:r.install_ticket_url||''});
     });
   }
 
@@ -391,6 +391,17 @@ function ciRow(id,m,dept){
   const noteHtml=ci.notes?`<div style="font-size:11px;color:var(--gray-500);margin-top:3px;font-style:italic">💬 "${ci.notes.replace(/</g,'&lt;')}" ${ci.stoplight_by?`— ${ci.stoplight_by}`:''}</div>`:'';
   const addNoteLink=(!ci.notes&&stoplight)?`<div style="margin-top:3px"><button onclick="openNoteModal('${id}',false)" style="background:none;border:none;cursor:pointer;color:var(--blue);font-size:10px;padding:0;font-family:var(--font)">+ Add note</button></div>`:'';
   const isShipping=dept.passcode==='ship2026';
+  const isDeployment=dept.passcode==='deploy2026';
+  // Resolve install ticket URL: ad hoc carries it directly; project rows check so_details then projects
+  let _ticketUrl='';
+  if(m._adhoc){
+    _ticketUrl=m._ticketUrl||'';
+  } else if(isShipping||isDeployment){
+    const _soTag=m.so_tag||null;
+    const _soDet=_soTag?(window._soDetails||[]).find(d=>d.project_id===m.project_id&&d.so_tag===_soTag):null;
+    _ticketUrl=_soDet?.install_ticket_url||projects.find(p=>p.id===m.project_id)?.install_ticket_url||'';
+  }
+  const ticketHtml=_ticketUrl?`<div style="margin-top:4px"><a href="${_ticketUrl}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);font-weight:500;text-decoration:none">🎫 Install ticket ↗</a></div>`:'';
   const shipStatusHtml=isShipping?`<div style="margin-top:6px">
     <select id="ss-${id.replace(/[^a-zA-Z0-9]/g,'_')}" onchange="const itm=window._ciItemMap['${id}'];if(itm)saveCheckinShipStatus(itm,this.value)" style="font-size:11px;padding:3px 8px;border:1px solid var(--gray-300);border-radius:20px;font-family:var(--font);font-weight:600;cursor:pointer;background:white;color:var(--gray-700)">
       ${SHIP_STATUS_OPTS.map(o=>`<option value="${o}"${o===getCheckinShippingStatus(m)?' selected':''}>${o}</option>`).join('')}
@@ -400,7 +411,7 @@ function ciRow(id,m,dept){
     <div class="ci-info">
       <div class="ci-label">${lbl}${m._adhoc?` <span style="font-size:9px;color:var(--gray-400)">${m.client||m.so||''}</span>`:''}</div>
       <div class="ci-date ${dateCls}">${dateLabel}</div>
-      ${noteHtml}${addNoteLink}${shipStatusHtml}
+      ${noteHtml}${addNoteLink}${ticketHtml}${shipStatusHtml}
     </div>
     <div class="stoplight">
       <div class="sl-btn sl-green${stoplight==='green'?' active':''}" title="On track" onclick="setStoplight('${id}','green',this)"></div>
