@@ -429,6 +429,7 @@ const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod s
 const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa','final-qc':'ev-fqc',uat:'ev-uat',installation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
 const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date','Print Day','Vacation'];
+const SHIP_STATUS_OPTS=['Pending','Scheduled','Shipped','Delivered'];
 
 let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={},extensionRequests=[];
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
@@ -473,6 +474,46 @@ function stageStatus(start,end){
 function getMsDate(pid,key){return milestones.find(m=>m.project_id===pid&&m.key===key)?.date||null;}
 function showToast(msg,dur=2500){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>{t.style.display='none';},dur);}
 function closeModal(){document.getElementById('modal-root').innerHTML='';}
+
+// ── SHIPPING STATUS ────────────────────────────────────────
+// Auto-computes from milestone state; stored override takes priority when saved manually
+function getShippingStatusAuto(projId,soTag){
+  const shipMs=milestones.find(m=>m.project_id===projId&&m.key==='shipping'&&(soTag?m.so_tag===soTag:true));
+  const delivMs=milestones.find(m=>m.project_id===projId&&m.key==='delivery'&&(soTag?m.so_tag===soTag:true));
+  if(delivMs&&isMilestoneDone(delivMs))return'Delivered';
+  if(shipMs&&isMilestoneDone(shipMs))return'Shipped';
+  if(shipMs&&shipMs.date)return'Scheduled';
+  return'Pending';
+}
+function getShippingStatus(proj,soTag){
+  if(soTag){const soDet=soDetails.find(d=>d.project_id===proj.id&&d.so_tag===soTag);if(soDet?.shipping_status)return soDet.shipping_status;}
+  else{if(proj.shipping_status)return proj.shipping_status;}
+  return getShippingStatusAuto(proj.id,soTag);
+}
+function shipStatusChipCls(s){return s==='Delivered'?'chip-done':s==='Shipped'?'chip-atrisk':s==='Scheduled'?'chip-active':'chip-future';}
+function shipStatusDropdown(projId,soTag,current){
+  const s=current||'Pending';
+  const soArg=soTag?`'${soTag}'`:'null';
+  return`<select class="status-chip ${shipStatusChipCls(s)}" onchange="saveShippingStatus('${projId}',${soArg},this.value);this.className='status-chip '+shipStatusChipCls(this.value)" style="border:none;cursor:pointer;font-family:var(--font);font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;appearance:auto">${SHIP_STATUS_OPTS.map(o=>`<option value="${o}"${o===s?' selected':''}>${o}</option>`).join('')}</select>`;
+}
+function adHocShipStatusDropdown(adHocId,current){
+  const s=current||'Pending';
+  return`<select class="status-chip ${shipStatusChipCls(s)}" onchange="saveAdHocShippingStatus('${adHocId}',this.value);this.className='status-chip '+shipStatusChipCls(this.value)" style="border:none;cursor:pointer;font-family:var(--font);font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;appearance:auto">${SHIP_STATUS_OPTS.map(o=>`<option value="${o}"${o===s?' selected':''}>${o}</option>`).join('')}</select>`;
+}
+async function saveShippingStatus(projId,soTag,status){
+  if(soTag){
+    const existing=soDetails.find(d=>d.project_id===projId&&d.so_tag===soTag);
+    if(existing){await sb.from('so_details').update({shipping_status:status,updated_at:new Date().toISOString()}).eq('id',existing.id);existing.shipping_status=status;}
+    else{const proj=projects.find(p=>p.id===projId);const{data}=await sb.from('so_details').insert({project_id:projId,so_tag:soTag,shipping_status:status,address:proj?.address||'',naming_convention:proj?.naming_convention||''}).select().single();if(data)soDetails.push(data);}
+  } else {
+    await sb.from('projects').update({shipping_status:status}).eq('id',projId);
+    const p=projects.find(x=>x.id===projId);if(p)p.shipping_status=status;
+  }
+}
+async function saveAdHocShippingStatus(adHocId,status){
+  await sb.from('adhoc_schedule').update({status}).eq('id',adHocId);
+  const r=(adHocRows.shipping||[]).find(x=>x.id===adHocId);if(r)r.status=status;
+}
 
 // ── HEALTH SCORE ───────────────────────────────────────────
 // ── HEALTH & DONE ──────────────────────────────────────────
@@ -568,6 +609,12 @@ async function toggleMilestoneDone(mid,pid,e){
     if(data)milestoneDone[mid]=data;
   }
   showToast(isDone?'Marked as not done':'Marked as done ✓');
+  // Auto-update shipping status when a shipping or delivery milestone changes done state
+  const _toggledMs=milestones.find(m=>m.id===mid);
+  if(_toggledMs&&(_toggledMs.key==='shipping'||_toggledMs.key==='delivery')){
+    const _proj=projects.find(p=>p.id===_toggledMs.project_id);
+    if(_proj){await saveShippingStatus(_toggledMs.project_id,_toggledMs.so_tag||null,getShippingStatusAuto(_toggledMs.project_id,_toggledMs.so_tag||null));}
+  }
   // Partial re-render — don't reload entire page, just refresh milestones display
   if(currentTab==='projpage'){renderProjPageBody(pid);}
   else if(currentTab==='overview'){renderOverview();}
@@ -1180,7 +1227,7 @@ function renderWeek(){
   const el=document.getElementById('tab-week');
   const we=addD(weekStart,6);
   const ap=filterBySales(filterByPM(activeProjects('week')));
-  const allMs=milestones.filter(m=>ap.some(p=>p.id===m.project_id)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:'',_projId:p?p.id:null};});
+  const allMs=milestones.filter(m=>ap.some(p=>p.id===m.project_id)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{...m,projectName:p?p.name:'',_projId:p?p.id:null,_so:m.so_tag||p?.so_number||''};});
   // Include ad hoc shipping/installation in week view
   const adHocMs=getAdHocAsMilestones().filter(m=>m._status!=='Complete'&&(!pmFilter||m._raw?.pm===pmFilter)&&(!salesFilter||false));
   const allMsWithAdhoc=[...allMs,...adHocMs];
@@ -1210,7 +1257,8 @@ function renderWeek(){
           `<select style="font-size:9px;padding:1px 3px;border:none;border-radius:3px;background:rgba(255,255,255,0.3);font-family:var(--font);cursor:pointer;margin-top:2px" onchange="quickStatusMs('${e.id}',this.value)" onclick="event.stopPropagation()"><option value="pending"${!isDone?'selected':''}>Pending</option><option value="done"${isDone?'selected':''}>Done</option></select>`;
         const statusSel=adHocStatusSel;
         const projLink=e._projId?`<span style="cursor:pointer;text-decoration:underline;opacity:0.8" onclick="event.stopPropagation();goToProjPage('${e._projId}')">${e.projectName}</span>`:e.projectName;
-        return`<div class="ev ${isDone?'ev-done':TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${projLink}${e._adhoc?' 📦':''}</div>${statusSel}</div>`;
+        const soLine=e._so?`<div style="font-family:var(--mono);font-size:9px;color:var(--red);margin-top:1px;opacity:0.85">${e._so}</div>`:'';
+        return`<div class="ev ${isDone?'ev-done':TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${projLink}${e._adhoc?' 📦':''}</div>${soLine}${statusSel}</div>`;
       }).join(''):'<div class="empty-day">—</div>'}</div></div>`;
   }).join('');
   el.innerHTML=`
@@ -1381,7 +1429,8 @@ function renderDeptView(dept){
       const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>`:`<input type="text" value="" placeholder="Paste URL..." data-proj="${p.id}" style="font-size:10px;padding:2px 6px;border:1px solid var(--gray-200);border-radius:4px;width:110px;font-family:var(--font)" onchange="saveInstallTicketUrl('${p.id}',this.value)">`;
       extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';
     }
-    const html='<tr><td style="font-weight:500">'+p.name+'<button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+extraAfterStatus+'</tr>';
+    const statusCell=dept==='shipping'?'<td>'+shipStatusDropdown(p.id,null,getShippingStatus(p,null))+'</td>':'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>';
+    const html='<tr><td style="font-weight:500">'+p.name+'<button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+statusCell+extraAfterStatus+'</tr>';
     return{_d:sd||'',html};
   };
 
@@ -1404,7 +1453,8 @@ function renderDeptView(dept){
     else{extra='<td class="date-cell">'+fmt(r.trainingDate||r.training_date)+'</td><td class="date-cell">'+fmt(r.installDate||r.install_date)+'</td>';}
     const editOC='openEditAdHoc(&quot;'+dept+'&quot;,'+origIdx+')';
     const delOC='removeAdHoc(&quot;'+dept+'&quot;,'+origIdx+')';
-    const html='<tr style="background:var(--blue-bg)"><td style="font-weight:500">'+r.name+' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px">Ad hoc</span></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+(r.so||'—')+'</td><td>'+(r.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(r.pm||'—')+'</td>'+extra+'<td><span class="status-chip chip-future">'+(r.status||'Scheduled')+'</span></td>'+extraAfterStatus+'<td><button onclick="'+editOC+'" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer">Edit</button> <button onclick="'+delOC+'" style="background:none;border:none;cursor:pointer;color:var(--gray-400)">✕</button></td></tr>';
+    const adHocStatusCell=dept==='shipping'&&r.id?'<td>'+adHocShipStatusDropdown(r.id,r.status||'Pending')+'</td>':'<td><span class="status-chip chip-future">'+(r.status||'Pending')+'</span></td>';
+    const html='<tr style="background:var(--blue-bg)"><td style="font-weight:500">'+r.name+' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:8px">Ad hoc</span></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+(r.so||'—')+'</td><td>'+(r.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(r.pm||'—')+'</td>'+extra+adHocStatusCell+extraAfterStatus+'<td><button onclick="'+editOC+'" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer">Edit</button> <button onclick="'+delOC+'" style="background:none;border:none;cursor:pointer;color:var(--gray-400)">✕</button></td></tr>';
     return{_d:sd,html};
   };
 
@@ -1432,7 +1482,8 @@ function renderDeptView(dept){
       else if(dept==='quality'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'vinyl'))+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'uat'))+'</td>';}
       else if(dept==='shipping'){const sTicketUrl=p.install_ticket_url||'';const sTicketCell=sTicketUrl?'<a href="'+sTicketUrl+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'delivery'))+'</td>';extraAfterStatus='<td class="date-cell">'+sTicketCell+'</td>';}
       else if(dept==='installation'){const trainMs=soMs.find(m=>m.key==='training');const instMs=soMs.find(m=>m.key==='installation');const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)">`:'—';const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)">`:'—';const confirmed=p.install_date_confirmed?`<span style="font-size:11px;color:var(--success);font-weight:600">✓ ${fmt(p.install_date_confirmed)}</span>`:'<span style="font-size:10px;color:var(--gray-400)">Pending</span>';const ticketUrl=p.install_ticket_url||'';const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>`:'-';extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';}
-      const html='<tr><td style="font-weight:500">'+p.name+' <span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:700">'+so+'</span><button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--red);font-weight:600">'+so+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>'+extraAfterStatus+'</tr>';
+      const soStatusCell=dept==='shipping'?'<td>'+shipStatusDropdown(p.id,so,getShippingStatus(p,so))+'</td>':'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>';
+      const html='<tr><td style="font-weight:500">'+p.name+' <span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:700">'+so+'</span><button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--red);font-weight:600">'+so+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+soStatusCell+extraAfterStatus+'</tr>';
       return{_d:sd||'',html};
     });
   });
@@ -1669,15 +1720,11 @@ async function syncVinylFromProjects(){
       // Only check project-linked rows (never standalone/ad hoc)
       const alreadyExists=vinylSchedule.filter(v=>!v.is_standalone).some(v=>v.project_id===p.id&&(v.so===so||soList.length===1));
       if(!alreadyExists){
-        // Form factor: per-SO override (so_details) first, fall back to master project field —
-        // this was previously hardcoded to the master field only, so SO Config changes never showed up here.
-        const soDet=soList.length>1?soDetails.find(d=>d.project_id===p.id&&d.so_tag===so):null;
-        const formFactor=soDet?.form_factor||p.form_factor||'';
         toAdd.push({
           project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),
           so,client:p.client||'',vinyl_type:p.vinyl_type||'',
           date:vm.date,ship_date:sh?.date||null,
-          pm:p.pm||'',form_factor:formFactor,
+          pm:p.pm||'',form_factor:p.form_factor||'',
           status:'Scheduled',priority:vinylSchedule.length+toAdd.length+1,
           is_standalone:false,updated_at:new Date().toISOString()
         });
@@ -3760,12 +3807,10 @@ function openSOConfigModal(projId,so){
     <div class="modal-body">
       <div class="field full" style="margin-bottom:12px">
         <label>Configuration / Form factor <span style="font-size:10px;color:var(--gray-400);font-weight:400">— select all that apply for this SO</span></label>
-        <div id="soc-formfactor-list" style="display:flex;flex-direction:column;gap:4px;max-height:160px;overflow-y:auto;border:1px solid var(--gray-200);border-radius:var(--radius);padding:8px">
-          ${types.map(t=>`<label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:3px 4px;border-radius:4px;cursor:pointer" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='transparent'">
-            <input type="checkbox" class="soc-ff-check" value="${t.replace(/"/g,'&quot;')}" ${selectedTypes.includes(t)?'checked':''} style="width:14px;height:14px">
-            <span>${t}</span>
-          </label>`).join('')}
-        </div>
+        <select id="soc-formfactor" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:110px">
+          ${types.map(t=>`<option${selectedTypes.includes(t)?' selected':''}>${t}</option>`).join('')}
+        </select>
+        <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
       </div>
       <div class="field full" style="margin-bottom:10px"><label>QA Task URL</label>
         <div style="display:flex;gap:6px;align-items:center">
@@ -3797,7 +3842,7 @@ function openSOConfigModal(projId,so){
 }
 
 async function saveSOConfig(projId,so){
-  const formFactor=[...document.querySelectorAll('.soc-ff-check:checked')].map(c=>c.value).join(', ');
+  const formFactor=[...document.getElementById('soc-formfactor').selectedOptions].map(o=>o.value).join(', ');
   const qaUrl=document.getElementById('soc-qa').value.trim();
   const odooUrl=document.getElementById('soc-odoo').value.trim();
   const installUrl=document.getElementById('soc-install').value.trim();
@@ -3815,16 +3860,6 @@ async function saveSOConfig(projId,so){
       ...updates,
     }).select().single();
     if(data)soDetails.push(data);
-  }
-  // Push form factor forward to any existing vinyl_schedule row for this project/SO —
-  // otherwise Config changes silently never reach the Vinyl schedule until the next
-  // full sync, and a manually-edited vinyl row would never reflect this update at all.
-  const vinylRow=vinylSchedule.find(v=>v.project_id===projId&&(so?v.so===so:true));
-  if(vinylRow&&vinylRow.formFactor!==formFactor){
-    vinylRow.formFactor=formFactor;
-    if(vinylRow.id){
-      await sb.from('vinyl_schedule').update({form_factor:formFactor,updated_at:new Date().toISOString()}).eq('id',vinylRow.id);
-    }
   }
   closeModal();showToast('SO '+so+' config saved ✓');
 }
@@ -4805,7 +4840,7 @@ function openAdHocModal(dept){
           <div class="field"><label>Project / Job name *</label><input id="ah-name" placeholder="e.g. Acme Corp - Unit 3"></div>
           <div class="field"><label>SO Number</label><input id="ah-so" placeholder="e.g. S17999" style="font-family:var(--mono)"></div>
           <div class="field"><label>Client</label><input id="ah-client" placeholder="Client name"></div>
-          <div class="field"><label>Status</label><select id="ah-status">${STATUS_OPTS.map(s=>`<option>${s}</option>`).join('')}</select></div>
+          <div class="field"><label>Status</label><select id="ah-status">${(isShip?SHIP_STATUS_OPTS:STATUS_OPTS).map(s=>`<option>${s}</option>`).join('')}</select></div>
           ${isShip?`
           <div class="field"><label>Pack & ship date</label><input type="date" id="ah-ship"></div>
           <div class="field"><label>Delivery date</label><input type="date" id="ah-delivery"></div>
@@ -4870,7 +4905,7 @@ function openEditAdHoc(dept,idx){
           <div class="field"><label>Project / Job name *</label><input id="eh-name" value="${r.name||''}" placeholder="e.g. Acme Corp - Unit 3"></div>
           <div class="field"><label>SO Number</label><input id="eh-so" value="${r.so||''}" placeholder="e.g. S17999" style="font-family:var(--mono)"></div>
           <div class="field"><label>Client</label><input id="eh-client" value="${r.client||''}" placeholder="Client name"></div>
-          <div class="field"><label>Status</label><select id="eh-status">${STATUS_OPTS.map(s=>`<option${s===(r.status||'Scheduled')?' selected':''}>${s}</option>`).join('')}</select></div>
+          <div class="field"><label>Status</label><select id="eh-status">${(isShip?SHIP_STATUS_OPTS:STATUS_OPTS).map(s=>`<option${s===(r.status||'Pending')?' selected':''}>${s}</option>`).join('')}</select></div>
           ${isShip?`
           <div class="field"><label>Pack & ship date</label><input type="date" id="eh-ship" value="${shipDate}"></div>
           <div class="field"><label>Delivery date</label><input type="date" id="eh-delivery" value="${delivDate}"></div>
