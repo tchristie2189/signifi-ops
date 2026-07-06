@@ -259,76 +259,73 @@ function setWeek(w,el){
 }
 
 // ── RENDER ─────────────────────────────────────────────────
+// Maps milestone keys/labels to human-readable bucket names
+const BUCKET_CFG=[
+  {id:'shipping',   label:'Pack & Ship',  icon:'📦', color:'#059669', keys:['shipping'],    labelMatch:[]},
+  {id:'delivery',   label:'Deliveries',   icon:'🚚', color:'#2563eb', keys:['delivery'],    labelMatch:[]},
+  {id:'installation',label:'Installations',icon:'🔧',color:'#db2777', keys:['installation'],labelMatch:[]},
+  {id:'training',   label:'Training',     icon:'🎓', color:'#f59e0b', keys:['training'],    labelMatch:[]},
+  {id:'prod-start', label:'Prod Start',   icon:'🏭', color:'#7c3aed', keys:['production-start'],labelMatch:[]},
+  {id:'prod-end',   label:'Prod End',     icon:'✅', color:'#7c3aed', keys:['production-end'],  labelMatch:[]},
+  {id:'qa-start',   label:'QA Start',     icon:'🔍', color:'#d97706', keys:['quality-start'],   labelMatch:[]},
+  {id:'qa-end',     label:'QA End',       icon:'✅', color:'#d97706', keys:['quality-end'],     labelMatch:[]},
+  {id:'final-qc',   label:'Final QC',     icon:'🔎', color:'#0891b2', keys:['final-qc'],        labelMatch:[]},
+  {id:'vinyl',      label:'Vinyl',        icon:'🎨', color:'#2563eb', keys:['vinyl'],           labelMatch:[]},
+  {id:'uat',        label:'UAT',          icon:'🖥',  color:'#16a34a', keys:['uat'],             labelMatch:[]},
+  {id:'other',      label:'Other',        icon:'📌', color:'#6b6b6b', keys:['other','po-release','mo-release','arrival'],labelMatch:[]},
+];
+
+function getBucket(m){
+  for(const b of BUCKET_CFG){
+    if(b.keys.includes(m.key))return b;
+    if(b.labelMatch.some(l=>(m.label||'').toLowerCase().includes(l.toLowerCase())))return b;
+  }
+  return BUCKET_CFG[BUCKET_CFG.length-1];
+}
+
 function render(){
   if(!currentDept)return;
   const{start,end}=getWeekRange();
   const dept=currentDept;
 
-  // Find all milestones for this dept in the week range
   const deptMilestones=milestones.filter(m=>{
     if(!m.date)return false;
     const d=new Date(m.date+'T00:00:00');
     if(d<start||d>end)return false;
     if(dept.milestoneKeys.includes(m.key))return true;
-    if(dept.labelMatch){
-      return dept.labelMatch.some(lbl=>(m.label||'').toLowerCase().includes(lbl.toLowerCase()));
-    }
+    if(dept.labelMatch){return dept.labelMatch.some(lbl=>(m.label||'').toLowerCase().includes(lbl.toLowerCase()));}
     return false;
   });
 
-  // Add ad hoc items for shipping/deployment depts
   const adHocItems=[];
   if(dept.passcode==='ship2026'){
     (window._adHocShipping||[]).forEach(r=>{
-      const d=r.ship_date||'';
-      if(!d)return;
+      const d=r.ship_date||'';if(!d)return;
       const dt=new Date(d+'T00:00:00');
-      if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-ship-'+r.id,_adhoc:true,label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||'',_ticketUrl:r.install_ticket_url||''});
+      if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-ship-'+r.id,_adhoc:true,key:'shipping',label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||'',_ticketUrl:r.install_ticket_url||''});
     });
   }
   if(dept.passcode==='deploy2026'){
     (window._adHocInstall||[]).forEach(r=>{
-      const d=r.install_date||'';
-      if(!d)return;
+      const d=r.install_date||'';if(!d)return;
       const dt=new Date(d+'T00:00:00');
-      if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-inst-'+r.id,_adhoc:true,label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||'',_ticketUrl:r.install_ticket_url||''});
+      if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-inst-'+r.id,_adhoc:true,key:'installation',label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||'',_ticketUrl:r.install_ticket_url||''});
     });
   }
 
-  // Group project milestones by project, then deduplicate by label within each project.
-  // For SO-split projects (e.g. Unisys with 20 SOs), every SO gets its own "Build start"
-  // milestone row — but Production gives one status for the whole build, not one per SO.
-  // We keep only the earliest-dated milestone per unique label per project, and use that
-  // single row to represent the whole label. The checkin_status key is the milestone id
-  // of the representative row, which is consistent on reload since we always pick earliest.
-  const byProject={};
-  deptMilestones.forEach(m=>{
-    if(!byProject[m.project_id])byProject[m.project_id]=[];
-    byProject[m.project_id].push(m);
-  });
-  // Deduplicate: within each project, keep only one row per unique label (earliest date)
-  Object.keys(byProject).forEach(pid=>{
-    const seen={};
-    byProject[pid]=byProject[pid]
-      .sort((a,b)=>(a.date||'').localeCompare(b.date||''))
-      .filter(m=>{
-        if(seen[m.label])return false;
-        seen[m.label]=true;
-        return true;
-      });
+  // Deduplicate SO-split: one row per unique label per project (earliest date wins)
+  const dedupedMs=[];
+  const seenByProj={};
+  [...deptMilestones].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(m=>{
+    const k=m.project_id+'|'+m.label;
+    if(!seenByProj[k]){seenByProj[k]=true;dedupedMs.push(m);}
   });
 
-  // Summary counts (project milestones + ad hoc)
-  const allItems=[...deptMilestones,...adHocItems];
-  window._currentCheckinItems=allItems; // used by markAllClear() and the extension request dropdown
+  // All items for summary counts and all-clear
+  const allItems=[...dedupedMs,...adHocItems];
+  window._currentCheckinItems=allItems;
   let greens=0,yellows=0,reds=0;
-  allItems.forEach(m=>{
-    const id=m._id||m.id;
-    const ci=checkins[id];
-    if(ci?.stoplight==='green')greens++;
-    else if(ci?.stoplight==='yellow')yellows++;
-    else if(ci?.stoplight==='red')reds++;
-  });
+  allItems.forEach(m=>{const id=m._id||m.id;const ci=checkins[id];if(ci?.stoplight==='green')greens++;else if(ci?.stoplight==='yellow')yellows++;else if(ci?.stoplight==='red')reds++;});
 
   document.getElementById('summary-bar').innerHTML=allItems.length?`
     <div class="summary-bar">
@@ -337,94 +334,110 @@ function render(){
       <div><div class="sb-val sb-red">${reds}</div><div class="sb-label">Escalation</div></div>
     </div>`:'';
 
-  const thisBase=monday(today());
-  const nextBase=monday(addD(today(),7));
+  const thisBase=monday(today());const nextBase=monday(addD(today(),7));
   const fmtRange=(s,e)=>fmt(isoD(s))+' – '+fmt(isoD(e));
   document.getElementById('wt-this').textContent='This week  '+fmtRange(thisBase,addD(thisBase,4));
   document.getElementById('wt-next').textContent='Next week  '+fmtRange(nextBase,addD(nextBase,4));
 
-  const wLabel=currentWeek==='this'?'this week':'next week';
   const ciContent=document.getElementById('ci-content');
+  if(!allItems.length){ciContent.innerHTML=`<div class="empty"><div class="empty-icon">🎉</div>No ${dept.name} items this ${currentWeek==='this'?'week':'next week'}.<br>Check next week!</div>`;return;}
 
-  if(!allItems.length){
-    ciContent.innerHTML=`<div class="empty"><div class="empty-icon">🎉</div>No ${dept.name} items ${wLabel}.<br>Check next week!</div>`;
-    return;
-  }
+  // Bucket all items by type
+  const buckets={};
+  allItems.forEach(m=>{
+    const b=getBucket(m);
+    if(!buckets[b.id])buckets[b.id]={...b,items:[]};
+    buckets[b.id].items.push(m);
+  });
+  // Sort items within each bucket by date
+  Object.values(buckets).forEach(b=>b.items.sort((a,z)=>(a.date||'').localeCompare(z.date||'')));
 
-  // Render project milestone cards
-  const projIds=Object.keys(byProject);
-  const projHtml=projIds.map(pid=>{
-    const proj=projects.find(p=>p.id===pid);
-    if(!proj)return'';
-    const rows=byProject[pid].map(m=>ciRow(m.id,m,dept)).join('');
-    return`<div class="proj-card">
-      <div class="proj-card-head">
-        <div class="proj-name">${proj.name}</div>
-        <div class="proj-so">${proj.so_number||''}</div>
+  // Render bucketed sections
+  const sectionsHtml=Object.values(buckets).map(bucket=>{
+    const rowsHtml=bucket.items.map(m=>ciRow(m._id||m.id,m,dept,bucket)).join('');
+    const allDone=bucket.items.every(m=>{const ci=checkins[m._id||m.id];return ci?.checked&&ci?.stoplight==='green';});
+    const hasRed=bucket.items.some(m=>checkins[m._id||m.id]?.stoplight==='red');
+    const hasYellow=bucket.items.some(m=>checkins[m._id||m.id]?.stoplight==='yellow');
+    const sectionStatus=allDone?'✅':hasRed?'🔴':hasYellow?'🟡':'';
+    return`<div style="margin-bottom:1.25rem">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:15px">${bucket.icon}</span>
+        <span style="font-size:13px;font-weight:700;color:var(--black)">${bucket.label}</span>
+        <span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:12px;background:${bucket.color}18;color:${bucket.color}">${bucket.items.length}</span>
+        ${sectionStatus?`<span style="font-size:13px;margin-left:2px">${sectionStatus}</span>`:''}
       </div>
-      ${rows}
+      <div style="display:flex;flex-direction:column;gap:6px">${rowsHtml}</div>
     </div>`;
   }).join('');
 
-  // Render ad hoc cards
-  const adHocHtml=adHocItems.length?`
-    <div class="proj-card">
-      <div class="proj-card-head">
-        <div class="proj-name" style="display:flex;align-items:center;gap:6px">Ad hoc entries <span style="font-size:10px;background:var(--blue);color:white;padding:1px 6px;border-radius:8px">Standalone</span></div>
-        <div class="proj-so">${adHocItems.length} item${adHocItems.length>1?'s':''}</div>
-      </div>
-      ${adHocItems.map(m=>ciRow(m._id,m,dept)).join('')}
-    </div>`:'';
-
-  ciContent.innerHTML=projHtml+adHocHtml;
+  ciContent.innerHTML=sectionsHtml;
 }
 
-function ciRow(id,m,dept){
-  window._ciItemMap[id]=m; // store for save callbacks
+function ciRow(id,m,dept,bucket){
+  window._ciItemMap[id]=m;
   const ci=checkins[id]||{};
   const d=daysDiff(m.date);
-  const dateCls=d<0?'overdue':d===0?'today':d<=3?'soon':'';
-  const dateLabel=d<0?`${Math.abs(d)}d overdue`:d===0?'Today':d===1?'Tomorrow':`${fmt(m.date)}`;
   const isChecked=ci.checked||false;
   const stoplight=ci.stoplight||'';
-  const lbl=m._adhoc?m.label:(dept.labels[m.key]||m.label);
-  const noteHtml=ci.notes?`<div style="font-size:11px;color:var(--gray-500);margin-top:3px;font-style:italic">💬 "${ci.notes.replace(/</g,'&lt;')}" ${ci.stoplight_by?`— ${ci.stoplight_by}`:''}</div>`:'';
   const safeId=id.replace(/[^a-zA-Z0-9]/g,'_');
-  const notesFieldHtml=`<div style="margin-top:6px">
-    <textarea id="note-${safeId}" placeholder="Add notes for the dashboard..." rows="2"
-      style="width:100%;font-family:var(--font);font-size:11px;padding:6px 9px;border:1px solid var(--gray-300);border-radius:6px;resize:none;color:var(--black);background:var(--white);line-height:1.4"
-      onblur="saveInlineNote('${id}',this.value)">${(ci.notes||'').replace(/</g,'&lt;')}</textarea>
-  </div>`;
+
+  // Date badge
+  const dateBg=d<0?'#fee2e2':d===0?'#dcfce7':d<=2?'#eff6ff':'#f1f5f9';
+  const dateColor=d<0?'#991b1b':d===0?'#166534':d<=2?'#1d4ed8':'#475569';
+  const dateLabel=d<0?`${Math.abs(d)}d overdue`:d===0?'Today':d===1?'Tomorrow':fmt(m.date);
+
+  // Project info
+  const proj=m._adhoc?null:projects.find(p=>p.id===m.project_id);
+  const projName=proj?proj.name:(m._adhoc?m.label:'—');
+  const soNum=m._adhoc?(m.so||''):(proj?.so_number||'');
+
+  // Stoplight border accent
+  const borderColor=stoplight==='green'?'#22c55e':stoplight==='yellow'?'#eab308':stoplight==='red'?'#ef4444':'#e2e8f0';
+
+  // Install ticket
   const isShipping=dept.passcode==='ship2026';
   const isDeployment=dept.passcode==='deploy2026';
-  // Resolve install ticket URL: ad hoc carries it directly; project rows check so_details then projects
   let _ticketUrl='';
-  if(m._adhoc){
-    _ticketUrl=m._ticketUrl||'';
-  } else if(isShipping||isDeployment){
+  if(m._adhoc){_ticketUrl=m._ticketUrl||'';}
+  else if(isShipping||isDeployment){
     const _soTag=m.so_tag||null;
-    const _soDet=_soTag?(window._soDetails||[]).find(d=>d.project_id===m.project_id&&d.so_tag===_soTag):null;
+    const _soDet=_soTag?(window._soDetails||[]).find(x=>x.project_id===m.project_id&&x.so_tag===_soTag):null;
     _ticketUrl=_soDet?.install_ticket_url||projects.find(p=>p.id===m.project_id)?.install_ticket_url||'';
   }
-  const ticketHtml=_ticketUrl?`<div style="margin-top:4px"><a href="${_ticketUrl}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);font-weight:500;text-decoration:none">🎫 Install ticket ↗</a></div>`:'';
-  const shipStatusHtml=isShipping?`<div style="margin-top:6px">
-    <select id="ss-${id.replace(/[^a-zA-Z0-9]/g,'_')}" onchange="const itm=window._ciItemMap['${id}'];if(itm)saveCheckinShipStatus(itm,this.value)" style="font-size:11px;padding:3px 8px;border:1px solid var(--gray-300);border-radius:20px;font-family:var(--font);font-weight:600;cursor:pointer;background:white;color:var(--gray-700)">
-      ${SHIP_STATUS_OPTS.map(o=>`<option value="${o}"${o===getCheckinShippingStatus(m)?' selected':''}>${o}</option>`).join('')}
-    </select>
-  </div>`:'';
-  return`<div class="ci-row" style="align-items:flex-start;padding-top:10px;padding-bottom:10px">
-    <div class="ci-info">
-      <div class="ci-label">${lbl}${m._adhoc?` <span style="font-size:9px;color:var(--gray-400)">${m.client||m.so||''}</span>`:''}</div>
-      <div class="ci-date ${dateCls}">${dateLabel}</div>
-      ${ticketHtml}${notesFieldHtml}${shipStatusHtml}
+
+  // Shipping status dropdown
+  const shipStatusSel=isShipping?`<select onchange="const itm=window._ciItemMap['${id}'];if(itm)saveCheckinShipStatus(itm,this.value)" style="font-size:11px;padding:2px 8px;border:1px solid #d1d5db;border-radius:20px;font-family:var(--font);font-weight:600;cursor:pointer;background:white;color:#374151">${SHIP_STATUS_OPTS.map(o=>`<option value="${o}"${o===getCheckinShippingStatus(m)?' selected':''}>${o}</option>`).join('')}</select>`:'';
+
+  return`<div style="background:white;border:1px solid ${borderColor};border-left:4px solid ${borderColor};border-radius:var(--radius-lg);padding:12px 14px;transition:border-color 0.15s">
+    <!-- Top row: project name + date badge + actions -->
+    <div style="display:flex;align-items:flex-start;gap:10px">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:2px">
+          <span style="font-size:13px;font-weight:600;color:var(--black)">${projName}${m._adhoc?` <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:6px;font-weight:600">Ad hoc</span>`:''}</span>
+          ${soNum?`<span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:600">${soNum}</span>`:''}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:${dateBg};color:${dateColor}">${dateLabel}</span>
+          ${shipStatusSel}
+          ${_ticketUrl?`<a href="${_ticketUrl}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);font-weight:500;text-decoration:none;white-space:nowrap">🎫 Ticket ↗</a>`:''}
+        </div>
+      </div>
+      <!-- Stoplights + done -->
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+        <div class="stoplight">
+          <div class="sl-btn sl-green${stoplight==='green'?' active':''}" title="On track" onclick="setStoplight('${id}','green',this)"></div>
+          <div class="sl-btn sl-yellow${stoplight==='yellow'?' active':''}" title="In trouble" onclick="setStoplight('${id}','yellow',this)"></div>
+          <div class="sl-btn sl-red${stoplight==='red'?' active':''}" title="Escalation" onclick="setStoplight('${id}','red',this)"></div>
+        </div>
+        <div class="ci-done${isChecked?' checked':''}" onclick="toggleCheck('${id}',this)" title="${isChecked?'Uncheck':'Mark done'}">${isChecked?'✓':''}</div>
+      </div>
     </div>
-    <div class="stoplight">
-      <div class="sl-btn sl-green${stoplight==='green'?' active':''}" title="On track" onclick="setStoplight('${id}','green',this)"></div>
-      <div class="sl-btn sl-yellow${stoplight==='yellow'?' active':''}" title="In trouble" onclick="setStoplight('${id}','yellow',this)"></div>
-      <div class="sl-btn sl-red${stoplight==='red'?' active':''}" title="Escalation needed" onclick="setStoplight('${id}','red',this)"></div>
-    </div>
-    <div class="ci-done${isChecked?' checked':''}" onclick="toggleCheck('${id}',this)" title="${isChecked?'Uncheck':'Mark done'}">
-      ${isChecked?'✓':''}
+    <!-- Notes row -->
+    <div style="margin-top:8px">
+      <textarea id="note-${safeId}" placeholder="Notes for the dashboard..." rows="1"
+        style="width:100%;font-family:var(--font);font-size:11px;padding:5px 9px;border:1px solid #e5e7eb;border-radius:6px;resize:none;color:#374151;background:#f9fafb;line-height:1.5;transition:border-color 0.15s"
+        onfocus="this.style.borderColor='#6b7280';this.rows=2;this.style.background='white'"
+        onblur="this.style.borderColor='#e5e7eb';if(!this.value)this.rows=1;this.style.background=this.value?'white':'#f9fafb';saveInlineNote('${id}',this.value)">${(ci.notes||'').replace(/</g,'&lt;')}</textarea>
     </div>
   </div>`;
 }
