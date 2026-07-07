@@ -114,9 +114,11 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
       <button id="all-clear-btn" onclick="markAllClear()" style="font-family:var(--font);font-size:13px;font-weight:600;padding:9px 16px;border:none;border-radius:var(--radius);background:var(--success);color:white;cursor:pointer">✅ All clear today</button>
       <button onclick="openExtensionModal()" style="font-family:var(--font);font-size:13px;font-weight:600;padding:9px 16px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);cursor:pointer">⏳ Request more time</button>
     </div>
-    <div class="week-tabs">
+    <div class="week-tabs" id="week-tabs-row">
       <button class="wtab active" id="wt-this" onclick="setWeek('this',this)">This week</button>
       <button class="wtab" id="wt-next" onclick="setWeek('next',this)">Next week</button>
+      <button class="wtab" id="wt-2" style="display:none" onclick="setWeek('2',this)">Week 3</button>
+      <button class="wtab" id="wt-3" style="display:none" onclick="setWeek('3',this)">Week 4</button>
     </div>
     <div id="summary-bar"></div>
     <div id="ci-content"></div>
@@ -176,7 +178,7 @@ const DEPT_CONFIG={
   'proc2026':{name:'Procurement',color:'#d97706',milestoneKeys:['po-release'],labelMatch:['Parts ordering start','Parts arrival'],labels:{'po-release':'PO Release'}},
   'mo2026':{name:'MO Release (Niraj)',color:'#6b6b6b',milestoneKeys:['mo-release'],labels:{'mo-release':'MO Release'}},
   'qa2026':{name:'Quality',color:'#d97706',milestoneKeys:['quality-start','quality-end','final-qc','vinyl'],labels:{'quality-start':'QA start','quality-end':'QA end','final-qc':'Final QC','vinyl':'Vinyl / branding'}},
-  'ship2026':{name:'Shipping',color:'#059669',milestoneKeys:['shipping','delivery'],labels:{'shipping':'Ship date','delivery':'Delivery date'}},
+  'ship2026':{name:'Shipping',color:'#059669',milestoneKeys:['shipping','delivery'],labels:{'shipping':'Pick up date','delivery':'Delivery date'}},
   'deploy2026':{name:'Deployment',color:'#db2777',milestoneKeys:['installation'],labels:{'installation':'Installation date'}},
 };
 
@@ -197,8 +199,21 @@ function daysDiff(s){if(!s)return 9999;return Math.round((new Date(s+'T00:00:00'
 function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>{t.style.display='none';},2000);}
 
 function getWeekRange(){
-  const base=currentWeek==='this'?monday(today()):monday(addD(today(),7));
+  const offsets={'this':0,'next':1,'2':2,'3':3};
+  const base=monday(addD(today(),(offsets[currentWeek]||0)*7));
   return{start:base,end:addD(base,6)};
+}
+
+function showWeekTabs(){
+  const isShipping=currentDept?.passcode==='ship2026';
+  document.getElementById('wt-2').style.display=isShipping?'':'none';
+  document.getElementById('wt-3').style.display=isShipping?'':'none';
+  // If currently on week 2/3 but switched to non-shipping dept, reset to this week
+  if(!isShipping&&(currentWeek==='2'||currentWeek==='3')){
+    currentWeek='this';
+    document.querySelectorAll('.wtab').forEach(b=>b.classList.remove('active'));
+    document.getElementById('wt-this').classList.add('active');
+  }
 }
 
 // ── LOGIN ──────────────────────────────────────────────────
@@ -226,6 +241,7 @@ function doCheckinLogin(){
   document.getElementById('ci-header').innerHTML=`
     <div style="font-size:18px;font-weight:600;margin-bottom:2px">Good ${getGreeting()}, ${name} 👋</div>
     <div style="font-size:12px;color:var(--gray-500)">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})} · ${dept.name}</div>`;
+  showWeekTabs();
   loadCheckinData();
 }
 function getGreeting(){const h=new Date().getHours();return h<12?'morning':h<17?'afternoon':'evening';}
@@ -261,7 +277,7 @@ function setWeek(w,el){
 // ── RENDER ─────────────────────────────────────────────────
 // Maps milestone keys/labels to human-readable bucket names
 const BUCKET_CFG=[
-  {id:'shipping',   label:'Pack & Ship',  icon:'📦', color:'#059669', keys:['shipping'],    labelMatch:[]},
+  {id:'shipping',   label:'Pick up',      icon:'📦', color:'#059669', keys:['shipping'],    labelMatch:[]},
   {id:'delivery',   label:'Deliveries',   icon:'🚚', color:'#2563eb', keys:['delivery'],    labelMatch:[]},
   {id:'installation',label:'Installations',icon:'🔧',color:'#db2777', keys:['installation'],labelMatch:[]},
   {id:'training',   label:'Training',     icon:'🎓', color:'#f59e0b', keys:['training'],    labelMatch:[]},
@@ -313,11 +329,13 @@ function render(){
     });
   }
 
-  // Deduplicate SO-split: one row per unique label per project (earliest date wins)
+  // Deduplicate SO-split milestones smartly:
+  // — Same label + same date = collapse to one row (undifferentiated SOs, no point showing 6 identical rows)
+  // — Same label + different date = keep separate (each SO ships/delivers on its own day)
   const dedupedMs=[];
   const seenByProj={};
   [...deptMilestones].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(m=>{
-    const k=m.project_id+'|'+m.label;
+    const k=m.project_id+'|'+m.label+'|'+(m.date||'');
     if(!seenByProj[k]){seenByProj[k]=true;dedupedMs.push(m);}
   });
 
@@ -334,10 +352,13 @@ function render(){
       <div><div class="sb-val sb-red">${reds}</div><div class="sb-label">Escalation</div></div>
     </div>`:'';
 
-  const thisBase=monday(today());const nextBase=monday(addD(today(),7));
   const fmtRange=(s,e)=>fmt(isoD(s))+' – '+fmt(isoD(e));
+  const thisBase=monday(today());
   document.getElementById('wt-this').textContent='This week  '+fmtRange(thisBase,addD(thisBase,4));
-  document.getElementById('wt-next').textContent='Next week  '+fmtRange(nextBase,addD(nextBase,4));
+  document.getElementById('wt-next').textContent='Next week  '+fmtRange(monday(addD(today(),7)),addD(monday(addD(today(),7)),4));
+  document.getElementById('wt-2').textContent='Week 3  '+fmtRange(monday(addD(today(),14)),addD(monday(addD(today(),14)),4));
+  document.getElementById('wt-3').textContent='Week 4  '+fmtRange(monday(addD(today(),21)),addD(monday(addD(today(),21)),4));
+  showWeekTabs();
 
   const ciContent=document.getElementById('ci-content');
   if(!allItems.length){ciContent.innerHTML=`<div class="empty"><div class="empty-icon">🎉</div>No ${dept.name} items this ${currentWeek==='this'?'week':'next week'}.<br>Check next week!</div>`;return;}
@@ -389,7 +410,9 @@ function ciRow(id,m,dept,bucket){
   // Project info
   const proj=m._adhoc?null:projects.find(p=>p.id===m.project_id);
   const projName=proj?proj.name:(m._adhoc?m.label:'—');
-  const soNum=m._adhoc?(m.so||''):(proj?.so_number||'');
+  // For SO-split rows show the specific SO tag (the one this milestone belongs to),
+  // not all SOs on the project — each row is now its own individual SO
+  const soDisplay=m._adhoc?(m.so||''):m.so_tag||(proj?.so_number||'');
 
   // Stoplight border accent
   const borderColor=stoplight==='green'?'#22c55e':stoplight==='yellow'?'#eab308':stoplight==='red'?'#ef4444':'#e2e8f0';
@@ -414,7 +437,7 @@ function ciRow(id,m,dept,bucket){
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:2px">
           <span style="font-size:13px;font-weight:600;color:var(--black)">${projName}${m._adhoc?` <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:6px;font-weight:600">Ad hoc</span>`:''}</span>
-          ${soNum?`<span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:600">${soNum}</span>`:''}
+          ${soDisplay?`<span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:600">${soDisplay}</span>`:''}
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:${dateBg};color:${dateColor}">${dateLabel}</span>
