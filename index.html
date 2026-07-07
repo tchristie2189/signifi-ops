@@ -1017,7 +1017,7 @@ function renderPipeline(){
       var healthBg=health==='red'?'#fef2f2':health==='amber'?'#fffbeb':'#f0fdf4';
       var borderColor=health==='red'?'#fca5a5':health==='amber'?'#fde68a':'#bbf7d0';
       var soList=(p.so_number||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
-      var soDisplay=soList.length>2?soList.slice(0,2).join(', ')+' +'+(soList.length-2):p.so_number||'\u2014';
+      var soDisplay=soList.length>2?soList.slice(0,2).join(', ')+' <span style="color:var(--gray-400);font-size:9px">+'+( soList.length-2)+'</span>':p.so_number||'\u2014';
       var deptCis=pMs.map(function(m){return checkinStatus[m.id];}).filter(Boolean);
       var slDot=deptCis.some(function(c){return c.stoplight==='red';})?'🔴':deptCis.some(function(c){return c.stoplight==='yellow';})?'🟡':'';
       var isManual=!!p.pipeline_stage;
@@ -1066,6 +1066,7 @@ function renderPipeline(){
           '</select>'+
           '<div style="display:flex;gap:6px">'+
             (isManual?'<button onclick="resetPipelineStage(\''+p.id+'\')" style="font-size:10px;padding:3px 8px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font)">\u21ba Auto</button>':'')+
+            (stage.id==='delivered'?'<button onclick="toggleArchive(\''+p.id+'\',\'active\')" style="font-size:10px;padding:3px 8px;border-radius:var(--radius);border:1px solid var(--success);background:var(--success-bg);color:var(--success);cursor:pointer;font-family:var(--font);font-weight:600">\u2713 Complete project</button>':'')+
             '<button onclick="goToProjPage(\''+p.id+'\')" style="font-size:10px;padding:3px 8px;border-radius:var(--radius);border:1px solid var(--blue);background:var(--blue-bg);color:var(--blue);cursor:pointer;font-family:var(--font)">\u2197 Project page</button>'+
           '</div>'+
         '</div>':'';
@@ -1088,7 +1089,7 @@ function renderPipeline(){
           '<span style="font-size:10px;color:var(--gray-500)">'+(p.pm||'\u2014')+'</span>'+
           '<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:8px;background:'+(health==='red'?'#fee2e2':health==='amber'?'#fef3c7':'#dcfce7')+';color:'+healthColor+'">'+days+'d</span>'+
         '</div>'+
-        (endDate?(function(){
+        (stage.id!=='delivered'?(endDate?(function(){
           var countdownBg=d===null?'#f1f5f9':d<0?'#fee2e2':d===0?'#fef9c3':d<=2?'#ffedd5':d<=5?'#fef3c7':'#f0fdf4';
           var countdownColor=d===null?'#94a3b8':d<0?'#991b1b':d===0?'#854d0e':d<=2?'#c2410c':d<=5?'#92400e':'#166534';
           var countdownLabel=d===null?'No date set':d<0?Math.abs(d)+'d overdue':d===0?'Due TODAY':d===1?'Due TOMORROW':''+d+'d left';
@@ -1097,24 +1098,24 @@ function renderPipeline(){
             '<span style="font-size:10px;font-weight:700;color:'+countdownColor+'">'+countdownIcon+' '+countdownLabel+'</span>'+
             '<span style="font-size:9px;color:'+countdownColor+';opacity:0.8">'+fmt(endDate)+'</span>'+
           '</div>';
-        })():'<div style="margin-top:6px;padding:4px 8px;border-radius:6px;background:#f1f5f9;font-size:10px;color:#94a3b8">📅 No due date set</div>')+
+        })():'<div style="margin-top:6px;padding:4px 8px;border-radius:6px;background:#f1f5f9;font-size:10px;color:#94a3b8">📅 No due date set</div>'):'<div style="margin-top:6px;padding:4px 8px;border-radius:6px;background:#f0fdf4;font-size:10px;color:#166534;font-weight:600">✅ Delivered — ready to complete</div>')+
         '<div style="font-size:10px;color:var(--gray-400);margin-top:3px">'+(expanded?'\u25b2 close':'\u25bc edit / move')+'</div>'+
         expandedHtml+
       '</div>';
     }).join('');
 
     return'<div id="pipeline-col-'+stage.id+'" '+
-      'style="min-width:'+(pipelineStageFilter?'100%':'220px')+';max-width:'+(pipelineStageFilter?'100%':'260px')+';flex-shrink:0" '+
+      'style="min-width:'+(pipelineStageFilter?'320px':'200px')+';width:'+(pipelineStageFilter?'auto':'200px')+';flex-shrink:0;display:flex;flex-direction:column" '+
       'ondragover="event.preventDefault();this.style.outline=\'2px dashed '+stage.color+'\'" '+
       'ondragleave="this.style.outline=\'\'" '+
       'ondrop="event.preventDefault();this.style.outline=\'\';if(_pipelineDragId)movePipelineStage(_pipelineDragId,\''+stage.id+'\');_pipelineDragId=null">'+
-      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid '+stage.color+'">'+
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid '+stage.color+';flex-shrink:0">'+
         '<span style="font-size:14px">'+stage.icon+'</span>'+
         '<span style="font-size:12px;font-weight:700;color:'+stage.color+'">'+stage.label+'</span>'+
         '<span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;background:'+stage.color+'18;color:'+stage.color+'">'+projs.length+'</span>'+
-        (lateCount>0?'<span style="font-size:10px;font-weight:600;color:var(--red);margin-left:auto">\u26a0 '+lateCount+' late</span>':'')+
+        (lateCount>0&&stage.id!=='delivered'?'<span style="font-size:10px;font-weight:600;color:var(--red);margin-left:auto">\u26a0 '+lateCount+'</span>':'')+
       '</div>'+
-      '<div style="display:'+(pipelineStageFilter?'grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr))':'flex;flex-direction:column')+';gap:6px;min-height:60px">'+
+      '<div style="overflow-y:auto;flex:1;max-height:calc(100vh - 340px);display:flex;flex-direction:column;gap:6px;padding-right:2px">'+
         (cards||'<div style="text-align:center;padding:1.5rem;color:var(--gray-300);font-size:11px;border:2px dashed var(--gray-200);border-radius:8px">Drop here</div>')+
       '</div>'+
     '</div>';
@@ -1136,8 +1137,8 @@ function renderPipeline(){
     '</div>'+
     summaryHtml+
     buildBottleneckBar()+
-    '<div style="overflow-x:auto;padding-bottom:1rem">'+
-      '<div style="display:flex;gap:12px;min-width:max-content;align-items:flex-start;padding-bottom:8px">'+
+    '<div style="overflow-x:auto;overflow-y:hidden;padding-bottom:6px">'+
+      '<div style="display:flex;gap:10px;min-width:max-content;align-items:flex-start;padding:0 2px">'+
         columnsHtml+
       '</div>'+
     '</div>';
