@@ -2566,7 +2566,7 @@ async function saveIntake(){
     shipping:document.getElementById('i-notes-shipping')?.value.trim()||'',
     install:document.getElementById('i-notes-install')?.value.trim()||'',
   };
-  const generalNotes=document.getElementById('i-notes').value.trim();
+  const generalNotes=document.getElementById('i-notes')?.value.trim()||'';
   const pm=document.getElementById('i-pm').value.trim();
   const sdm=document.getElementById('i-sdm')?.value.trim()||'';
   const solutions=document.getElementById('i-solutions')?.value.trim()||'';
@@ -2601,13 +2601,13 @@ async function saveIntake(){
     {id:'i-fqa',key:'final-qc',label:'Final QC'},
     {id:'i-vinyl',key:'vinyl',label:'Vinyl / branding'},
     {id:'i-uat',key:'uat',label:'UAT'},
-    {id:'i-ship',key:'shipping',label:'Pack & ship'},
+    {id:'i-ship',key:'shipping',label:isIMACTemplate?'Pick-up date':'Pack & ship'},
     {id:'i-del',key:'delivery',label:'Delivery'},
-    {id:'i-train',key:'training',label:'Training'},
+    {id:'i-train',key:isIMACTemplate?'uninstallation':'training',label:isIMACTemplate?'Uninstallation date':'Training'},
     {id:'i-inst',key:'installation',label:'Installation'},
     {id:'i-care',key:'other',label:'Customer care start'},
   ];
-  const ins=msFields.map(f=>{const v=document.getElementById(f.id).value;return v?{project_id:proj.id,key:f.key,label:f.label,date:v,changed_by:currentUserName}:null;}).filter(Boolean);
+  const ins=msFields.map(f=>{const v=document.getElementById(f.id)?.value;return v?{project_id:proj.id,key:f.key,label:f.label,date:v,changed_by:currentUserName}:null;}).filter(Boolean);
 
   // Auto-split milestones by SO if multiple SOs entered
   const soList=so.split(',').map(s=>s.trim()).filter(Boolean);
