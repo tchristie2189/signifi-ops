@@ -2459,7 +2459,38 @@ function renderIntake(){
       <div class="field"><label>Vinyl type</label><select id="i-vinyl-type"><option value="">Select...</option><option>Decal</option><option>Partial Vinyl</option><option>Full Vinyl</option></select></div>
 
       <div class="intake-section-lbl">Key milestone dates</div>
-      ${selectedTemplate&&selectedTemplate!=='blank'?`<div style="grid-column:1/-1;background:var(--blue-bg);border:1px solid var(--blue);border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;font-size:12px"><span>📐 Template: <strong>${TEMPLATES.find(t=>t.id===selectedTemplate)?.name}</strong> — enter PO release date then click Apply</span><button class="btn btn-primary" style="font-size:11px;padding:4px 12px" onclick="applyTemplateToIntake()">Apply template dates</button></div>`:`<div style="grid-column:1/-1;font-size:11px;color:var(--gray-500)">💡 Tip: pick a template first from the <button onclick="setTab('templates')" style="background:none;border:none;cursor:pointer;color:var(--blue);font-size:11px;text-decoration:underline;font-family:var(--font)">Templates tab</button> to auto-fill dates.</div>`}
+      ${selectedTemplate&&selectedTemplate!=='blank'?`<div style="grid-column:1/-1;background:var(--blue-bg);border:1px solid var(--blue);border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;font-size:12px"><span>📐 Template: <strong>${TEMPLATES.find(t=>t.id===selectedTemplate)?.name}</strong> — enter start date then click Apply</span><button class="btn btn-primary" style="font-size:11px;padding:4px 12px" onclick="applyTemplateToIntake()">Apply template dates</button></div>`:`<div style="grid-column:1/-1;font-size:11px;color:var(--gray-500)">💡 Tip: pick a template first from the <button onclick="setTab('templates')" style="background:none;border:none;cursor:pointer;color:var(--blue);font-size:11px;text-decoration:underline;font-family:var(--font)">Templates tab</button> to auto-fill dates.</div>`}
+      ${selectedTemplate==='imac'?`
+      <div class="ms-intake-grid" style="grid-template-columns:1fr 1fr">
+        <div class="ms-block" style="grid-column:1/-1">
+          <div class="ms-block-title"><div class="ms-dot" style="background:#6b6b6b"></div>Project start</div>
+          <div class="field"><label>Project start date (used to calculate offsets) *</label><input id="i-po" type="date"></div>
+        </div>
+        <div class="ms-block">
+          <div class="ms-block-title"><div class="ms-dot" style="background:#7c3aed"></div>Addresses</div>
+          <div class="field"><label>Address — From (current location)</label><input id="i-addr-from" placeholder="123 Main St, City, State"></div>
+          <div class="field"><label>Address — To (destination)</label><input id="i-addr-to" placeholder="456 Oak Ave, City, State"></div>
+        </div>
+        <div class="ms-block">
+          <div class="ms-block-title"><div class="ms-dot" style="background:#0891b2"></div>Naming convention</div>
+          <div class="field"><label>Naming — Start (current)</label><input id="i-naming-from" placeholder="e.g. ACME-NYC-01" style="font-family:var(--mono)"></div>
+          <div class="field"><label>Naming — End (destination)</label><input id="i-naming-to" placeholder="e.g. ACME-LAX-01" style="font-family:var(--mono)"></div>
+        </div>
+        <div class="ms-block">
+          <div class="ms-block-title"><div class="ms-dot" style="background:#db2777"></div>Uninstall & Install</div>
+          <div class="field"><label>Uninstallation date</label><input id="i-train" type="date"></div>
+          <div class="field"><label>Installation date *</label><input id="i-inst" type="date"></div>
+        </div>
+        <div class="ms-block">
+          <div class="ms-block-title"><div class="ms-dot" style="background:#059669"></div>Shipping</div>
+          <div class="field"><label>Pick-up date</label><input id="i-ship" type="date"></div>
+          <div class="field"><label>Delivery date</label><input id="i-del" type="date"></div>
+        </div>
+        <div class="ms-block" style="grid-column:1/-1">
+          <div class="ms-block-title"><div class="ms-dot" style="background:#6b6b6b"></div>Notes</div>
+          <div class="field"><textarea id="i-notes" placeholder="IMAC notes — special requirements, access instructions, contacts at both sites..." style="min-height:70px"></textarea></div>
+        </div>
+      </div>`:`
       <div class="ms-intake-grid">
 
         <div class="ms-block"><div class="ms-block-title"><div class="ms-dot" style="background:#0f0f0f"></div>Readiness</div>
@@ -2510,7 +2541,7 @@ function renderIntake(){
 
       </div>
       <div class="intake-section-lbl">General notes</div>
-      <div class="field" style="grid-column:1/-1"><textarea id="i-notes" placeholder="Special requirements, IT notes, site constraints..." style="min-height:80px"></textarea></div>
+      <div class="field" style="grid-column:1/-1"><textarea id="i-notes" placeholder="Special requirements, IT notes, site constraints..." style="min-height:80px"></textarea></div>`}
     </div></div>
     <div class="form-actions"><button class="btn" onclick="clearIntake()">Clear</button><button class="btn btn-red" onclick="saveIntake()">Add to hub</button></div>
   </div>`;
@@ -2519,13 +2550,21 @@ async function saveIntake(){
   const name=document.getElementById('i-name').value.trim();const so=document.getElementById('i-so').value.trim();const client=document.getElementById('i-client').value.trim();
   if(!name||!so||!client){alert('Please fill in project name, SO number, and client.');return;}
   // Keep each section's notes separate (so they can be shown individually on the Project Page)
+  const isIMACTemplate=selectedTemplate==='imac';
+  // For IMAC: combine from/to addresses and naming into the standard fields
+  const addrFrom=document.getElementById('i-addr-from')?.value.trim()||'';
+  const addrTo=document.getElementById('i-addr-to')?.value.trim()||'';
+  const namingFrom=document.getElementById('i-naming-from')?.value.trim()||'';
+  const namingTo=document.getElementById('i-naming-to')?.value.trim()||'';
+  const imacAddress=isIMACTemplate&&(addrFrom||addrTo)?`From: ${addrFrom||'—'} → To: ${addrTo||'—'}`:document.getElementById('i-loc')?.value||'';
+  const imacNaming=isIMACTemplate&&(namingFrom||namingTo)?`${namingFrom||'—'} → ${namingTo||'—'}`:document.getElementById('i-naming')?.value.trim()||null;
   const noteSections={
-    readiness:document.getElementById('i-notes-readiness').value.trim(),
-    production:document.getElementById('i-notes-production').value.trim(),
-    ui:document.getElementById('i-notes-ui').value.trim(),
-    quality:document.getElementById('i-notes-quality').value.trim(),
-    shipping:document.getElementById('i-notes-shipping').value.trim(),
-    install:document.getElementById('i-notes-install').value.trim(),
+    readiness:document.getElementById('i-notes-readiness')?.value.trim()||'',
+    production:document.getElementById('i-notes-production')?.value.trim()||'',
+    ui:document.getElementById('i-notes-ui')?.value.trim()||'',
+    quality:document.getElementById('i-notes-quality')?.value.trim()||'',
+    shipping:document.getElementById('i-notes-shipping')?.value.trim()||'',
+    install:document.getElementById('i-notes-install')?.value.trim()||'',
   };
   const generalNotes=document.getElementById('i-notes').value.trim();
   const pm=document.getElementById('i-pm').value.trim();
@@ -2537,7 +2576,7 @@ async function saveIntake(){
   const vinylType=document.getElementById('i-vinyl-type').value;
   const formFactor='';
   const productType=[...document.getElementById('i-type').selectedOptions].map(o=>o.value).join(', ');
-  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,channel_partner:channelPartner,product_type:productType,quantity:parseInt(document.getElementById('i-qty').value)||null,location:document.getElementById('i-loc').value,notes:generalNotes,naming_convention:document.getElementById('i-naming')?.value.trim()||null,status:'active',changed_by:currentUserName,pm,sdm,solutions,sales,account_manager:accountManager,vinyl_type:vinylType,form_factor:formFactor}).select().single();
+  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,channel_partner:channelPartner,product_type:productType,quantity:parseInt(document.getElementById('i-qty').value)||null,location:imacAddress||document.getElementById('i-loc')?.value||'',notes:generalNotes,naming_convention:imacNaming||document.getElementById('i-naming')?.value.trim()||null,status:'active',changed_by:currentUserName,pm,sdm,solutions,sales,account_manager:accountManager,vinyl_type:vinylType,form_factor:formFactor}).select().single();
   if(error){alert('Error: '+error.message);return;}
   // Save each section's notes individually into project_sections so they can be shown
   // separately on the Project Page (instead of being merged into one untraceable blob)
