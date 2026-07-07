@@ -179,7 +179,7 @@ const DEPT_CONFIG={
   'mo2026':{name:'MO Release (Niraj)',color:'#6b6b6b',milestoneKeys:['mo-release'],labels:{'mo-release':'MO Release'}},
   'qa2026':{name:'Quality',color:'#d97706',milestoneKeys:['quality-start','quality-end','final-qc','vinyl'],labels:{'quality-start':'QA start','quality-end':'QA end','final-qc':'Final QC','vinyl':'Vinyl / branding'}},
   'ship2026':{name:'Shipping',color:'#059669',milestoneKeys:['shipping','delivery'],labels:{'shipping':'Pick up date','delivery':'Delivery date'}},
-  'deploy2026':{name:'Deployment',color:'#db2777',milestoneKeys:['installation'],labels:{'installation':'Installation date'}},
+  'deploy2026':{name:'Deployment',color:'#db2777',milestoneKeys:['installation','uninstallation'],labels:{'installation':'Installation date','uninstallation':'Uninstallation date'}},
 };
 
 let currentDept=null;
@@ -280,6 +280,7 @@ const BUCKET_CFG=[
   {id:'shipping',   label:'Pick up',      icon:'📦', color:'#059669', keys:['shipping'],    labelMatch:[]},
   {id:'delivery',   label:'Deliveries',   icon:'🚚', color:'#2563eb', keys:['delivery'],    labelMatch:[]},
   {id:'installation',label:'Installations',icon:'🔧',color:'#db2777', keys:['installation'],labelMatch:[]},
+  {id:'uninstallation',label:'Uninstallations',icon:'🔩',color:'#f43f5e', keys:['uninstallation'],labelMatch:[]},
   {id:'training',   label:'Training',     icon:'🎓', color:'#f59e0b', keys:['training'],    labelMatch:[]},
   {id:'prod-start', label:'Prod Start',   icon:'🏭', color:'#7c3aed', keys:['production-start'],labelMatch:[]},
   {id:'prod-end',   label:'Prod End',     icon:'✅', color:'#7c3aed', keys:['production-end'],  labelMatch:[]},
