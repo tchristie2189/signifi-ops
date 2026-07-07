@@ -1172,6 +1172,7 @@ async function quickUpdateMs(msId,newDate){
   if(!m.original_date)await sb.from('milestones').update({original_date:m.date}).eq('id',msId);
   await sb.from('milestones').update({date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',msId);
   m.date=newDate;
+  await syncMsDateToVinyl(m,newDate);
   const proj=projects.find(p=>p.id===m.project_id);
   if(proj?.parent_project_id){
     await markMilestoneDeviated(m.project_id,m.key,oldDate,newDate);
@@ -1180,6 +1181,25 @@ async function quickUpdateMs(msId,newDate){
     showToast('Date updated ✓');
   }
   await loadAll();
+}
+
+// Syncs a changed milestone date back to the matching vinyl_schedule row so
+// the vinyl schedule never shows a stale date after a milestone edit.
+async function syncMsDateToVinyl(ms,newDate){
+  if(ms.key!=='vinyl'&&ms.key!=='shipping')return;
+  const dbField=ms.key==='vinyl'?'date':'ship_date';
+  const inMemField=ms.key==='vinyl'?'date':'shipDate';
+  // Find matching vinyl schedule rows for this project/SO
+  const rows=vinylSchedule.filter(v=>
+    v.project_id===ms.project_id&&
+    (ms.so_tag?v.so===ms.so_tag:true)&&
+    v.id // only saved rows
+  );
+  if(!rows.length)return;
+  await Promise.all(rows.map(v=>
+    sb.from('vinyl_schedule').update({[dbField]:newDate,updated_at:new Date().toISOString()}).eq('id',v.id)
+  ));
+  rows.forEach(v=>{v[inMemField]=newDate;if(ms.key==='vinyl')v.date=newDate;else v.shipDate=newDate;});
 }
 function openAddMsForProj(projId){
   const typeOpts=Object.entries(TYPE_LBL).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
@@ -2956,6 +2976,8 @@ async function saveEditMs(id,oldLabel,oldDate){
   if(oldDate&&newDate&&oldDate!==newDate){
     await sb.from('milestone_history').insert({milestone_id:id,project_id:proj?.id||null,old_date:oldDate,new_date:newDate,changed_by:currentUserName,reason:reason||null});
     await logActivity('updated date',newLabel,newLabel,proj?.id||null,oldDate,newDate);
+    // Keep vinyl schedule in sync when vinyl or shipping milestone date changes
+    if(ms)await syncMsDateToVinyl(ms,newDate);
   }
 
   // If this milestone has a so_tag and date changed, offer to push to all SOs
