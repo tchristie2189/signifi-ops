@@ -1023,8 +1023,32 @@ function renderPipeline(){
       var isManual=!!p.pipeline_stage;
       var expanded=_pipelineExpanded.has(p.id);
 
+      // Gather all checkin notes for this project's milestones
+      var ciNotes=pMs.map(function(m){
+        var ci=checkinStatus[m.id];
+        if(!ci||!ci.notes)return null;
+        var sl=ci.stoplight||'';
+        return{label:m.label,note:ci.notes,sl:sl,by:ci.stoplight_by||'',at:ci.stoplight_at||''};
+      }).filter(Boolean);
+
       var expandedHtml=expanded?
         '<div style="margin-top:10px;padding-top:10px;border-top:1px solid '+borderColor+'" onclick="event.stopPropagation()">'+
+          // Checkin notes section — shown first so it's the first thing you see
+          (ciNotes.length?
+            '<div style="margin-bottom:10px">'+
+              '<div style="font-size:10px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Dept check-in notes</div>'+
+              ciNotes.map(function(n){
+                var bg=n.sl==='red'?'#fef2f2':n.sl==='yellow'?'#fffbeb':'#f8fafc';
+                var border=n.sl==='red'?'#ef4444':n.sl==='yellow'?'#eab308':'#cbd5e1';
+                var color=n.sl==='red'?'#991b1b':n.sl==='yellow'?'#92400e':'#374151';
+                var icon=n.sl==='red'?'🔴':n.sl==='yellow'?'🟡':'💬';
+                return'<div style="padding:6px 9px;background:'+bg+';border-left:3px solid '+border+';border-radius:5px;margin-bottom:4px">'+
+                  '<div style="font-size:10px;font-weight:600;color:var(--gray-500);margin-bottom:2px">'+icon+' '+n.label+'</div>'+
+                  '<div style="font-size:11px;color:'+color+'">'+n.note.replace(/</g,'&lt;')+'</div>'+
+                  (n.by?'<div style="font-size:9px;color:var(--gray-400);margin-top:2px">— '+n.by+'</div>':'')+
+                '</div>';
+              }).join('')+
+            '</div>':'')+
           '<div style="font-size:10px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Edit milestone dates</div>'+
           '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'+
             '<span style="font-size:11px;color:var(--gray-600);white-space:nowrap;min-width:70px">'+(TYPE_LBL[stage.key]||stage.key)+'</span>'+
@@ -1064,7 +1088,16 @@ function renderPipeline(){
           '<span style="font-size:10px;color:var(--gray-500)">'+(p.pm||'\u2014')+'</span>'+
           '<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:8px;background:'+(health==='red'?'#fee2e2':health==='amber'?'#fef3c7':'#dcfce7')+';color:'+healthColor+'">'+days+'d</span>'+
         '</div>'+
-        (endDate?'<div style="margin-top:4px;font-size:10px;color:'+(d!==null&&d<0?'var(--red)':d!==null&&d<=3?'#d97706':'var(--gray-400)')+'">📅 Due '+fmt(endDate)+(d!==null&&d<0?' \u00b7 '+Math.abs(d)+'d late':'')+'</div>':'')+
+        (endDate?(function(){
+          var countdownBg=d===null?'#f1f5f9':d<0?'#fee2e2':d===0?'#fef9c3':d<=2?'#ffedd5':d<=5?'#fef3c7':'#f0fdf4';
+          var countdownColor=d===null?'#94a3b8':d<0?'#991b1b':d===0?'#854d0e':d<=2?'#c2410c':d<=5?'#92400e':'#166534';
+          var countdownLabel=d===null?'No date set':d<0?Math.abs(d)+'d overdue':d===0?'Due TODAY':d===1?'Due TOMORROW':''+d+'d left';
+          var countdownIcon=d===null?'📅':d<0?'🚨':d===0?'⚠️':d<=2?'🔥':d<=5?'⏰':'✅';
+          return'<div style="margin-top:6px;padding:4px 8px;border-radius:6px;background:'+countdownBg+';display:flex;align-items:center;justify-content:space-between">'+
+            '<span style="font-size:10px;font-weight:700;color:'+countdownColor+'">'+countdownIcon+' '+countdownLabel+'</span>'+
+            '<span style="font-size:9px;color:'+countdownColor+';opacity:0.8">'+fmt(endDate)+'</span>'+
+          '</div>';
+        })():'<div style="margin-top:6px;padding:4px 8px;border-radius:6px;background:#f1f5f9;font-size:10px;color:#94a3b8">📅 No due date set</div>')+
         '<div style="font-size:10px;color:var(--gray-400);margin-top:3px">'+(expanded?'\u25b2 close':'\u25bc edit / move')+'</div>'+
         expandedHtml+
       '</div>';
