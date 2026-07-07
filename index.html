@@ -2049,10 +2049,10 @@ function renderCheckinOverview(){
       if(keys.includes(m.key)){if(!lbls.length)return true;return lbls.some(l=>(m.label||'').toLowerCase().includes(l.toLowerCase()));}
       return false;
     });
-    // Deduplicate SO-split: one row per unique label per project (earliest date wins)
+    // Deduplicate SO-split: same label + same date = one row; same label + different date = individual rows
     const seen={};const deduped=[];
     [...projectMs].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(m=>{
-      const k=m.project_id+'|'+m.label;if(!seen[k]){seen[k]=true;deduped.push(m);}
+      const k=m.project_id+'|'+m.label+'|'+(m.date||'');if(!seen[k]){seen[k]=true;deduped.push(m);}
     });
     const adHocForDept=[];
     if(dept==='Shipping'){(adHocRows.shipping||[]).forEach(r=>{const d=r.shipDate||r.ship_date||'';if(!d)return;const dt=new Date(d+'T00:00:00');if(dt>=wStart&&dt<=wEnd)adHocForDept.push({id:'adhoc-ship-'+r.id,label:r.name,date:d,key:'shipping',project_id:null,_adhoc:true,_raw:r});});}
@@ -2111,10 +2111,12 @@ function renderCheckinOverview(){
         const dateLabel=d<0?Math.abs(d)+'d overdue':d===0?'Today':fmt(m.date);
         const borderColor=sl==='green'?'#22c55e':sl==='yellow'?'#eab308':sl==='red'?'#ef4444':'#e2e8f0';
         const projName=proj?proj.name:(m._adhoc?m.label:'—');
-        // Compact SO — truncate long lists to first 2 then +N
-        const rawSO=proj?proj.so_number:(m._adhoc?m._raw?.so||'':'');
+        // Show the specific SO tag this milestone belongs to (not all SOs on the project)
+        // Falls back to compact list only if there's no so_tag (pre-split projects)
+        const soTag=m._adhoc?(m._raw?.so||''):m.so_tag||'';
+        const rawSO=soTag||(proj?proj.so_number:'');
         const soList=rawSO.split(',').map(s=>s.trim()).filter(Boolean);
-        const compactSO=soList.length>2?soList.slice(0,2).join(', ')+' <span style="color:var(--gray-400)">+'+( soList.length-2)+'</span>':rawSO;
+        const compactSO=soTag?soTag:(soList.length>2?soList.slice(0,2).join(', ')+' <span style="color:var(--gray-400)">+'+(soList.length-2)+'</span>':rawSO);
         const soHtml=rawSO?'<span style="font-family:var(--mono);font-size:10px;color:var(--red)">'+compactSO+'</span>':'';
 
         // Note — prominent if exists
@@ -2987,20 +2989,40 @@ async function saveEv(){
 
 // ── EXCEL EXPORT ───────────────────────────────────────────
 function exportToExcel(){
-  const exportProjects=activeProjects(currentTab)||projects;
+  // Build the project list exactly as the current view sees it
+  const exportProjects=filterBySales(filterByPM(activeProjects(currentTab)||projects));
+  const hideMs=hideCompleted[currentTab]||false;
+  // Label showing active filters for the filename
+  const filterParts=[];
+  if(pmFilter)filterParts.push(pmFilter);
+  if(salesFilter)filterParts.push(salesFilter);
+  if(hideMs)filterParts.push('active-only');
+  const filterSuffix=filterParts.length?'_'+filterParts.join('_'):'';
+
   const wb=XLSX.utils.book_new();
+  // Sheet 1: Projects & Milestones — filtered to current view
   const r1=[['Project','SO Number','Client','Product Type','Status','Milestone','Type','Date','Days from today','Last changed by']];
-  exportProjects.forEach(p=>{const pMs=milestones.filter(m=>m.project_id===p.id);if(!pMs.length){r1.push([p.name,p.so_number,p.client,p.product_type,p.status,'','','','','']);}else{pMs.forEach((m,i)=>r1.push([i===0?p.name:'',i===0?p.so_number:'',i===0?p.client:'',i===0?p.product_type:'',i===0?p.status:'',m.label,TYPE_LBL[m.key]||m.key,m.date,m.date?daysDiff(m.date):'',m.changed_by||'']));}}); 
+  exportProjects.forEach(p=>{
+    const pMs=milestones.filter(m=>m.project_id===p.id&&(!hideMs||!isMilestoneEffectivelyDone(m)));
+    if(!pMs.length){r1.push([p.name,p.so_number,p.client,p.product_type,p.status,'','','','','']);}
+    else{pMs.forEach((m,i)=>r1.push([i===0?p.name:'',i===0?p.so_number:'',i===0?p.client:'',i===0?p.product_type:'',i===0?p.status:'',m.label,TYPE_LBL[m.key]||m.key,m.date,m.date?daysDiff(m.date):'',m.changed_by||'']));}
+  });
   const ws1=XLSX.utils.aoa_to_sheet(r1);ws1['!cols']=[{wch:28},{wch:14},{wch:18},{wch:18},{wch:10},{wch:26},{wch:16},{wch:12},{wch:14},{wch:18}];XLSX.utils.book_append_sheet(wb,ws1,'Projects & Milestones');
+  // Sheet 2: Vinyl Schedule — respect vinyl filters
   const r2=[['Priority','SO','Customer','Project','Type','Vinyl Date','Ship Date','PM','Form Factor','Status']];
-  vinylSchedule.forEach((item,i)=>r2.push([i+1,item.so,item.client,item.name,item.vinylType,item.date||'TBD',item.shipDate||'TBD',item.pm,item.formFactor,item.status]));
+  const vinylExport=(hideCompleted['vinyl']?vinylSchedule.filter(v=>v.status!=='Complete'):vinylSchedule)
+    .filter(v=>{const p=projects.find(x=>x.id===v.project_id);if(!p)return!pmFilter&&!salesFilter;if(pmFilter&&p.pm!==pmFilter)return false;if(salesFilter&&p.sales!==salesFilter)return false;return true;});
+  vinylExport.forEach((item,i)=>r2.push([i+1,item.so,item.client,item.name,item.vinylType,item.date||'TBD',item.shipDate||'TBD',item.pm,item.formFactor,item.status]));
   const ws2=XLSX.utils.aoa_to_sheet(r2);XLSX.utils.book_append_sheet(wb,ws2,'Vinyl Schedule');
+  // Sheet 3: Planogram Schedule
   const r3=[['Priority','SO','Customer','Project','Machine Type','Plan Start','Plan End','Sign-off Date','Status']];
   planogramSchedule.forEach((item,i)=>r3.push([i+1,item.so,item.client,item.name,item.machineType,item.planStart||'',item.planEnd||'',item.date||'TBD',item.status]));
   const ws3=XLSX.utils.aoa_to_sheet(r3);XLSX.utils.book_append_sheet(wb,ws3,'Planogram Schedule');
+  // Sheet 4: Production
   const r4=[['Project','SO','Client','Prod Start','Prod End','Duration','Status']];
   exportProjects.forEach(p=>{const sd=getMsDate(p.id,'production-start');const ed=getMsDate(p.id,'production-end');const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000):'';const st=stageStatus(sd,ed);r4.push([p.name,p.so_number,p.client,sd||'',ed||'',dur,st.label]);});
   const ws4=XLSX.utils.aoa_to_sheet(r4);XLSX.utils.book_append_sheet(wb,ws4,'Production');
+  // Sheet 5: Activity Log
   const r5=[['Time','User','Action','Item','Project','Old Value','New Value']];
   activityLog.forEach(l=>{const proj=projects.find(p=>p.id===l.project_id);r5.push([fmtTime(l.created_at),l.user_name||l.user_email,l.action,l.entity_name,proj?.name||'',l.old_value||'',l.new_value||'']);});
   const ws5=XLSX.utils.aoa_to_sheet(r5);XLSX.utils.book_append_sheet(wb,ws5,'Activity Log');
@@ -3011,18 +3033,15 @@ function exportToExcel(){
     const hist=milestoneHistory[m.id]||[];
     if(!m.original_date&&!hist.length)return;
     const variance=m.original_date&&m.date?Math.round((new Date(m.date+'T00:00:00')-new Date(m.original_date+'T00:00:00'))/86400000):0;
-    if(hist.length){
-      hist.forEach(h=>{r6.push([proj?.name||'',proj?.so_number||'',m.label,m.original_date||'',m.date||'',variance,h.changed_at?new Date(h.changed_at).toLocaleDateString():'' ,h.changed_by||'',h.reason||'']);});
-    } else {
-      r6.push([proj?.name||'',proj?.so_number||'',m.label,m.original_date||'',m.date||'',variance,'','','No changes']);
-    }
+    if(hist.length){hist.forEach(h=>{r6.push([proj?.name||'',proj?.so_number||'',m.label,m.original_date||'',m.date||'',variance,h.changed_at?new Date(h.changed_at).toLocaleDateString():'',h.changed_by||'',h.reason||'']);});}
+    else{r6.push([proj?.name||'',proj?.so_number||'',m.label,m.original_date||'',m.date||'',variance,'','','No changes']);}
   });
   const ws6=XLSX.utils.aoa_to_sheet(r6);ws6['!cols']=[{wch:24},{wch:12},{wch:26},{wch:14},{wch:14},{wch:14},{wch:14},{wch:18},{wch:40}];
   XLSX.utils.book_append_sheet(wb,ws6,'Date Change History');
   // Sheet 7: Ad hoc shipping & installation
   const r7=[['Type','Name','SO','Client','PM','Ship Date','Delivery Date','Training Date','Install Date','Status','Notes','Created By']];
-  (adHocRows.shipping||[]).forEach(r=>r7.push(['Shipping',r.name,r.so||'',r.client||'',r.pm||'',r.shipDate||r.ship_date||'',r.deliveryDate||r.delivery_date||'','','',r.status||'',r.notes||'',r.created_by||'']));
-  (adHocRows.installation||[]).forEach(r=>r7.push(['Installation',r.name,r.so||'',r.client||'',r.pm||'','','',r.trainingDate||r.training_date||'',r.installDate||r.install_date||'',r.status||'',r.notes||'',r.created_by||'']));
+  (adHocRows.shipping||[]).filter(r=>!pmFilter||r.pm===pmFilter).forEach(r=>r7.push(['Shipping',r.name,r.so||'',r.client||'',r.pm||'',r.shipDate||r.ship_date||'',r.deliveryDate||r.delivery_date||'','','',r.status||'',r.notes||'',r.created_by||'']));
+  (adHocRows.installation||[]).filter(r=>!pmFilter||r.pm===pmFilter).forEach(r=>r7.push(['Installation',r.name,r.so||'',r.client||'',r.pm||'','','',r.trainingDate||r.training_date||'',r.installDate||r.install_date||'',r.status||'',r.notes||'',r.created_by||'']));
   const ws7=XLSX.utils.aoa_to_sheet(r7);ws7['!cols']=[{wch:14},{wch:28},{wch:12},{wch:22},{wch:12},{wch:12},{wch:14},{wch:14},{wch:14},{wch:30},{wch:16}];
   XLSX.utils.book_append_sheet(wb,ws7,'Ad Hoc Schedule');
   // Sheet 8: Shipping Schedule (projects + ad hoc combined, sorted by ship date)
@@ -3044,7 +3063,7 @@ function exportToExcel(){
   const ws8=XLSX.utils.aoa_to_sheet(r8);
   ws8['!cols']=[{wch:32},{wch:18},{wch:22},{wch:12},{wch:14},{wch:14},{wch:40},{wch:14}];
   XLSX.utils.book_append_sheet(wb,ws8,'Shipping Schedule');
-  XLSX.writeFile(wb,'Signifi_Ops_'+new Date().toISOString().split('T')[0]+'.xlsx');showToast('Excel downloaded ✓');
+  XLSX.writeFile(wb,'Signifi_Ops'+filterSuffix+'_'+new Date().toISOString().split('T')[0]+'.xlsx');showToast('Excel downloaded ✓');
 }
 
 // ── PROJECT PAGE ───────────────────────────────────────────
