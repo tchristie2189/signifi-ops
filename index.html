@@ -431,7 +431,7 @@ const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod s
 const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa','final-qc':'ev-fqc',uat:'ev-uat',installation:'ev-inst',uninstallation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
 const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date','Print Day','Vacation'];
-const SHIP_STATUS_OPTS=['Pending','Scheduled','Shipped','Delivered'];
+const SHIP_STATUS_OPTS=['Pending','Scheduled','Picked up','Shipped','Delivered'];
 
 let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={},extensionRequests=[];
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
@@ -692,7 +692,7 @@ function renderTab(){
 
 // ── DATA ───────────────────────────────────────────────────
 async function loadAll(){
-  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext,psl]=await Promise.all([
+  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
@@ -705,10 +705,8 @@ async function loadAll(){
     sb.from('milestone_deviations').select('*'),
     sb.from('so_details').select('*'),
     sb.from('extension_requests').select('*').order('created_at',{ascending:false}),
-    sb.from('pipeline_stage_log').select('*').order('entered_at',{ascending:false}).limit(500),
   ]);
   projects=pr.data||[];milestones=ms.data||[];activityLog=lg.data||[];
-  pipelineStageLog=psl.data||[];
   checkinStatus={};(ci.data||[]).forEach(c=>{checkinStatus[c.milestone_id]=c;});
   milestoneDone={};(md.data||[]).forEach(d=>{milestoneDone[d.milestone_id]=d;});
   soDetails=sod.data||[];
@@ -837,47 +835,46 @@ async function loadAll(){
 
 // ── PIPELINE BOARD ─────────────────────────────────────────
 const PIPELINE_STAGES=[
-  {id:'mo-release',  label:'MO / PO Release', color:'#6b6b6b', icon:'📋', key:'mo-release',        doneKey:'mo-release'},
-  {id:'parts-order', label:'Parts Ordered',    color:'#d97706', icon:'🛒', key:'po-release',        doneKey:'po-release'},
-  {id:'parts-arrive',label:'Parts Arrived',    color:'#0891b2', icon:'📦', key:'arrival',           doneKey:'arrival'},
-  {id:'production',  label:'In Production',    color:'#7c3aed', icon:'🏭', key:'production-start',  endKey:'production-end', doneKey:'production-end'},
-  {id:'qa',          label:'Quality / QA',     color:'#d97706', icon:'🔍', key:'quality-start',     endKey:'quality-end',   doneKey:'quality-end'},
-  {id:'shipping',    label:'Shipping',          color:'#059669', icon:'🚚', key:'shipping',          doneKey:'shipping'},
-  {id:'delivered',   label:'Delivered',         color:'#16a34a', icon:'✅', key:'delivery',          doneKey:'delivery'},
+  {id:'mo-release',  label:'MO / PO Release', color:'#6b6b6b', icon:'📋', key:'mo-release',   doneKey:null},
+  {id:'parts-order', label:'Parts Ordered',    color:'#d97706', icon:'🛒', key:'po-release',   doneKey:'po-release'},
+  {id:'parts-arrive',label:'Parts Arrived',    color:'#0891b2', icon:'📦', key:'arrival',      doneKey:'arrival'},
+  {id:'production',  label:'In Production',    color:'#7c3aed', icon:'🏭', key:'production-start', endKey:'production-end', doneKey:'production-end'},
+  {id:'qa',          label:'Quality / QA',     color:'#d97706', icon:'🔍', key:'quality-start',endKey:'quality-end',  doneKey:'quality-end'},
+  {id:'shipping',    label:'Shipping',          color:'#059669', icon:'🚚', key:'shipping',     doneKey:'shipping'},
+  {id:'delivered',   label:'Delivered',         color:'#16a34a', icon:'✅', key:'delivery',     doneKey:'delivery'},
 ];
 
-let pipelineStageLog=[];
-let _pipelineExpanded=new Set();
-let _pipelineDragId=null;
-
 function getProjectStage(proj){
-  if(proj.pipeline_stage)return proj.pipeline_stage;
   const pMs=milestones.filter(m=>m.project_id===proj.id);
   const getDate=key=>pMs.find(m=>m.key===key)?.date||null;
   const isDoneMs=key=>{const m=pMs.find(x=>x.key===key);return m?isMilestoneDone(m):false;};
   const t=today();
   const crossed=key=>{const d=getDate(key);return d&&new Date(d+'T00:00:00')<=t;};
+
+  // Walk stages from last to first — project is in the LAST stage whose start date has been crossed
+  // but whose done milestone is NOT yet marked done
   if(isDoneMs('delivery')||crossed('delivery'))return'delivered';
   if(isDoneMs('shipping')||crossed('shipping'))return'shipping';
-  if(isDoneMs('quality-end')||crossed('quality-end'))return'shipping';
+  if(isDoneMs('quality-end')||crossed('quality-end'))return'delivered'; // past QA end → heading to shipping
   if(crossed('quality-start'))return'qa';
   if(isDoneMs('production-end')||crossed('production-end'))return'qa';
   if(crossed('production-start'))return'production';
   if(crossed('arrival')||isDoneMs('arrival'))return'parts-arrive';
   if(crossed('po-release'))return'parts-order';
   if(crossed('mo-release'))return'mo-release';
-  return'mo-release';
+  return'mo-release'; // default — not started yet
 }
 
 function getDaysInStage(proj,stageId){
-  const logEntry=pipelineStageLog.filter(l=>l.project_id===proj.id&&l.stage_id===stageId&&!l.exited_at).sort((a,b)=>new Date(b.entered_at)-new Date(a.entered_at))[0];
-  if(logEntry)return Math.max(0,Math.round((Date.now()-new Date(logEntry.entered_at).getTime())/86400000));
   const pMs=milestones.filter(m=>m.project_id===proj.id);
+  const getDate=key=>pMs.find(m=>m.key===key)?.date||null;
   const stage=PIPELINE_STAGES.find(s=>s.id===stageId);
   if(!stage)return 0;
-  const startDate=pMs.find(m=>m.key===stage.key)?.date;
+  const startDate=getDate(stage.key);
   if(!startDate)return 0;
-  return Math.max(0,Math.round((today()-new Date(startDate+'T00:00:00'))/86400000));
+  const start=new Date(startDate+'T00:00:00');
+  const t=today();
+  return Math.max(0,Math.round((t-start)/86400000));
 }
 
 function getStageHealth(proj,stageId){
@@ -893,255 +890,118 @@ function getStageHealth(proj,stageId){
   return'green';
 }
 
-async function logStageTransition(proj,newStageId,moveType){
-  const oldStageId=proj.pipeline_stage||getProjectStage({...proj,pipeline_stage:null});
-  if(oldStageId===newStageId)return;
-  const now=new Date().toISOString();
-  const openEntry=pipelineStageLog.find(l=>l.project_id===proj.id&&l.stage_id===oldStageId&&!l.exited_at);
-  if(openEntry){
-    const days=Math.round((Date.now()-new Date(openEntry.entered_at).getTime())/86400000);
-    await sb.from('pipeline_stage_log').update({exited_at:now,days_in_stage:days}).eq('id',openEntry.id);
-    openEntry.exited_at=now;openEntry.days_in_stage=days;
-  }
-  const{data}=await sb.from('pipeline_stage_log').insert({project_id:proj.id,project_name:proj.name,stage_id:newStageId,entered_at:now,moved_by:currentUserName,move_type:moveType||'manual'}).select().single();
-  if(data)pipelineStageLog.push(data);
-}
-
-async function movePipelineStage(projId,newStageId){
-  if(!newStageId)return;
-  const proj=projects.find(p=>p.id===projId);
-  if(!proj)return;
-  await logStageTransition(proj,newStageId,'manual');
-  await sb.from('projects').update({pipeline_stage:newStageId}).eq('id',projId);
-  proj.pipeline_stage=newStageId;
-  showToast('Moved to '+(PIPELINE_STAGES.find(s=>s.id===newStageId)?.label||newStageId)+' \u2713');
-  renderPipeline();
-}
-
-async function resetPipelineStage(projId){
-  const proj=projects.find(p=>p.id===projId);
-  if(!proj)return;
-  await sb.from('projects').update({pipeline_stage:null}).eq('id',projId);
-  proj.pipeline_stage=null;
-  showToast('Stage reset to auto \u2713');
-  renderPipeline();
-}
-
-async function pipelineUpdateDate(msId,newDate,projId){
-  if(!msId||!newDate){showToast('No milestone linked \u2014 set dates in Project Overview');return;}
-  const ms=milestones.find(m=>m.id===msId);
-  if(!ms)return;
-  if(!ms.original_date)await sb.from('milestones').update({original_date:ms.date}).eq('id',msId);
-  await sb.from('milestones').update({date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',msId);
-  ms.date=newDate;
-  await syncMsDateToVinyl(ms,newDate);
-  showToast('Date updated \u2713');
-  renderPipeline();
-}
-
 let pipelineFilter='';
-let pipelineStageFilter='';
-
-function buildBottleneckBar(){
-  const avgByStage={};
-  PIPELINE_STAGES.forEach(s=>{
-    const completed=pipelineStageLog.filter(l=>l.stage_id===s.id&&l.days_in_stage!=null);
-    avgByStage[s.id]=completed.length?Math.round(completed.reduce((a,l)=>a+Number(l.days_in_stage),0)/completed.length):null;
-  });
-  const maxAvg=Math.max(...Object.values(avgByStage).filter(Boolean),1);
-  return'<div style="background:white;border:1px solid var(--gray-100);border-radius:10px;padding:14px 16px;margin-bottom:1rem">'+
-    '<div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px">Bottleneck tracker \u2014 avg days per stage</div>'+
-    '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px">'+
-    PIPELINE_STAGES.map(function(s){
-      var avg=avgByStage[s.id];
-      var liveProjs=pipelineStageLog.filter(function(l){return l.stage_id===s.id&&!l.exited_at;}).length;
-      var barPct=avg?Math.round((avg/maxAvg)*100):0;
-      var barColor=avg&&barPct>70?'#ef4444':avg&&barPct>40?'#f59e0b':s.color;
-      return'<div style="text-align:center">'+
-        '<div style="font-size:10px;color:'+s.color+';font-weight:600;margin-bottom:4px">'+s.icon+' '+s.label+'</div>'+
-        '<div style="height:40px;background:var(--gray-100);border-radius:4px;display:flex;align-items:flex-end;overflow:hidden;margin-bottom:4px">'+
-        '<div style="width:100%;height:'+(barPct||0)+'%;background:'+barColor+';border-radius:4px;min-height:'+(avg?'3px':'0')+';transition:height 0.3s"></div></div>'+
-        '<div style="font-size:13px;font-weight:700;color:'+(avg?'var(--black)':'var(--gray-300)')+'}">'+(avg!=null?avg+'d':'\u2014')+'</div>'+
-        (liveProjs>0?'<div style="font-size:9px;color:var(--gray-400)">'+liveProjs+' live</div>':'')+
-      '</div>';
-    }).join('')+
-    '</div>'+
-    '<div style="font-size:10px;color:var(--gray-400);margin-top:8px">Data accumulates as projects move through stages. Tallest bar = biggest bottleneck.</div>'+
-  '</div>';
-}
+let pipelineStageFilter=''; // filter to a specific stage
+let pipelineShowComplete=false;
 
 function renderPipeline(){
-  var el=document.getElementById('tab-pipeline');
-  var activeProjs=filterByPM(projects.filter(function(p){return p.status!=='complete';}));
-  var stageMap={};
-  PIPELINE_STAGES.forEach(function(s){stageMap[s.id]=[];});
-  activeProjs.forEach(function(p){
+  const el=document.getElementById('tab-pipeline');
+  const activeProjs=filterByPM(projects.filter(p=>p.status!=='complete'));
+
+  // Group projects by stage
+  const stageMap={};
+  PIPELINE_STAGES.forEach(s=>{stageMap[s.id]=[];});
+  activeProjs.forEach(p=>{
     if(pipelineFilter&&p.pm!==pipelineFilter)return;
-    var stage=getProjectStage(p);
+    const stage=getProjectStage(p);
     if(stageMap[stage])stageMap[stage].push(p);
   });
-  var totalActive=activeProjs.filter(function(p){return!pipelineFilter||p.pm===pipelineFilter;}).length;
 
-  var summaryHtml='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px;margin-bottom:1rem">'+
-    PIPELINE_STAGES.map(function(s){
-      var count=stageMap[s.id]?stageMap[s.id].length:0;
-      var late=(stageMap[s.id]||[]).filter(function(p){return getStageHealth(p,s.id)==='red';}).length;
-      return'<div style="background:white;border:1px solid '+(late>0?'#fecaca':'var(--gray-100)')+';border-left:3px solid '+s.color+';border-radius:8px;padding:8px 12px;cursor:pointer" onclick="pipelineStageFilter=pipelineStageFilter===\''+s.id+'\'?\'\':\' '+s.id+'\';pipelineStageFilter=pipelineStageFilter.trim();renderPipeline()">'+
-        '<div style="font-size:20px;font-weight:700;color:'+(late>0?'var(--red)':'var(--black)')+'">'+count+'</div>'+
-        '<div style="font-size:10px;font-weight:600;color:'+s.color+'">'+s.label+'</div>'+
-        (late>0?'<div style="font-size:10px;color:var(--red)">\u26a0 '+late+' late</div>':'')+
-      '</div>';
-    }).join('')+
-  '</div>';
+  // Summary counts for bottleneck bar
+  const totalActive=activeProjs.filter(p=>!pipelineFilter||p.pm===pipelineFilter).length;
+  const bottlenecks=PIPELINE_STAGES.map(s=>({
+    ...s,
+    count:stageMap[s.id]?.length||0,
+    late:(stageMap[s.id]||[]).filter(p=>getStageHealth(p,s.id)==='red').length
+  })).filter(b=>b.count>0);
 
-  var visibleStages=pipelineStageFilter?PIPELINE_STAGES.filter(function(s){return s.id===pipelineStageFilter;}):PIPELINE_STAGES;
+  const summaryHtml=`
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;margin-bottom:1rem">
+      ${bottlenecks.map(b=>`
+        <div style="background:white;border:1px solid ${b.late>0?'#fecaca':'var(--gray-100)'};border-left:3px solid ${b.color};border-radius:8px;padding:8px 12px;cursor:pointer" onclick="document.getElementById('pipeline-col-${b.id}').scrollIntoView({behavior:'smooth',block:'nearest'})">
+          <div style="font-size:18px;font-weight:700;color:${b.late>0?'var(--red)':'var(--black)'}">${b.count}</div>
+          <div style="font-size:10px;font-weight:600;color:${b.color};margin-top:1px">${b.label}</div>
+          ${b.late>0?`<div style="font-size:10px;color:var(--red);margin-top:2px">⚠ ${b.late} late</div>`:''}
+        </div>`).join('')}
+    </div>`;
 
-  var columnsHtml=visibleStages.map(function(stage){
-    var projs=(stageMap[stage.id]||[]).slice().sort(function(a,b){
-      var ha=getStageHealth(a,stage.id),hb=getStageHealth(b,stage.id);
+  // Filter columns if a stage filter is active
+  const visibleStages=pipelineStageFilter?PIPELINE_STAGES.filter(s=>s.id===pipelineStageFilter):PIPELINE_STAGES;
+
+  el.innerHTML=`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:8px">
+      <div>
+        <div style="font-size:16px;font-weight:600">🗂 Project Pipeline</div>
+        <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${totalActive} active projects · click any card to open project page</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        ${pmDropdown('renderPipeline')}
+        <select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pipelineStageFilter=this.value;renderPipeline()">
+          <option value="">All stages</option>
+          ${PIPELINE_STAGES.map(s=>`<option value="${s.id}"${pipelineStageFilter===s.id?' selected':''}>${s.icon} ${s.label}</option>`).join('')}
+        </select>
+        <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
+      </div>
+    </div>
+    ${summaryHtml}
+    <div style="overflow-x:auto;padding-bottom:1rem">
+      <div style="display:flex;gap:12px;min-width:max-content;align-items:flex-start;padding-bottom:8px">
+        ${visibleStages.map(stage=>{
+    const projs=stageMap[stage.id]||[];
+    const lateCount=projs.filter(p=>getStageHealth(p,stage.id)==='red').length;
+    const cards=projs.sort((a,b)=>{
+      const ha=getStageHealth(a,stage.id);const hb=getStageHealth(b,stage.id);
       if(ha==='red'&&hb!=='red')return-1;if(hb==='red'&&ha!=='red')return 1;
       return getDaysInStage(b,stage.id)-getDaysInStage(a,stage.id);
-    });
-    var lateCount=projs.filter(function(p){return getStageHealth(p,stage.id)==='red';}).length;
-
-    var cards=projs.map(function(p){
-      var health=getStageHealth(p,stage.id);
-      var days=getDaysInStage(p,stage.id);
-      var pMs=milestones.filter(function(m){return m.project_id===p.id;});
-      var endKey=stage.endKey||stage.doneKey||stage.key;
-      var keyMs=pMs.find(function(m){return m.key===stage.key;});
-      var endMs=pMs.find(function(m){return m.key===endKey;});
-      var endDate=endMs?endMs.date:null;
-      var d=endDate?daysDiff(endDate):null;
-      var healthColor=health==='red'?'#ef4444':health==='amber'?'#f59e0b':'#22c55e';
-      var healthBg=health==='red'?'#fef2f2':health==='amber'?'#fffbeb':'#f0fdf4';
-      var borderColor=health==='red'?'#fca5a5':health==='amber'?'#fde68a':'#bbf7d0';
-      var soList=(p.so_number||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
-      var soDisplay=soList.length>2?soList.slice(0,2).join(', ')+' <span style="color:var(--gray-400);font-size:9px">+'+( soList.length-2)+'</span>':p.so_number||'\u2014';
-      var deptCis=pMs.map(function(m){return checkinStatus[m.id];}).filter(Boolean);
-      var slDot=deptCis.some(function(c){return c.stoplight==='red';})?'🔴':deptCis.some(function(c){return c.stoplight==='yellow';})?'🟡':'';
-      var isManual=!!p.pipeline_stage;
-      var expanded=_pipelineExpanded.has(p.id);
-
-      // Gather all checkin notes for this project's milestones
-      var ciNotes=pMs.map(function(m){
-        var ci=checkinStatus[m.id];
-        if(!ci||!ci.notes)return null;
-        var sl=ci.stoplight||'';
-        return{label:m.label,note:ci.notes,sl:sl,by:ci.stoplight_by||'',at:ci.stoplight_at||''};
-      }).filter(Boolean);
-
-      var expandedHtml=expanded?
-        '<div style="margin-top:10px;padding-top:10px;border-top:1px solid '+borderColor+'" onclick="event.stopPropagation()">'+
-          // Checkin notes section — shown first so it's the first thing you see
-          (ciNotes.length?
-            '<div style="margin-bottom:10px">'+
-              '<div style="font-size:10px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Dept check-in notes</div>'+
-              ciNotes.map(function(n){
-                var bg=n.sl==='red'?'#fef2f2':n.sl==='yellow'?'#fffbeb':'#f8fafc';
-                var border=n.sl==='red'?'#ef4444':n.sl==='yellow'?'#eab308':'#cbd5e1';
-                var color=n.sl==='red'?'#991b1b':n.sl==='yellow'?'#92400e':'#374151';
-                var icon=n.sl==='red'?'🔴':n.sl==='yellow'?'🟡':'💬';
-                return'<div style="padding:6px 9px;background:'+bg+';border-left:3px solid '+border+';border-radius:5px;margin-bottom:4px">'+
-                  '<div style="font-size:10px;font-weight:600;color:var(--gray-500);margin-bottom:2px">'+icon+' '+n.label+'</div>'+
-                  '<div style="font-size:11px;color:'+color+'">'+n.note.replace(/</g,'&lt;')+'</div>'+
-                  (n.by?'<div style="font-size:9px;color:var(--gray-400);margin-top:2px">— '+n.by+'</div>':'')+
-                '</div>';
-              }).join('')+
-            '</div>':'')+
-          '<div style="font-size:10px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Edit milestone dates</div>'+
-          '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'+
-            '<span style="font-size:11px;color:var(--gray-600);white-space:nowrap;min-width:70px">'+(TYPE_LBL[stage.key]||stage.key)+'</span>'+
-            '<input type="date" value="'+(keyMs?keyMs.date:'')+'" style="font-family:var(--font);font-size:11px;padding:3px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);flex:1" onchange="pipelineUpdateDate(\''+(keyMs?keyMs.id:'')+'\',this.value,\''+p.id+'\')">'+
-          '</div>'+
-          (endKey!==stage.key?
-            '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'+
-              '<span style="font-size:11px;color:var(--gray-600);white-space:nowrap;min-width:70px">'+(TYPE_LBL[endKey]||endKey)+'</span>'+
-              '<input type="date" value="'+(endMs?endMs.date:'')+'" style="font-family:var(--font);font-size:11px;padding:3px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);flex:1" onchange="pipelineUpdateDate(\''+(endMs?endMs.id:'')+'\',this.value,\''+p.id+'\')">'+
-            '</div>':'')+
-          '<div style="font-size:10px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Move to stage</div>'+
-          '<select onchange="movePipelineStage(\''+p.id+'\',this.value)" style="font-family:var(--font);font-size:11px;padding:4px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%;margin-bottom:8px">'+
-            '<option value="">\u2014 select stage \u2192</option>'+
-            PIPELINE_STAGES.filter(function(s){return s.id!==stage.id;}).map(function(s){return'<option value="'+s.id+'">'+s.icon+' '+s.label+'</option>';}).join('')+
-          '</select>'+
-          '<div style="display:flex;gap:6px">'+
-            (isManual?'<button onclick="resetPipelineStage(\''+p.id+'\')" style="font-size:10px;padding:3px 8px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font)">\u21ba Auto</button>':'')+
-            (stage.id==='delivered'?'<button onclick="toggleArchive(\''+p.id+'\',\'active\')" style="font-size:10px;padding:3px 8px;border-radius:var(--radius);border:1px solid var(--success);background:var(--success-bg);color:var(--success);cursor:pointer;font-family:var(--font);font-weight:600">\u2713 Complete project</button>':'')+
-            '<button onclick="goToProjPage(\''+p.id+'\')" style="font-size:10px;padding:3px 8px;border-radius:var(--radius);border:1px solid var(--blue);background:var(--blue-bg);color:var(--blue);cursor:pointer;font-family:var(--font)">\u2197 Project page</button>'+
-          '</div>'+
-        '</div>':'';
-
-      return'<div style="background:'+healthBg+';border:1px solid '+borderColor+';border-left:3px solid '+healthColor+';border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s" '+
-        'draggable="true" '+
-        'ondragstart="event.stopPropagation();_pipelineDragId=\''+p.id+'\';event.dataTransfer.effectAllowed=\'move\'" '+
-        'onclick="if(_pipelineExpanded.has(\''+p.id+'\')){_pipelineExpanded.delete(\''+p.id+'\')}else{_pipelineExpanded.add(\''+p.id+'\')};renderPipeline()" '+
-        'onmouseover="this.style.boxShadow=\'0 2px 8px rgba(0,0,0,0.1)\'" onmouseout="this.style.boxShadow=\'\'">'+
-        '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px;margin-bottom:4px">'+
-          '<div style="font-size:12px;font-weight:600;color:var(--black);line-height:1.3;flex:1">'+p.name+'</div>'+
-          '<div style="display:flex;align-items:center;gap:4px;flex-shrink:0">'+
-            (slDot?'<span style="font-size:11px">'+slDot+'</span>':'')+
-            (isManual?'<span style="font-size:9px;padding:1px 5px;border-radius:6px;background:#ede9fe;color:#7c3aed;font-weight:700">manual</span>':'')+
-            '<div style="width:8px;height:8px;border-radius:50%;background:'+healthColor+'"></div>'+
-          '</div>'+
-        '</div>'+
-        '<div style="font-family:var(--mono);font-size:10px;color:var(--red);margin-bottom:4px">'+soDisplay+'</div>'+
-        '<div style="display:flex;align-items:center;justify-content:space-between;gap:4px">'+
-          '<span style="font-size:10px;color:var(--gray-500)">'+(p.pm||'\u2014')+'</span>'+
-          '<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:8px;background:'+(health==='red'?'#fee2e2':health==='amber'?'#fef3c7':'#dcfce7')+';color:'+healthColor+'">'+days+'d</span>'+
-        '</div>'+
-        (stage.id!=='delivered'?(endDate?(function(){
-          var countdownBg=d===null?'#f1f5f9':d<0?'#fee2e2':d===0?'#fef9c3':d<=2?'#ffedd5':d<=5?'#fef3c7':'#f0fdf4';
-          var countdownColor=d===null?'#94a3b8':d<0?'#991b1b':d===0?'#854d0e':d<=2?'#c2410c':d<=5?'#92400e':'#166534';
-          var countdownLabel=d===null?'No date set':d<0?Math.abs(d)+'d overdue':d===0?'Due TODAY':d===1?'Due TOMORROW':''+d+'d left';
-          var countdownIcon=d===null?'📅':d<0?'🚨':d===0?'⚠️':d<=2?'🔥':d<=5?'⏰':'✅';
-          return'<div style="margin-top:6px;padding:4px 8px;border-radius:6px;background:'+countdownBg+';display:flex;align-items:center;justify-content:space-between">'+
-            '<span style="font-size:10px;font-weight:700;color:'+countdownColor+'">'+countdownIcon+' '+countdownLabel+'</span>'+
-            '<span style="font-size:9px;color:'+countdownColor+';opacity:0.8">'+fmt(endDate)+'</span>'+
-          '</div>';
-        })():'<div style="margin-top:6px;padding:4px 8px;border-radius:6px;background:#f1f5f9;font-size:10px;color:#94a3b8">📅 No due date set</div>'):'<div style="margin-top:6px;padding:4px 8px;border-radius:6px;background:#f0fdf4;font-size:10px;color:#166534;font-weight:600">✅ Delivered — ready to complete</div>')+
-        '<div style="font-size:10px;color:var(--gray-400);margin-top:3px">'+(expanded?'\u25b2 close':'\u25bc edit / move')+'</div>'+
-        expandedHtml+
-      '</div>';
+    }).map(p=>{
+      const health=getStageHealth(p,stage.id);
+      const days=getDaysInStage(p,stage.id);
+      const pMs=milestones.filter(m=>m.project_id===p.id);
+      const endKey=stage.endKey||stage.doneKey||stage.key;
+      const endMs=pMs.find(m=>m.key===endKey);
+      const endDate=endMs?.date;
+      const d=endDate?daysDiff(endDate):null;
+      const healthColor=health==='red'?'#ef4444':health==='amber'?'#f59e0b':'#22c55e';
+      const healthBg=health==='red'?'#fef2f2':health==='amber'?'#fffbeb':'#f0fdf4';
+      const borderColor=health==='red'?'#fca5a5':health==='amber'?'#fde68a':'#bbf7d0';
+      const soList=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+      const soDisplay=soList.length>2?soList.slice(0,2).join(', ')+` +${soList.length-2}`:p.so_number||'—';
+      const upcoming=pMs.filter(m=>m.date&&daysDiff(m.date)>=0).sort((a,b)=>a.date.localeCompare(b.date))[0];
+      const deptCis=pMs.map(m=>checkinStatus[m.id]).filter(Boolean);
+      const hasRed=deptCis.some(c=>c.stoplight==='red');
+      const hasYellow=deptCis.some(c=>c.stoplight==='yellow');
+      const slDot=hasRed?'🔴':hasYellow?'🟡':'';
+      return`<div style="background:${healthBg};border:1px solid ${borderColor};border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s" onclick="goToProjPage('${p.id}')" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow=''">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px;margin-bottom:5px">
+          <div style="font-size:12px;font-weight:600;color:var(--black);line-height:1.3;flex:1">${p.name}</div>
+          <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+            ${slDot?`<span style="font-size:11px">${slDot}</span>`:''}
+            <div style="width:8px;height:8px;border-radius:50%;background:${healthColor};flex-shrink:0"></div>
+          </div>
+        </div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--red);margin-bottom:5px">${soDisplay}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px">
+          <span style="font-size:10px;color:var(--gray-500)">${p.pm||'—'}</span>
+          <span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:8px;background:${health==='red'?'#fee2e2':health==='amber'?'#fef3c7':'#dcfce7'};color:${healthColor}">${days}d in stage</span>
+        </div>
+        ${endDate?`<div style="margin-top:5px;font-size:10px;color:${d!==null&&d<0?'var(--red)':d!==null&&d<=3?'#d97706':'var(--gray-500)'}">Due: ${fmt(endDate)}${d!==null&&d<0?' ⚠ '+Math.abs(d)+'d late':''}</div>`:''}
+        ${upcoming&&upcoming.key!==endKey?`<div style="margin-top:3px;font-size:10px;color:var(--gray-400)">Next: ${upcoming.label} ${fmt(upcoming.date)}</div>`:''}
+      </div>`;
     }).join('');
-
-    return'<div id="pipeline-col-'+stage.id+'" '+
-      'style="min-width:'+(pipelineStageFilter?'320px':'200px')+';width:'+(pipelineStageFilter?'auto':'200px')+';flex-shrink:0;display:flex;flex-direction:column" '+
-      'ondragover="event.preventDefault();this.style.outline=\'2px dashed '+stage.color+'\'" '+
-      'ondragleave="this.style.outline=\'\'" '+
-      'ondrop="event.preventDefault();this.style.outline=\'\';if(_pipelineDragId)movePipelineStage(_pipelineDragId,\''+stage.id+'\');_pipelineDragId=null">'+
-      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid '+stage.color+';flex-shrink:0">'+
-        '<span style="font-size:14px">'+stage.icon+'</span>'+
-        '<span style="font-size:12px;font-weight:700;color:'+stage.color+'">'+stage.label+'</span>'+
-        '<span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;background:'+stage.color+'18;color:'+stage.color+'">'+projs.length+'</span>'+
-        (lateCount>0&&stage.id!=='delivered'?'<span style="font-size:10px;font-weight:600;color:var(--red);margin-left:auto">\u26a0 '+lateCount+'</span>':'')+
-      '</div>'+
-      '<div style="overflow-y:auto;flex:1;max-height:calc(100vh - 340px);display:flex;flex-direction:column;gap:6px;padding-right:2px">'+
-        (cards||'<div style="text-align:center;padding:1.5rem;color:var(--gray-300);font-size:11px;border:2px dashed var(--gray-200);border-radius:8px">Drop here</div>')+
-      '</div>'+
-    '</div>';
-  }).join('');
-
-  el.innerHTML=
-    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:8px">'+
-      '<div><div style="font-size:16px;font-weight:600">🗂 Project Pipeline</div>'+
-      '<div style="font-size:12px;color:var(--gray-500);margin-top:2px">'+totalActive+' active projects \u00b7 click card to edit \u00b7 drag to move</div></div>'+
-      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+
-        pmDropdown('renderPipeline')+
-        '<select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pipelineStageFilter=this.value;renderPipeline()">'+
-          '<option value="">All stages</option>'+
-          PIPELINE_STAGES.map(function(s){return'<option value="'+s.id+'"'+(pipelineStageFilter===s.id?' selected':'')+'>'+s.icon+' '+s.label+'</option>';}).join('')+
-        '</select>'+
-        '<button onclick="loadAll().then(renderPipeline)" style="font-family:var(--font);font-size:12px;padding:4px 10px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);color:var(--gray-600);cursor:pointer">\u21bb Refresh</button>'+
-        '<button class="btn-export" onclick="exportToExcel()">\u2b07 Excel</button>'+
-      '</div>'+
-    '</div>'+
-    summaryHtml+
-    buildBottleneckBar()+
-    '<div style="overflow-x:auto;overflow-y:hidden;padding-bottom:6px">'+
-      '<div style="display:flex;gap:10px;min-width:max-content;align-items:flex-start;padding:0 2px">'+
-        columnsHtml+
-      '</div>'+
-    '</div>';
+    return`<div id="pipeline-col-${stage.id}" style="min-width:${pipelineStageFilter?'100%':'220px'};max-width:${pipelineStageFilter?'100%':'260px'};flex-shrink:0">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid ${stage.color}">
+        <span style="font-size:14px">${stage.icon}</span>
+        <span style="font-size:12px;font-weight:700;color:${stage.color}">${stage.label}</span>
+        <span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;background:${stage.color}18;color:${stage.color}">${projs.length}</span>
+        ${lateCount>0?`<span style="font-size:10px;font-weight:600;color:var(--red);margin-left:auto">⚠ ${lateCount} late</span>`:''}
+      </div>
+      <div style="display:${pipelineStageFilter?'grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr))':'flex;flex-direction:column'};gap:6px">
+        ${cards||`<div style="text-align:center;padding:1.5rem 0;color:var(--gray-300);font-size:11px">No projects</div>`}
+      </div>
+    </div>`;
+  }).join('')}
+      </div>
+    </div>`;
 }
 
 // ── AT A GLANCE ────────────────────────────────────────────
@@ -5965,8 +5825,47 @@ async function toggleArchive(id,currentStatus){
   if(error){alert('Error: '+error.message);return;}
   const proj=projects.find(p=>p.id===id);
   await logActivity(newStatus==='complete'?'marked complete':'restored to active',proj?.name||'',proj?.so_number||'',id,currentStatus,newStatus);
-  showToast(newStatus==='complete'?'Project marked complete ✓':'Project restored ✓');
+  if(newStatus==='complete')fireConfetti();
+  showToast(newStatus==='complete'?'🎉 Project complete!':'Project restored ✓');
   await loadAll();
+}
+
+function fireConfetti(){
+  const colors=['#C8102E','#7c3aed','#059669','#d97706','#2563eb','#db2777','#0891b2'];
+  const count=180;
+  const canvas=document.createElement('canvas');
+  canvas.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:99999';
+  canvas.width=window.innerWidth;canvas.height=window.innerHeight;
+  document.body.appendChild(canvas);
+  const ctx=canvas.getContext('2d');
+  const pieces=Array.from({length:count},()=>({
+    x:Math.random()*canvas.width,
+    y:-20,
+    w:Math.random()*10+4,
+    h:Math.random()*6+3,
+    color:colors[Math.floor(Math.random()*colors.length)],
+    rot:Math.random()*360,
+    rotV:(Math.random()-0.5)*8,
+    vx:(Math.random()-0.5)*6,
+    vy:Math.random()*5+3,
+    opacity:1
+  }));
+  let frame=0;
+  function draw(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    pieces.forEach(p=>{
+      p.x+=p.vx;p.y+=p.vy;p.rot+=p.rotV;p.vy+=0.12;
+      if(frame>90)p.opacity=Math.max(0,p.opacity-0.015);
+      ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.rot*Math.PI/180);
+      ctx.globalAlpha=p.opacity;ctx.fillStyle=p.color;
+      ctx.fillRect(-p.w/2,-p.h/2,p.w,p.h);
+      ctx.restore();
+    });
+    frame++;
+    if(frame<150)requestAnimationFrame(draw);
+    else canvas.remove();
+  }
+  draw();
 }
 
 // ── TEMPLATES ──────────────────────────────────────────────
@@ -6639,3 +6538,4 @@ loadAll();
 </script>
 </body>
 </html>
+
