@@ -629,7 +629,7 @@ async function submitExtensionRequest(){
 }
 
 // ── SHIPPING STATUS (CHECKIN) ──────────────────────────────
-const SHIP_STATUS_OPTS=['Pending','Scheduled','Shipped','Delivered'];
+const SHIP_STATUS_OPTS=['Pending','Scheduled','Picked up','Shipped','Delivered'];
 function shipStatusChipCls(s){return s==='Delivered'?'chip-done':s==='Shipped'?'chip-atrisk':s==='Scheduled'?'chip-active':'chip-future';}
 function getCheckinShippingStatus(m){
   if(m._adhoc){
