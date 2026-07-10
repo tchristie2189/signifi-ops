@@ -363,6 +363,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
           <button class="nav-item" id="ni-insights" onclick="setTab('insights')"><span class="nav-item-dot" style="background:#0891b2"></span>📊 Insights</button>
           <button class="nav-item" id="ni-calendar" onclick="setTab('calendar')"><span class="nav-item-dot" style="background:#059669"></span>📆 Calendar</button>
           <button class="nav-item" id="ni-readiness" onclick="setTab('readiness')"><span class="nav-item-dot" style="background:#ef4444"></span>🚨 Readiness</button>
+          <button class="nav-item" id="ni-capacity" onclick="setTab('capacity')"><span class="nav-item-dot" style="background:#7c3aed"></span>📊 Capacity</button>
           <div class="nav-sep"></div>
           <div class="nav-group-label">Departments</div>
           <button class="nav-item" id="ni-production" onclick="setTab('production')"><span class="nav-item-dot" style="background:#7c3aed"></span>Production</button>
@@ -406,6 +407,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
     <div id="tab-insights" style="display:none"></div>
     <div id="tab-calendar" style="display:none"></div>
     <div id="tab-readiness" style="display:none"></div>
+    <div id="tab-capacity" style="display:none"></div>
     <div id="tab-pipeline" style="display:none"></div>
     <div id="tab-overview" style="display:none"></div>
     <div id="tab-projpage" style="display:none"></div>
@@ -690,12 +692,12 @@ function setTab(tab){
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','pipeline','overview','projpage','week','production','quality','shipping','installation','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness'];
+  const ALL=['glance','pipeline','overview','projpage','week','production','quality','shipping','installation','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
 function renderTab(){
-  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness};
+  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity};
   if(m[currentTab])m[currentTab]();
 }
 
@@ -1011,6 +1013,151 @@ function renderPipeline(){
   }).join('')}
       </div>
     </div>`;
+}
+
+// ── CAPACITY ───────────────────────────────────────────────
+let capacityWeeksCount=8;
+let capacitySelectedWeek=0;
+let capacityScenario={projectId:'',days:3,active:false};
+
+function ymd(d){const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const day=String(d.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
+
+// A project "occupies" the week(s) its production window overlaps.
+// Falls back gracefully: start-only or end-only milestones still count as a 1-day window.
+function getProdRange(p){
+  const pMs=milestones.filter(m=>m.project_id===p.id);
+  const s=pMs.find(m=>m.key==='production-start')?.date;
+  const e=pMs.find(m=>m.key==='production-end')?.date;
+  if(!s&&!e)return null;
+  return{start:s||e,end:e||s};
+}
+
+function capacityLimit(){return Number(appSettings['capacity_weekly_limit'])||10;}
+
+// Builds `count` weeks starting this Monday. If scenario is active, the matching
+// project's window is shifted by scenario.days (non-destructive, in-memory only).
+function computeWeeklyLoad(count,scenario){
+  const start0=monday(today());
+  const weeks=[];
+  for(let i=0;i<count;i++){
+    const ws=addD(start0,i*7),we=addD(ws,6);
+    weeks.push({start:ws,end:we,projects:[]});
+  }
+  projects.filter(p=>p.status!=='complete').forEach(p=>{
+    const range=getProdRange(p);
+    if(!range)return;
+    let s=new Date(range.start+'T00:00:00'),e=new Date(range.end+'T00:00:00');
+    if(scenario&&scenario.active&&scenario.projectId===p.id){s=addD(s,scenario.days);e=addD(e,scenario.days);}
+    weeks.forEach(w=>{if(s<=w.end&&e>=w.start)w.projects.push(p);});
+  });
+  return weeks;
+}
+
+function capacityStatus(count,limit){
+  const pct=limit?count/limit:0;
+  if(pct>1)return{color:'#ef4444',bg:'#fef2f2',label:'🔴 Over capacity'};
+  if(pct>=0.85)return{color:'#d97706',bg:'#fffbeb',label:'🟡 Near capacity'};
+  return{color:'#16a34a',bg:'#f0fdf4',label:'🟢 Healthy'};
+}
+
+function toggleCapacityWeek(i){capacitySelectedWeek=capacitySelectedWeek===i?null:i;renderCapacity();}
+
+async function saveCapacityLimit(val){
+  const n=Math.max(1,parseInt(val)||10);
+  appSettings['capacity_weekly_limit']=n;
+  await sb.from('app_settings').upsert({key:'capacity_weekly_limit',value:n,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
+  renderCapacity();
+}
+
+function runCapacityScenario(){
+  const pid=document.getElementById('cap-scenario-proj')?.value||'';
+  const days=parseInt(document.getElementById('cap-scenario-days')?.value)||0;
+  capacityScenario={projectId:pid,days,active:!!pid&&days!==0};
+  renderCapacity();
+}
+function clearCapacityScenario(){
+  capacityScenario={projectId:'',days:3,active:false};
+  renderCapacity();
+}
+
+function renderCapacity(){
+  const el=document.getElementById('tab-capacity');if(!el)return;
+  const limit=capacityLimit();
+  const weeks=computeWeeklyLoad(capacityWeeksCount,null);
+  const scenarioWeeks=capacityScenario.active?computeWeeklyLoad(capacityWeeksCount,capacityScenario):null;
+  const overCount=weeks.filter(w=>w.projects.length>limit).length;
+  const thisWeek=weeks[0]?.projects.length||0;
+  const noDataCount=projects.filter(p=>p.status!=='complete'&&!getProdRange(p)).length;
+
+  const scenarioProjOpts=projects.filter(p=>p.status!=='complete'&&getProdRange(p))
+    .sort((a,b)=>a.name.localeCompare(b.name))
+    .map(p=>`<option value="${p.id}"${capacityScenario.projectId===p.id?' selected':''}>${p.name}${p.pm?' — '+p.pm:''}</option>`).join('');
+
+  const rows=weeks.map((w,i)=>{
+    const count=w.projects.length;
+    const st=capacityStatus(count,limit);
+    const pct=Math.min(100,Math.round((count/(limit||1))*100));
+    const scCount=scenarioWeeks?scenarioWeeks[i].projects.length:null;
+    const scSt=scCount!==null?capacityStatus(scCount,limit):null;
+    const label=i===0?'This week':i===1?'Next week':`Week of ${fmt(ymd(w.start))}`;
+    const isSel=capacitySelectedWeek===i;
+    return`<div style="border:1px solid ${isSel?st.color:'var(--gray-100)'};border-left:3px solid ${st.color};border-radius:8px;margin-bottom:6px;overflow:hidden">
+      <button onclick="toggleCapacityWeek(${i})" style="width:100%;text-align:left;background:${isSel?st.bg:'white'};border:none;cursor:pointer;font-family:var(--font);padding:10px 14px;display:flex;align-items:center;gap:14px">
+        <div style="min-width:160px">
+          <div style="font-size:12px;font-weight:700">${label}</div>
+          <div style="font-size:10px;color:var(--gray-500)">${fmt(ymd(w.start))} – ${fmt(ymd(w.end))}</div>
+        </div>
+        <div style="flex:1;min-width:120px">
+          <div style="height:8px;background:var(--gray-100);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${st.color}"></div></div>
+        </div>
+        <div style="font-size:12px;font-weight:700;white-space:nowrap;min-width:70px;text-align:right">${count} / ${limit}</div>
+        <div style="font-size:11px;font-weight:600;color:${st.color};white-space:nowrap;min-width:118px">${st.label}</div>
+        ${scCount!==null?`<div style="font-size:11px;font-weight:600;color:${scSt.color};white-space:nowrap;border-left:1px dashed var(--gray-300);padding-left:12px">Scenario: ${scCount} ${scSt.label}</div>`:''}
+      </button>
+      ${isSel?`<div style="padding:10px 14px 12px;background:var(--gray-50);border-top:1px solid var(--gray-100)">
+        ${w.projects.length?`<table style="width:100%;border-collapse:collapse">
+          <thead><tr style="font-size:10px;color:var(--gray-500);text-align:left"><th style="padding:4px 8px 4px 0;font-weight:600">Project</th><th style="padding:4px 8px;font-weight:600">SO</th><th style="padding:4px 8px;font-weight:600">PM</th><th style="padding:4px 8px;font-weight:600">Prod window</th></tr></thead>
+          <tbody>${w.projects.map(p=>{const r=getProdRange(p);return`<tr onclick="goToProjPage('${p.id}')" style="cursor:pointer;border-top:1px solid var(--gray-100)">
+            <td style="padding:6px 8px 6px 0;font-size:12px;font-weight:600">${p.name}</td>
+            <td style="padding:6px 8px;font-family:var(--mono);font-size:10px;color:var(--gray-500)">${p.so_number||'—'}</td>
+            <td style="padding:6px 8px;font-size:11px;color:var(--gray-500)">${p.pm||'—'}</td>
+            <td style="padding:6px 8px;font-size:11px;color:var(--gray-500)">${r?fmt(r.start)+' – '+fmt(r.end):'—'}</td>
+          </tr>`;}).join('')}</tbody>
+        </table>`:`<div style="font-size:12px;color:var(--gray-400);padding:6px 0">No projects scheduled in production this week.</div>`}
+      </div>`:''}
+    </div>`;
+  }).join('');
+
+  el.innerHTML=`
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <div><div style="font-size:21px;font-weight:700">📊 Operations Capacity</div><div style="font-size:12px;color:var(--gray-500);margin-top:3px">Production load by week, based on each project's production window · click a week to see what's in it</div></div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-500)">
+        Weekly capacity
+        <input type="number" min="1" value="${limit}" onchange="saveCapacityLimit(this.value)" style="width:56px;font-family:var(--font);font-size:12px;padding:4px 6px;border:1px solid var(--gray-300);border-radius:var(--radius);text-align:center">
+        projects
+      </div>
+    </div>
+    <div class="metrics-row" style="grid-template-columns:repeat(4,1fr)">
+      <div class="metric"><div class="metric-label">This week</div><div class="metric-val ${thisWeek>limit?'red':''}">${thisWeek}</div><div class="metric-sub">of ${limit} capacity</div></div>
+      <div class="metric"><div class="metric-label">Weeks over capacity</div><div class="metric-val ${overCount>0?'red':''}">${overCount}</div><div class="metric-sub">of next ${capacityWeeksCount}</div></div>
+      <div class="metric"><div class="metric-label">Active projects</div><div class="metric-val">${projects.filter(p=>p.status!=='complete').length}</div><div class="metric-sub">in hub</div></div>
+      <div class="metric"><div class="metric-label">Missing prod dates</div><div class="metric-val ${noDataCount>0?'amber':''}">${noDataCount}</div><div class="metric-sub">not shown below</div></div>
+    </div>
+    <div class="section" style="margin-bottom:14px">
+      <div class="section-head"><div class="section-title">What if a project slips?</div><div class="section-meta">Simulation only — nothing is saved</div></div>
+      <div style="padding:12px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <select id="cap-scenario-proj" style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);min-width:220px">
+          <option value="">Choose a project…</option>
+          ${scenarioProjOpts}
+        </select>
+        <span style="font-size:12px;color:var(--gray-500)">delay by</span>
+        <input id="cap-scenario-days" type="number" value="${capacityScenario.days||3}" style="width:60px;font-family:var(--font);font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);text-align:center">
+        <span style="font-size:12px;color:var(--gray-500)">days</span>
+        <button onclick="runCapacityScenario()" style="font-size:12px;font-weight:600;padding:6px 14px;border:none;border-radius:var(--radius);background:var(--black);color:white;cursor:pointer;font-family:var(--font)">Run scenario</button>
+        ${capacityScenario.active?`<button onclick="clearCapacityScenario()" style="font-size:12px;padding:6px 14px;border:1px solid var(--gray-300);border-radius:var(--radius);background:white;color:var(--gray-700);cursor:pointer;font-family:var(--font)">Clear</button>`:''}
+      </div>
+    </div>
+    <div>${rows}</div>`;
 }
 
 // ── AT A GLANCE ────────────────────────────────────────────
