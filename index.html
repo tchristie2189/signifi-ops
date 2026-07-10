@@ -1381,7 +1381,7 @@ const QUEUE_BOARDS={
       {key:'waiting',label:'Waiting on Parts',icon:'⏳',color:'#b45309'},
       {key:'ready',label:'Ready',icon:'✅',color:'#16a34a'},
       {key:'wip',label:'W.I.P',icon:'⚙',color:'#d97706'},
-      {key:'qc',label:'Moved to QC',icon:'🔬',color:'#0891b2'},
+      {key:'qc',label:'Moved to QA',icon:'📤',color:'#0891b2'},
     ],
     flow:['waiting','ready','wip','qc'],
     zoneOf(p){
@@ -1578,6 +1578,8 @@ function queueCard(p,boardKey){
         <button onclick="event.stopPropagation();setProjectImage('${p.id}','${boardKey}')" title="Change photo" style="position:absolute;top:4px;right:4px;width:18px;height:18px;border-radius:50%;border:none;background:rgba(0,0,0,0.55);color:white;font-size:9px;cursor:pointer;line-height:1">✎</button>
       </div>`
     :`<button onclick="event.stopPropagation();setProjectImage('${p.id}','${boardKey}')" style="width:100%;font-size:9.5px;color:var(--gray-400);background:white;border:1px dashed var(--gray-200);border-radius:6px;padding:4px;margin:-1px 0 6px;cursor:pointer;font-family:var(--font)">+ Add photo</button>`;
+  const soList=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soDisplay=soList.length>2?soList.slice(0,2).join(', ')+` +${soList.length-2}`:(p.so_number||'—');
   const receipt=getProductionReceipts()[p.id];
   const receiptLabel=boardKey==='qa'?'Received by QA':'Received';
   const receiptBlock=receipt
@@ -1591,7 +1593,7 @@ function queueCard(p,boardKey){
     </div>
     ${detail?`<div style="font-size:10px;color:var(--gray-500);margin-top:2px">${detail}</div>`:''}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-top:5px">
-      <span style="font-family:var(--mono);font-size:9.5px;color:var(--red)">${p.so_number||'—'}</span>
+      <span style="font-family:var(--mono);font-size:9.5px;color:var(--red)" title="${(p.so_number||'').replace(/"/g,'&quot;')}">${soDisplay}</span>
       <span style="font-size:10px;color:var(--gray-500)">${p.pm||'—'}</span>
     </div>
     <div style="display:flex;align-items:center;gap:4px;margin-top:4px">
