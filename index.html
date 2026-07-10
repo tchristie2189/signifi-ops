@@ -232,6 +232,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .ms-block .field:last-child{margin-bottom:0;}
 /* ── MODAL ── */
 .toast{position:fixed;bottom:22px;right:22px;background:var(--black);color:white;padding:10px 18px;border-radius:var(--radius-lg);font-size:12px;font-weight:500;z-index:999;display:none;animation:slideUp 0.2s ease;}
+.toast-undo{position:fixed;bottom:70px;right:22px;background:var(--black);color:white;padding:9px 12px 9px 16px;border-radius:var(--radius-lg);font-size:12px;font-weight:500;z-index:999;display:none;align-items:center;gap:12px;animation:slideUp 0.2s ease;box-shadow:0 8px 24px rgba(0,0,0,0.3);}
 @keyframes slideUp{from{transform:translateY(8px);opacity:0;}to{transform:translateY(0);opacity:1;}}
 .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:400;display:flex;align-items:center;justify-content:center;padding:1rem;}
 .modal{background:var(--white);border-radius:var(--radius-lg);width:480px;max-width:100%;max-height:90vh;overflow-y:auto;}
@@ -438,6 +439,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="toast-undo" id="undo-toast"></div>
 <div id="modal-root"></div>
 
 <script>
@@ -495,6 +497,28 @@ function stageStatus(start,end){
 }
 function getMsDate(pid,key){return milestones.find(m=>m.project_id===pid&&m.key===key)?.date||null;}
 function showToast(msg,dur=2500){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>{t.style.display='none';},dur);}
+
+// Generic "X changed — Undo (15s)" utility. One pending undo at a time — a new
+// one replaces whatever was there before, same as most apps do this.
+let _undoTimer=null,_undoCountdown=null,_pendingUndo=null;
+function showUndoToast(message,undoFn,duration=15000){
+  clearTimeout(_undoTimer);clearInterval(_undoCountdown);
+  const el=document.getElementById('undo-toast');
+  _pendingUndo=undoFn;
+  let secondsLeft=Math.round(duration/1000);
+  const paint=()=>{el.innerHTML=`<span>${message}</span><button onclick="runUndo()" style="background:white;color:black;border:none;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font)">Undo</button><span style="opacity:0.5;font-size:10px;min-width:18px;text-align:right">${secondsLeft}s</span>`;};
+  paint();
+  el.style.display='flex';
+  _undoCountdown=setInterval(()=>{secondsLeft--;if(secondsLeft>0)paint();},1000);
+  _undoTimer=setTimeout(()=>{el.style.display='none';clearInterval(_undoCountdown);_pendingUndo=null;},duration);
+}
+async function runUndo(){
+  const fn=_pendingUndo;if(!fn)return;
+  _pendingUndo=null;
+  document.getElementById('undo-toast').style.display='none';
+  clearTimeout(_undoTimer);clearInterval(_undoCountdown);
+  await fn();
+}
 function closeModal(){document.getElementById('modal-root').innerHTML='';}
 
 // ── SHIPPING STATUS ────────────────────────────────────────
@@ -1522,7 +1546,12 @@ async function queueDrop(e,boardKey,targetZone){
     await sb.from('projects').update({status:'on-hold'}).eq('id',pid);
     p.status='on-hold';
     await logActivity('put on hold',p.name,p.name,pid,null,null);
-    showToast(`${p.name} put on hold`);
+    showUndoToast(`${p.name} put on hold`,async()=>{
+      await sb.from('projects').update({status:'active'}).eq('id',pid);
+      p.status='active';
+      renderQueueBoard(boardKey);
+      showToast('Undone ✓');
+    });
     renderQueueBoard(boardKey);
     return;
   }
@@ -1530,7 +1559,12 @@ async function queueDrop(e,boardKey,targetZone){
     await sb.from('projects').update({status:'active'}).eq('id',pid);
     p.status='active';
     await logActivity('resumed from hold',p.name,p.name,pid,null,null);
-    showToast(`${p.name} resumed — now showing its actual stage`);
+    showUndoToast(`${p.name} resumed`,async()=>{
+      await sb.from('projects').update({status:'on-hold'}).eq('id',pid);
+      p.status='on-hold';
+      renderQueueBoard(boardKey);
+      showToast('Undone ✓');
+    });
     renderQueueBoard(boardKey);
     return;
   }
@@ -1540,6 +1574,7 @@ async function queueDrop(e,boardKey,targetZone){
 
   if(toIdx>fromIdx){
     let closed=0;
+    const touched=[]; // {ms, oldDate, wasDone} — exactly what we need to put back
     for(let i=fromIdx;i<toIdx;i++){
       // Re-fetch each pass — closing one milestone can change what the next zone's key resolves to (e.g. skipping UAT)
       const key=cfg.advanceKey(p,cfg.flow[i]);
@@ -1547,16 +1582,31 @@ async function queueDrop(e,boardKey,targetZone){
       const pMs=milestones.filter(m=>m.project_id===pid);
       const ms=pMs.find(m=>m.key===key);
       if(!ms)continue;
+      const wasDone=!!milestoneDone[ms.id];
+      const oldDate=ms.date;
+      let dateChanged=false;
       if(!ms.date||ms.date>ymd(today())){
-        const oldDate=ms.date;const newDate=ymd(today());
+        const newDate=ymd(today());
         await sb.from('milestones').update({date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',ms.id);
         if(oldDate)await sb.from('milestone_history').insert({milestone_id:ms.id,project_id:pid,old_date:oldDate,new_date:newDate,changed_by:currentUserName,reason:`Closed via ${cfg.title} drag`});
         ms.date=newDate;
+        dateChanged=true;
       }
       await setMilestoneDoneState(ms.id,pid,true);
+      touched.push({ms,oldDate,wasDone,dateChanged});
       closed++;
     }
-    showToast(`${p.name} moved forward — ${closed} milestone${closed===1?'':'s'} closed ✓`);
+    showUndoToast(`${p.name} moved forward — ${closed} milestone${closed===1?'':'s'} closed`,async()=>{
+      for(const t of touched){
+        if(t.dateChanged){
+          await sb.from('milestones').update({date:t.oldDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',t.ms.id);
+          t.ms.date=t.oldDate;
+        }
+        await setMilestoneDoneState(t.ms.id,pid,t.wasDone);
+      }
+      renderQueueBoard(boardKey);
+      showToast('Undone ✓');
+    });
   } else {
     showToast(`Can't drag backward — edit the milestone date on ${p.name}'s project page to move it back a stage`);
     renderQueueBoard(boardKey);
@@ -1758,20 +1808,16 @@ let hideCompleted={glance:false,overview:false,week:false,production:false,quali
 let hideNoVinylDate=false;
 
 // Helper — filters out completed projects based on per-page toggle
-const PM_LIST=['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'];
-const SALES_LIST=['Adnan Aga','Michael Harrison','Danny Pack','Julianna Reynolds','Michelle Hernandez','Kevin Bell','Shoubi Rastegar','Daniel Nowak'];
-const AM_LIST=['Ian Harrison','Daniel Pini','Michelle Hernandez','Tyler Stevenson','Pamela Gilliam'];
-
 function pmDropdown(renderFn){
   const onChange=renderFn.includes('(')?renderFn:renderFn+'()';
   return`<select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pmFilter=this.value;${onChange}">
     <option value="">All PMs</option>
-    ${PM_LIST.map(pm=>`<option value="${pm}"${pmFilter===pm?' selected':''}>${pm}</option>`).join('')}
+    ${getPMList().map(pm=>`<option value="${pm}"${pmFilter===pm?' selected':''}>${pm}</option>`).join('')}
   </select>`;
 }
 function filterByPM(list){return pmFilter?list.filter(p=>p.pm===pmFilter):list;}
 function salesDropdown(renderFn){
-  const salesList=SALES_LIST.length?SALES_LIST:[...new Set(projects.map(p=>p.sales).filter(Boolean))].sort();
+  const salesList=getSalesList().length?getSalesList():[...new Set(projects.map(p=>p.sales).filter(Boolean))].sort();
   if(!salesList.length)return'';
   const onChange=renderFn.includes('(')?renderFn:renderFn+'()';
   return`<select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="salesFilter=this.value;${onChange}">
@@ -2076,9 +2122,26 @@ function renderReadiness(){
       ${i.items.length>3?`<div style="font-size:10px;color:${color};font-weight:600;margin-top:4px">+${i.items.length-3} more</div>`:''}
     </button>`;
   }).join('');
-  const rows=shown.flatMap(i=>i.items.map(x=>({issue:i,...x}))).map(r=>`<tr onclick="openReadinessProject('${r.project_id||''}')" style="cursor:${r.project_id?'pointer':'default'}">
+  const rows=shown.flatMap(i=>i.items.map(x=>({issue:i,...x}))).map(r=>{
+    const pmCell=r.issue.id==='missing-pm'
+      ?`<select onclick="event.stopPropagation()" onchange="rqaSetPM('${r.project_id}',this.value)" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid #fde68a;border-radius:4px;background:#fffbeb;cursor:pointer">
+          <option value="">Assign PM…</option>
+          ${getPMList().map(pm=>`<option value="${pm}">${pm}</option>`).join('')}
+        </select>`
+      :(r.pm||'—');
+    const salesCell=r.issue.id==='missing-sales'
+      ?`<select onclick="event.stopPropagation()" onchange="rqaSetSales('${r.project_id}',this.value)" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid #fde68a;border-radius:4px;background:#fffbeb;cursor:pointer">
+          <option value="">Assign sales…</option>
+          ${getSalesList().map(s=>`<option value="${s}">${s}</option>`).join('')}
+        </select>`
+      :(r.sales||'—');
+    const soCell=r.issue.id==='missing-so'
+      ?`<input onclick="event.stopPropagation()" placeholder="SO number…" onkeydown="if(event.key==='Enter'){rqaSetSO('${r.project_id}',this.value);this.blur();}" onblur="if(this.value.trim())rqaSetSO('${r.project_id}',this.value)" style="font-family:var(--mono);font-size:11px;padding:3px 6px;border:1px solid #fde68a;border-radius:4px;width:110px;background:#fffbeb">`
+      :(r.so||'—');
+    return`<tr onclick="openReadinessProject('${r.project_id||''}')" style="cursor:${r.project_id?'pointer':'default'}">
     <td><span style="font-size:10px;font-weight:700;color:${r.issue.severity==='critical'?'#ef4444':'#d97706'}">${r.issue.label}</span></td>
-    <td style="font-weight:600">${r.name||'—'}</td><td class="date-cell">${r.so||'—'}</td><td>${r.pm||'—'}</td><td>${r.sales||'—'}</td><td>${r.detail||'—'}</td></tr>`).join('');
+    <td style="font-weight:600">${r.name||'—'}</td><td class="date-cell">${soCell}</td><td>${pmCell}</td><td>${salesCell}</td><td>${r.detail||'—'}</td></tr>`;
+  }).join('');
   el.innerHTML=`
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap">
       <div><div style="font-size:21px;font-weight:700">🚨 Operations Readiness</div><div style="font-size:12px;color:var(--gray-500);margin-top:3px">Live checks from projects, milestones, extensions and department check-ins. URLs are intentionally not treated as required.</div></div>
@@ -2089,6 +2152,56 @@ function renderReadiness(){
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin-bottom:14px">${cards}</div>
     <div class="section"><div class="section-head"><div class="section-title">${readinessIssueFilter?(visible.find(i=>i.id===readinessIssueFilter)?.label||'Issue details'):'All readiness items'}</div><div class="section-meta">${rows?shown.reduce((n,i)=>n+i.items.length,0):0} items${readinessIssueFilter?' · click the selected card again to clear':''}</div></div>
       <div class="dept-table-wrap">${rows?`<table class="dept-table"><thead><tr><th>Issue</th><th>Project</th><th>SO</th><th>PM</th><th>Sales</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="empty-state">Everything in this view is clear 🎉</div>'}</div></div>`;
+}
+
+// Readiness quick actions — fix the field right on the row, no navigation, no
+// save button. Same Undo pattern as the queue boards.
+async function rqaSetPM(pid,val){
+  if(!val)return;
+  const p=projects.find(x=>x.id===pid);if(!p)return;
+  const old=p.pm;
+  await sb.from('projects').update({pm:val}).eq('id',pid);
+  p.pm=val;
+  await logActivity('assigned PM',p.name,val,pid,old,val);
+  renderReadiness();
+  showUndoToast(`${p.name} — PM set to ${val}`,async()=>{
+    await sb.from('projects').update({pm:old||null}).eq('id',pid);
+    p.pm=old||'';
+    renderReadiness();
+    showToast('Undone ✓');
+  });
+}
+async function rqaSetSales(pid,val){
+  if(!val)return;
+  const p=projects.find(x=>x.id===pid);if(!p)return;
+  const old=p.sales;
+  await sb.from('projects').update({sales:val}).eq('id',pid);
+  p.sales=val;
+  await logActivity('assigned salesperson',p.name,val,pid,old,val);
+  renderReadiness();
+  showUndoToast(`${p.name} — Sales set to ${val}`,async()=>{
+    await sb.from('projects').update({sales:old||null}).eq('id',pid);
+    p.sales=old||'';
+    renderReadiness();
+    showToast('Undone ✓');
+  });
+}
+async function rqaSetSO(pid,val){
+  const v=(val||'').trim();
+  if(!v)return;
+  const p=projects.find(x=>x.id===pid);if(!p)return;
+  if(v===p.so_number)return;
+  const old=p.so_number;
+  await sb.from('projects').update({so_number:v}).eq('id',pid);
+  p.so_number=v;
+  await logActivity('assigned SO',p.name,v,pid,old,v);
+  renderReadiness();
+  showUndoToast(`${p.name} — SO set to ${v}`,async()=>{
+    await sb.from('projects').update({so_number:old||null}).eq('id',pid);
+    p.so_number=old||'';
+    renderReadiness();
+    showToast('Undone ✓');
+  });
 }
 
 // ── OVERVIEW ───────────────────────────────────────────────
@@ -3528,14 +3641,13 @@ function renderIntake(){
       <div class="field"><label>Project Manager</label>
         <select id="i-pm" style="font-family:var(--font);font-size:13px;padding:9px 12px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);width:100%">
           <option value="">Select PM...</option>
-          <option>Itoro</option><option>Summer</option><option>Emma</option>
-          <option>Jennifer</option><option>Ashima</option><option>Kylie</option><option>Tristen</option>
+          ${getPMList().map(pm=>`<option>${pm}</option>`).join('')}
         </select>
       </div>
       <div class="field"><label>SDM (Service Delivery Manager)</label><input id="i-sdm" placeholder="SDM name"></div>
       <div class="field"><label>Solutions</label><input id="i-solutions" placeholder="Solutions contact"></div>
-      <div class="field"><label>Sales</label><input id="i-sales" list="i-sales-list" placeholder="Sales contact"><datalist id="i-sales-list"><option>Adnan Aga</option><option>Michael Harrison</option><option>Danny Pack</option><option>Julianna Reynolds</option><option>Michelle Hernandez</option><option>Kevin Bell</option><option>Shoubi Rastegar</option><option>Daniel Nowak</option></datalist></div>
-      <div class="field"><label>Account Manager</label><input id="i-am" list="i-am-list" placeholder="Account Manager name"><datalist id="i-am-list"><option>Ian Harrison</option><option>Daniel Pini</option><option>Michelle Hernandez</option><option>Tyler Stevenson</option><option>Pamela Gilliam</option></datalist></div>
+      <div class="field"><label>Sales</label><input id="i-sales" list="i-sales-list" placeholder="Sales contact"><datalist id="i-sales-list">${getSalesList().map(s=>`<option>${s}</option>`).join('')}</datalist></div>
+      <div class="field"><label>Account Manager</label><input id="i-am" list="i-am-list" placeholder="Account Manager name"><datalist id="i-am-list">${getAMList().map(a=>`<option>${a}</option>`).join('')}</datalist></div>
       <div class="field"><label>Vinyl type</label><select id="i-vinyl-type"><option value="">Select...</option><option>Decal</option><option>Partial Vinyl</option><option>Full Vinyl</option></select></div>
 
       <div class="intake-section-lbl">Key milestone dates</div>
@@ -3765,13 +3877,13 @@ function openEditProj(id){
         <div class="field"><label>Project Manager</label>
           <select id="ep-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%">
             <option value="">Select PM...</option>
-            ${['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'].map(pm=>`<option${proj.pm===pm?' selected':''}>${pm}</option>`).join('')}
+            ${getPMList().map(pm=>`<option${proj.pm===pm?' selected':''}>${pm}</option>`).join('')}
           </select>
         </div>
         <div class="field"><label>SDM</label><input id="ep-sdm" value="${proj.sdm||''}" placeholder="SDM name"></div>
         <div class="field"><label>Solutions</label><input id="ep-solutions" value="${proj.solutions||''}" placeholder="Solutions contact"></div>
-        <div class="field"><label>Sales</label><input id="ep-sales" list="ep-sales-list" value="${proj.sales||''}" placeholder="Sales contact"><datalist id="ep-sales-list"><option>Adnan Aga</option><option>Michael Harrison</option><option>Danny Pack</option><option>Julianna Reynolds</option><option>Michelle Hernandez</option><option>Kevin Bell</option><option>Shoubi Rastegar</option><option>Daniel Nowak</option></datalist></div>
-        <div class="field"><label>Account Manager</label><input id="ep-am" list="ep-am-list" value="${proj.account_manager||''}" placeholder="Account Manager"><datalist id="ep-am-list"><option>Ian Harrison</option><option>Daniel Pini</option><option>Michelle Hernandez</option><option>Tyler Stevenson</option><option>Pamela Gilliam</option></datalist></div>
+        <div class="field"><label>Sales</label><input id="ep-sales" list="ep-sales-list" value="${proj.sales||''}" placeholder="Sales contact"><datalist id="ep-sales-list">${getSalesList().map(s=>`<option>${s}</option>`).join('')}</datalist></div>
+        <div class="field"><label>Account Manager</label><input id="ep-am" list="ep-am-list" value="${proj.account_manager||''}" placeholder="Account Manager"><datalist id="ep-am-list">${getAMList().map(a=>`<option>${a}</option>`).join('')}</datalist></div>
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
         <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${proj.naming_convention||''}</textarea></div>
         <div class="field full"><label>Installation address</label><input id="ep-address" value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
@@ -6027,7 +6139,7 @@ function openAdHocModal(dept){
           <div class="field"><label>Training date</label><input type="date" id="ah-training"></div>
           <div class="field"><label>Installation date</label><input type="date" id="ah-install"></div>
           `}
-          <div class="field"><label>Project Manager</label><select id="ah-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">Select PM...</option>${['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'].map(pm=>`<option>${pm}</option>`).join('')}</select></div>
+          <div class="field"><label>Project Manager</label><select id="ah-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">Select PM...</option>${getPMList().map(pm=>`<option>${pm}</option>`).join('')}</select></div>
           <div class="field full"><label>Installation Ticket URL</label><input id="ah-ticket-url" placeholder="https://..." style="font-family:var(--mono);font-size:12px"></div>
           <div class="field full"><label>Notes</label><input id="ah-notes" placeholder="Any special notes..."></div>
         </div>
@@ -6092,7 +6204,7 @@ function openEditAdHoc(dept,idx){
           <div class="field"><label>Training date</label><input type="date" id="eh-training" value="${trainDate}"></div>
           <div class="field"><label>Installation date</label><input type="date" id="eh-install" value="${instDate}"></div>
           `}
-          <div class="field"><label>Project Manager</label><select id="eh-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">Select PM...</option>${['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'].map(pm=>`<option${pm===(r.pm||'')?' selected':''}>${pm}</option>`).join('')}</select></div>
+          <div class="field"><label>Project Manager</label><select id="eh-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">Select PM...</option>${getPMList().map(pm=>`<option${pm===(r.pm||'')?' selected':''}>${pm}</option>`).join('')}</select></div>
           <div class="field full"><label>Installation Ticket URL</label><input id="eh-ticket-url" value="${r.install_ticket_url||''}" placeholder="https://" style="font-family:var(--mono);font-size:12px"></div>
           <div class="field full"><label>Notes</label><input id="eh-notes" value="${r.notes||''}" placeholder="Any special notes..."></div>
         </div>
@@ -6150,6 +6262,70 @@ async function removeAdHoc(dept,idx){
 // ── SETTINGS ──────────────────────────────────────────────
 const DEFAULT_PRODUCT_TYPES=['SparkXL V8','SparkXL V7','18" Control Locker','18" Add-on Locker','Companion','10" Smart Companion','15" Smart Companion','Stand-up TED','Sit-down TED','TVM','Smart Drawer','Mini Drawer','Stuff Station Lite','Stuff Station Standard','Stuff Station Plus','GrabnGo','SKD 2-Hopper','SKD 4-Hopper','SparkXL w/ Ted Side Panel'];
 function getProductTypes(){return appSettings['product_types']||DEFAULT_PRODUCT_TYPES;}
+
+// Settings-backed people lists (PM / Sales / Account Manager) — same pattern as
+// product types, so adding a name is a Settings edit, not a code change.
+const DEFAULT_PM_LIST=['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'];
+const DEFAULT_SALES_LIST=['Adnan Aga','Michael Harrison','Danny Pack','Julianna Reynolds','Michelle Hernandez','Kevin Bell','Shoubi Rastegar','Daniel Nowak'];
+const DEFAULT_AM_LIST=['Ian Harrison','Daniel Pini','Michelle Hernandez','Tyler Stevenson','Pamela Gilliam'];
+function getPMList(){return appSettings['pm_list']||DEFAULT_PM_LIST;}
+function getSalesList(){return appSettings['sales_list']||DEFAULT_SALES_LIST;}
+function getAMList(){return appSettings['am_list']||DEFAULT_AM_LIST;}
+const PEOPLE_LIST_CONFIG={
+  pm_list:{label:'Project Managers',getCurrent:getPMList},
+  sales_list:{label:'Salespeople',getCurrent:getSalesList},
+  am_list:{label:'Account Managers',getCurrent:getAMList},
+};
+let _peopleLists={};
+function getPlWorking(key){if(!_peopleLists[key])_peopleLists[key]=[...PEOPLE_LIST_CONFIG[key].getCurrent()];return _peopleLists[key];}
+function plUpdate(key,i,val){getPlWorking(key)[i]=val;}
+function plRemove(key,i){
+  const cur=getPlWorking(key).map((t,j)=>{const inp=document.getElementById('pl-'+key+'-'+j);return inp?inp.value.trim():t;}).filter(Boolean);
+  cur.splice(i,1);
+  _peopleLists[key]=cur;
+  renderSettings();
+}
+function plAdd(key){
+  const inp=document.getElementById('pl-'+key+'-new');
+  const val=(inp?.value||'').trim();
+  if(!val)return;
+  const cur=getPlWorking(key).map((t,j)=>{const el=document.getElementById('pl-'+key+'-'+j);return el?el.value.trim():t;}).filter(Boolean);
+  cur.push(val);
+  _peopleLists[key]=cur;
+  if(inp)inp.value='';
+  renderSettings();
+}
+async function plSave(key){
+  const list=getPlWorking(key).map((t,i)=>{const inp=document.getElementById('pl-'+key+'-'+i);return inp?inp.value.trim():t;}).filter(Boolean);
+  _peopleLists[key]=list;
+  appSettings[key]=list;
+  await sb.from('app_settings').upsert({key,value:list,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
+  const saved=document.getElementById('pl-'+key+'-saved');
+  if(saved){saved.style.display='inline';setTimeout(()=>{saved.style.display='none';},2500);}
+  showToast(PEOPLE_LIST_CONFIG[key].label+' saved ✓');
+}
+function peopleListSection(key){
+  const cfg=PEOPLE_LIST_CONFIG[key];
+  const list=getPlWorking(key);
+  return`<div style="padding-top:1.25rem;border-top:1px solid var(--gray-100);margin-top:1.25rem">
+    <div style="font-size:14px;font-weight:600;margin-bottom:4px">${cfg.label}</div>
+    <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">Used in dropdowns and filters across the hub — no code changes needed.</div>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+      ${list.map((t,i)=>`<div style="display:flex;align-items:center;gap:8px">
+        <input value="${t.replace(/"/g,'&quot;')}" id="pl-${key}-${i}" style="flex:1;font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" oninput="plUpdate('${key}',${i},this.value)">
+        <button onclick="plRemove('${key}',${i})" style="background:none;border:1px solid var(--gray-200);border-radius:var(--radius);padding:5px 10px;cursor:pointer;color:var(--gray-400)">✕</button>
+      </div>`).join('')}
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <input id="pl-${key}-new" placeholder="Add name..." style="flex:1;font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onkeydown="if(event.key==='Enter')plAdd('${key}')">
+      <button class="btn btn-primary" onclick="plAdd('${key}')">+ Add</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-primary" onclick="plSave('${key}')">💾 Save changes</button>
+      <span id="pl-${key}-saved" style="font-size:11px;color:var(--success);display:none">✓ Saved</span>
+    </div>
+  </div>`;
+}
 
 // ── PROJECT PHOTOS ─────────────────────────────────────────
 async function saveInstallTicketUrl(projId,url){
@@ -6410,6 +6586,9 @@ function renderSettings(){
           <button class="btn btn-primary" onclick="ptSave()">💾 Save changes</button>
           <span id="pt-saved" style="font-size:11px;color:var(--success);display:none">✓ Saved</span>
         </div>
+        ${peopleListSection('pm_list')}
+        ${peopleListSection('sales_list')}
+        ${peopleListSection('am_list')}
       </div>
     </div>
     ${migrationSection}
