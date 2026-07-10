@@ -176,6 +176,8 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .sched-table td{font-size:12px;padding:9px 12px;border-bottom:1px solid var(--gray-50);color:var(--black);vertical-align:middle;}
 .sched-table tr:hover td{background:var(--gray-50);}
 .sched-table tr.dragging{opacity:0.4;}
+.plan-card.dragging{opacity:0.35;}
+.plan-col.drag-over{background:var(--blue-bg)!important;border-color:var(--blue)!important;}
 .sched-table tr.drag-over td{border-top:2px solid var(--red);}
 .drag-handle{cursor:grab;color:var(--gray-300);font-size:15px;padding:0 4px;user-select:none;}
 .drag-handle:active{cursor:grabbing;}
@@ -366,7 +368,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
           <button class="nav-item" id="ni-capacity" onclick="setTab('capacity')"><span class="nav-item-dot" style="background:#7c3aed"></span>📊 Capacity</button>
           <div class="nav-sep"></div>
           <div class="nav-group-label">Departments</div>
-          <button class="nav-item" id="ni-production" onclick="setTab('production')"><span class="nav-item-dot" style="background:#7c3aed"></span>Production</button>
+          <button class="nav-item" id="ni-prodqueue" onclick="setTab('prodqueue')"><span class="nav-item-dot" style="background:#7c3aed"></span>Production</button>
           <button class="nav-item" id="ni-quality" onclick="setTab('quality')"><span class="nav-item-dot" style="background:#d97706"></span>Quality / QA</button>
           <button class="nav-item" id="ni-shipping" onclick="setTab('shipping')"><span class="nav-item-dot" style="background:#059669"></span>Shipping</button>
           <button class="nav-item" id="ni-installation" onclick="setTab('installation')"><span class="nav-item-dot" style="background:#db2777"></span>Installation</button>
@@ -412,7 +414,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
     <div id="tab-overview" style="display:none"></div>
     <div id="tab-projpage" style="display:none"></div>
     <div id="tab-week" style="display:none"></div>
-    <div id="tab-production" style="display:none"></div>
+    <div id="tab-prodqueue" style="display:none"></div>
     <div id="tab-quality" style="display:none"></div>
     <div id="tab-shipping" style="display:none"></div>
     <div id="tab-installation" style="display:none"></div>
@@ -692,12 +694,12 @@ function setTab(tab){
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','pipeline','overview','projpage','week','production','quality','shipping','installation','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity'];
+  const ALL=['glance','pipeline','overview','projpage','week','prodqueue','quality','shipping','installation','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
 function renderTab(){
-  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity};
+  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,prodqueue:renderProductionQueue,quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity};
   if(m[currentTab])m[currentTab]();
 }
 
@@ -1017,8 +1019,6 @@ function renderPipeline(){
 
 // ── CAPACITY ───────────────────────────────────────────────
 let capacityWeeksCount=8;
-let capacitySelectedWeek=0;
-let capacityScenario={projectId:'',days:3,active:false};
 
 function ymd(d){const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const day=String(d.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
 
@@ -1034,25 +1034,6 @@ function getProdRange(p){
 
 function capacityLimit(){return Number(appSettings['capacity_weekly_limit'])||10;}
 
-// Builds `count` weeks starting this Monday. If scenario is active, the matching
-// project's window is shifted by scenario.days (non-destructive, in-memory only).
-function computeWeeklyLoad(count,scenario){
-  const start0=monday(today());
-  const weeks=[];
-  for(let i=0;i<count;i++){
-    const ws=addD(start0,i*7),we=addD(ws,6);
-    weeks.push({start:ws,end:we,projects:[]});
-  }
-  projects.filter(p=>p.status!=='complete').forEach(p=>{
-    const range=getProdRange(p);
-    if(!range)return;
-    let s=new Date(range.start+'T00:00:00'),e=new Date(range.end+'T00:00:00');
-    if(scenario&&scenario.active&&scenario.projectId===p.id){s=addD(s,scenario.days);e=addD(e,scenario.days);}
-    weeks.forEach(w=>{if(s<=w.end&&e>=w.start)w.projects.push(p);});
-  });
-  return weeks;
-}
-
 function capacityStatus(count,limit){
   const pct=limit?count/limit:0;
   if(pct>1)return{color:'#ef4444',bg:'#fef2f2',label:'🔴 Over capacity'};
@@ -1060,23 +1041,10 @@ function capacityStatus(count,limit){
   return{color:'#16a34a',bg:'#f0fdf4',label:'🟢 Healthy'};
 }
 
-function toggleCapacityWeek(i){capacitySelectedWeek=capacitySelectedWeek===i?null:i;renderCapacity();}
-
 async function saveCapacityLimit(val){
   const n=Math.max(1,parseInt(val)||10);
   appSettings['capacity_weekly_limit']=n;
   await sb.from('app_settings').upsert({key:'capacity_weekly_limit',value:n,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
-  renderCapacity();
-}
-
-function runCapacityScenario(){
-  const pid=document.getElementById('cap-scenario-proj')?.value||'';
-  const days=parseInt(document.getElementById('cap-scenario-days')?.value)||0;
-  capacityScenario={projectId:pid,days,active:!!pid&&days!==0};
-  renderCapacity();
-}
-function clearCapacityScenario(){
-  capacityScenario={projectId:'',days:3,active:false};
   renderCapacity();
 }
 
@@ -1109,54 +1077,163 @@ function getMostLikelyDelayDept(){
   return best?{label:best.label,count:bestN}:null;
 }
 
-// Finds the first over-capacity week and proposes moving the most movable project
-// (the one whose whole production window sits inside that single week) into the
-// nearest week downstream that has room. Real logic against real dates — not decorative.
-function getCapacityRecommendation(weeks,limit){
-  const overIdx=weeks.findIndex(w=>w.projects.length>limit);
+let planDragProjId=null;
+
+// Which bucket a project belongs in, reusing the exact same stage/health logic
+// as the Pipeline board — so "Waiting on Procurement" here means the same thing
+// it means there: parts haven't arrived yet, regardless of what date is on the card.
+function getProjectBucket(p){
+  const stage=getProjectStage(p);
+  if(stage==='mo-release'||stage==='parts-order'||stage==='parts-arrive'){
+    return{key:'waiting',label:'Waiting on Procurement',icon:'🟡',color:'#d97706',bg:'#fffbeb'};
+  }
+  const pMs=milestones.filter(m=>m.project_id===p.id);
+  const startMs=pMs.find(m=>m.key==='production-start');
+  const ciRed=startMs&&checkinStatus[startMs.id]?.stoplight==='red';
+  if(getStageHealth(p,'production')==='red'||ciRed){
+    return{key:'risk',label:'At Risk',icon:'🔴',color:'#ef4444',bg:'#fef2f2'};
+  }
+  return{key:'ready',label:'Scheduled',icon:'🟢',color:'#16a34a',bg:'#f0fdf4'};
+}
+
+// The board is organized by what ENTERS production each week (production-start date),
+// not by everything overlapping it — that's the number that actually creates new work.
+function computeBoardWeeks(count){
+  const start0=monday(today());
+  const weeks=[];
+  for(let i=0;i<count;i++){const ws=addD(start0,i*7),we=addD(ws,6);weeks.push({start:ws,end:we,ready:[],waiting:[],risk:[]});}
+  projects.filter(p=>p.status!=='complete').forEach(p=>{
+    const pMs=milestones.filter(m=>m.project_id===p.id);
+    const s=pMs.find(m=>m.key==='production-start')?.date||pMs.find(m=>m.key==='production-end')?.date;
+    if(!s)return;
+    const sd=new Date(s+'T00:00:00');
+    const idx=weeks.findIndex(w=>sd>=w.start&&sd<=w.end);
+    if(idx===-1)return; // outside the visible horizon — not this board's job
+    const b=getProjectBucket(p);
+    weeks[idx][b.key].push(p);
+  });
+  return weeks;
+}
+function boardWeekCount(w){return w.ready.length+w.waiting.length+w.risk.length;}
+function boardWeekProjects(w){return[...w.ready,...w.waiting,...w.risk];}
+
+function getBoardRecommendation(weeks,limit){
+  const overIdx=weeks.findIndex(w=>boardWeekCount(w)>limit);
   if(overIdx===-1)return null;
   const week=weeks[overIdx];
-  const candidates=week.projects.filter(p=>{
-    const r=getProdRange(p);if(!r)return false;
-    const s=new Date(r.start+'T00:00:00'),e=new Date(r.end+'T00:00:00');
-    return s>=week.start&&e<=week.end; // fits fully within this week — easiest to shift
-  }).sort((a,b)=>new Date(getProdRange(b).start)-new Date(getProdRange(a).start));
-  const target=candidates[0]||week.projects[0];
+  const all=boardWeekProjects(week);
+  // easiest to move: not yet at risk, still waiting or ready — moving something already
+  // at-risk further out just compounds the problem
+  const candidates=[...week.ready,...week.waiting];
+  const target=candidates[0]||all[0];
   if(!target)return null;
   let destIdx=-1;
-  for(let j=overIdx+1;j<weeks.length;j++){if(weeks[j].projects.length+1<=limit){destIdx=j;break;}}
-  const overBy=week.projects.length-limit;
+  for(let j=overIdx+1;j<weeks.length;j++){if(boardWeekCount(weeks[j])+1<=limit){destIdx=j;break;}}
+  const overBy=boardWeekCount(week)-limit;
   if(destIdx===-1){
-    return{text:`${capacityWeekLabel(overIdx,week)} is over by ${overBy} project${overBy===1?'':'s'}, but no open week in the next ${weeks.length} weeks can absorb it. Capacity may need to increase, or a project needs to move further out.`,project:null};
+    return{text:`${capacityWeekLabel(overIdx,week)} has ${overBy} more project${overBy===1?'':'s'} entering production than capacity allows, and nothing downstream has room in the next ${weeks.length} weeks. Capacity may need to increase.`};
   }
-  return{
-    text:`Move ${target.name}${target.pm?' ('+target.pm+')':''} from ${capacityWeekLabel(overIdx,week)} to ${capacityWeekLabel(destIdx,weeks[destIdx])} → ${capacityWeekLabel(overIdx,week)} drops to ${week.projects.length-1}/${limit}, ${capacityWeekLabel(destIdx,weeks[destIdx])} becomes ${weeks[destIdx].projects.length+1}/${limit}.`,
-    project:target
-  };
+  return{text:`Move ${target.name}${target.pm?' ('+target.pm+')':''} from ${capacityWeekLabel(overIdx,week)} to ${capacityWeekLabel(destIdx,weeks[destIdx])} → ${boardWeekCount(week)-1}/${limit} and ${boardWeekCount(weeks[destIdx])+1}/${limit}. Drag its card to make it real.`};
+}
+
+function planDragStart(e,pid){planDragProjId=pid;e.currentTarget.classList.add('dragging');}
+function planDragEnd(e){e.currentTarget.classList.remove('dragging');}
+function planDragOver(e){e.preventDefault();e.currentTarget.classList.add('drag-over');}
+function planDragLeaveCol(e){e.currentTarget.classList.remove('drag-over');}
+
+// Milestones downstream of production — these are NOT moved automatically when
+// production reschedules. They just get flagged so a human decides what to do.
+const DOWNSTREAM_MS_KEYS=['quality-start','quality-end','final-qc','uat','shipping','delivery','installation','uninstallation','training'];
+
+function getScheduleFlags(){return appSettings['schedule_flags']||{};}
+
+async function saveScheduleFlags(flags){
+  appSettings['schedule_flags']=flags;
+  await sb.from('app_settings').upsert({key:'schedule_flags',value:flags,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
+}
+
+// Flags every downstream milestone on this project as needing review — doesn't touch
+// their dates. Returns how many got flagged so the caller can tell the user.
+async function flagDownstreamAsInconsistent(projId,deltaDays){
+  const downstream=milestones.filter(m=>m.project_id===projId&&DOWNSTREAM_MS_KEYS.includes(m.key)&&m.date);
+  if(!downstream.length)return 0;
+  const flags=getScheduleFlags();
+  downstream.forEach(m=>{
+    flags[m.id]={project_id:projId,reason:`Production moved ${deltaDays>0?'+':''}${deltaDays}d — this date wasn't updated, verify it`,flagged_at:new Date().toISOString(),flagged_by:currentUserName};
+  });
+  await saveScheduleFlags(flags);
+  return downstream.length;
+}
+
+async function clearScheduleFlag(msId){
+  const flags=getScheduleFlags();
+  delete flags[msId];
+  await saveScheduleFlags(flags);
+  renderTab();
+}
+
+// Dragging a card is a REAL reschedule, not a preview: you're asked exactly how many
+// days to move it (pre-filled with the gap to the week you dropped it on, but you can
+// type any number). Production's own dates move; everything downstream just gets
+// flagged as needing a second look — nothing downstream is silently shifted.
+async function planDrop(e,weekIdx){
+  e.preventDefault();e.currentTarget.classList.remove('drag-over');
+  const pid=planDragProjId;planDragProjId=null;
+  if(!pid)return;
+  const p=projects.find(x=>x.id===pid);if(!p)return;
+  const pMs=milestones.filter(m=>m.project_id===p.id);
+  const startMs=pMs.find(m=>m.key==='production-start');
+  const endMs=pMs.find(m=>m.key==='production-end');
+  const anchor=startMs||endMs;
+  if(!anchor){showToast('No production date to move');return;}
+  const targetMonday=addD(monday(today()),weekIdx*7);
+  const anchorDate=new Date(anchor.date+'T00:00:00');
+  const suggestedDelta=Math.round((targetMonday-monday(anchorDate))/86400000);
+
+  const input=prompt(`Move ${p.name} by how many days? (positive = later, negative = earlier)`,String(suggestedDelta));
+  if(input===null)return; // cancelled
+  const deltaDays=parseInt(input,10);
+  if(isNaN(deltaDays)){showToast('Enter a number of days');return;}
+  if(deltaDays===0)return;
+
+  const updates=[startMs,endMs].filter(Boolean).map(ms=>({ms,oldDate:ms.date,newDate:ymd(addD(new Date(ms.date+'T00:00:00'),deltaDays))}));
+  for(const u of updates){
+    await sb.from('milestones').update({date:u.newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',u.ms.id);
+    await sb.from('milestone_history').insert({milestone_id:u.ms.id,project_id:p.id,old_date:u.oldDate,new_date:u.newDate,changed_by:currentUserName,reason:'Rescheduled via Capacity & Planning board'});
+    u.ms.date=u.newDate;
+  }
+  const flaggedCount=await flagDownstreamAsInconsistent(p.id,deltaDays);
+  await logActivity('rescheduled production',p.name,p.name,p.id,updates[0]?.oldDate,updates[0]?.newDate);
+  showToast(`${p.name} moved ${deltaDays>0?'forward '+deltaDays:'back '+Math.abs(deltaDays)} day${Math.abs(deltaDays)===1?'':'s'}${flaggedCount?' · '+flaggedCount+' downstream date'+(flaggedCount===1?'':'s')+' flagged for review':''}`,3500);
+  renderCapacity();
+}
+
+function planCard(p){
+  const rs=getProjectRiskStatus(p);
+  return`<div class="plan-card" draggable="true" ondragstart="planDragStart(event,'${p.id}')" ondragend="planDragEnd(event)" onclick="goToProjPage('${p.id}')" style="background:white;border:1px solid var(--gray-200);border-radius:6px;padding:7px 9px;margin-bottom:5px;cursor:grab;font-family:var(--font)">
+    <div style="font-size:11.5px;font-weight:600;line-height:1.3">${p.name}</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:3px">
+      <span style="font-size:10px;color:var(--gray-500)">${p.pm||'—'}</span>
+      <span style="font-size:9px;color:var(--gray-400)">${rs.status}</span>
+    </div>
+  </div>`;
 }
 
 function renderCapacity(){
   const el=document.getElementById('tab-capacity');if(!el)return;
   const limit=capacityLimit();
-  const weeks=computeWeeklyLoad(capacityWeeksCount,null);
-  const scenarioWeeks=capacityScenario.active?computeWeeklyLoad(capacityWeeksCount,capacityScenario):null;
-  const overCount=weeks.filter(w=>w.projects.length>limit).length;
-  const thisWeek=weeks[0]?.projects.length||0;
-  const remaining=limit-thisWeek;
+  const weeks=computeBoardWeeks(capacityWeeksCount);
+  const thisWeekCount=boardWeekCount(weeks[0]||{ready:[],waiting:[],risk:[]});
+  const remaining=limit-thisWeekCount;
   const canAccept=remaining>0;
-  const noDataCount=projects.filter(p=>p.status!=='complete'&&!getProdRange(p)).length;
+  const backlogCount=projects.filter(p=>p.status!=='complete'&&!getProdRange(p)).length;
 
-  // Biggest risk = week furthest over capacity; if none are over, the closest to it
-  let biggestRiskIdx=0,biggestRiskVal=-Infinity;
-  weeks.forEach((w,i)=>{const v=w.projects.length-limit;if(v>biggestRiskVal){biggestRiskVal=v;biggestRiskIdx=i;}});
+  let biggestRiskIdx=-1,biggestRiskVal=-Infinity;
+  weeks.forEach((w,i)=>{const v=boardWeekCount(w)-limit;if(v>biggestRiskVal){biggestRiskVal=v;biggestRiskIdx=i;}});
   const biggestRisk=biggestRiskVal>0?{label:capacityWeekLabel(biggestRiskIdx,weeks[biggestRiskIdx]),over:biggestRiskVal}:null;
 
   const delayDept=getMostLikelyDelayDept();
-  const recommendation=getCapacityRecommendation(weeks,limit);
-
-  const scenarioProjOpts=projects.filter(p=>p.status!=='complete'&&getProdRange(p))
-    .sort((a,b)=>a.name.localeCompare(b.name))
-    .map(p=>`<option value="${p.id}"${capacityScenario.projectId===p.id?' selected':''}>${p.name}${p.pm?' — '+p.pm:''}</option>`).join('');
+  const recommendation=getBoardRecommendation(weeks,limit);
 
   const decisionBar=`
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--gray-100);border-radius:var(--radius-lg);overflow:hidden;margin-bottom:14px;background:white">
@@ -1166,9 +1243,9 @@ function renderCapacity(){
         <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${canAccept?remaining+' slot'+(remaining===1?'':'s')+' open this week':'This week is already full'}</div>
       </div>
       <div style="padding:14px 16px;border-right:1px solid var(--gray-100)">
-        <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Remaining capacity</div>
-        <div style="font-size:22px;font-weight:700;margin-top:4px">${Math.max(0,remaining)}</div>
-        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">of ${limit} slots this week</div>
+        <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Entering production</div>
+        <div style="font-size:22px;font-weight:700;margin-top:4px">${thisWeekCount} / ${limit}</div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">this week</div>
       </div>
       <div style="padding:14px 16px;border-right:1px solid var(--gray-100)">
         <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Biggest risk</div>
@@ -1186,59 +1263,58 @@ function renderCapacity(){
       <div><div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.03em;margin-bottom:2px">Recommendation</div><div style="font-size:12px;color:#78350f">${recommendation.text}</div></div>
     </div>`:''}`;
 
-  const rows=weeks.map((w,i)=>{
-    const count=w.projects.length;
+  const bucketBlock=(w,key,label,icon,color)=>{
+    const list=w[key];
+    if(!list.length)return'';
+    return`<div style="margin-bottom:8px">
+      <div style="font-size:10px;font-weight:700;color:${color};margin-bottom:4px">${icon} ${label} <span style="color:var(--gray-400);font-weight:500">(${list.length})</span></div>
+      ${list.map(planCard).join('')}
+    </div>`;
+  };
+
+  const columns=weeks.map((w,i)=>{
+    const count=boardWeekCount(w);
     const st=capacityStatus(count,limit);
-    const pct=Math.min(100,Math.round((count/(limit||1))*100));
-    const label=capacityWeekLabel(i,w);
-    const isSel=capacitySelectedWeek===i;
-    return`<div style="border:1px solid ${isSel?st.color:'var(--gray-100)'};border-left:3px solid ${st.color};border-radius:8px;margin-bottom:6px;overflow:hidden">
-      <button onclick="toggleCapacityWeek(${i})" style="width:100%;text-align:left;background:${isSel?st.bg:'white'};border:none;cursor:pointer;font-family:var(--font);padding:10px 14px;display:flex;align-items:center;gap:14px">
-        <div style="min-width:160px">
-          <div style="font-size:12px;font-weight:700">${label}</div>
-          <div style="font-size:10px;color:var(--gray-500)">${fmt(ymd(w.start))} – ${fmt(ymd(w.end))}</div>
+    return`<div class="plan-col" ondragover="planDragOver(event)" ondragleave="planDragLeaveCol(event)" ondrop="planDrop(event,${i})" style="min-width:220px;max-width:240px;flex-shrink:0;background:var(--gray-50);border:1px dashed var(--gray-200);border-radius:8px;padding:10px;transition:background 0.1s">
+      <div style="margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid ${st.color}">
+        <div style="font-size:12px;font-weight:700">${capacityWeekLabel(i,w)}</div>
+        <div style="font-size:10px;color:var(--gray-500)">${fmt(ymd(w.start))} – ${fmt(ymd(w.end))}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px">
+          <span style="font-size:12px;font-weight:700;color:${st.color}">${count} / ${limit}</span>
+          <span style="font-size:10px;color:var(--gray-500)">${Math.max(0,limit-count)} open</span>
         </div>
-        <div style="flex:1;min-width:120px">
-          <div style="height:8px;background:var(--gray-100);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${st.color}"></div></div>
-        </div>
-        <div style="font-size:12px;font-weight:700;white-space:nowrap;min-width:150px;text-align:right">${count} committed · ${Math.max(0,limit-count)} open</div>
-        <div style="font-size:11px;font-weight:600;color:${st.color};white-space:nowrap;min-width:118px">${st.label}</div>
-      </button>
-      ${isSel?`<div style="padding:10px 14px 12px;background:var(--gray-50);border-top:1px solid var(--gray-100)">
-        ${w.projects.length?`<table style="width:100%;border-collapse:collapse">
-          <thead><tr style="font-size:10px;color:var(--gray-500);text-align:left"><th style="padding:4px 8px 4px 0;font-weight:600">Project</th><th style="padding:4px 8px;font-weight:600">PM</th><th style="padding:4px 8px;font-weight:600">Status</th><th style="padding:4px 8px;font-weight:600">Risk</th></tr></thead>
-          <tbody>${w.projects.map(p=>{const rs=getProjectRiskStatus(p);return`<tr onclick="goToProjPage('${p.id}')" style="cursor:pointer;border-top:1px solid var(--gray-100)">
-            <td style="padding:6px 8px 6px 0;font-size:12px;font-weight:600">${p.name}</td>
-            <td style="padding:6px 8px;font-size:11px;color:var(--gray-500)">${p.pm||'—'}</td>
-            <td style="padding:6px 8px;font-size:11px;color:var(--gray-700)">${rs.status}</td>
-            <td style="padding:6px 8px;font-size:13px">${rs.risk}</td>
-          </tr>`;}).join('')}</tbody>
-        </table>`:`<div style="font-size:12px;color:var(--gray-400);padding:6px 0">No projects scheduled in production this week.</div>`}
-      </div>`:''}
+      </div>
+      ${bucketBlock(w,'ready','Scheduled','🟢','#16a34a')}
+      ${bucketBlock(w,'waiting','Waiting on Procurement','🟡','#d97706')}
+      ${bucketBlock(w,'risk','At Risk','🔴','#ef4444')}
+      ${!count?`<div style="font-size:11px;color:var(--gray-400);text-align:center;padding:10px 0">Nothing entering production</div>`:''}
     </div>`;
   }).join('');
 
-  const scenarioTable=scenarioWeeks?`<div style="margin-top:12px;padding:0 14px 14px">
-    <table style="width:100%;border-collapse:collapse">
-      <thead><tr style="font-size:10px;color:var(--gray-500);text-align:left"><th style="padding:4px 8px 4px 0;font-weight:600">Week</th><th style="padding:4px 8px;font-weight:600">Before</th><th style="padding:4px 8px;font-weight:600">After</th><th style="padding:4px 8px;font-weight:600">Change</th></tr></thead>
-      <tbody>${weeks.map((w,i)=>{
-        const before=w.projects.length,after=scenarioWeeks[i].projects.length;
-        if(before===after&&before<=limit)return'';
-        const afterSt=capacityStatus(after,limit);
-        const delta=after-before;
-        return`<tr style="border-top:1px solid var(--gray-100)">
-          <td style="padding:6px 8px 6px 0;font-size:12px;font-weight:600">${capacityWeekLabel(i,w)}</td>
-          <td style="padding:6px 8px;font-size:12px;color:var(--gray-500)">${before} / ${limit}</td>
-          <td style="padding:6px 8px;font-size:12px;font-weight:700;color:${afterSt.color}">${after} / ${limit} ${afterSt.label}</td>
-          <td style="padding:6px 8px;font-size:11px;color:${delta>0?'#ef4444':delta<0?'#16a34a':'var(--gray-500)'}">${delta>0?'+':''}${delta}</td>
-        </tr>`;
-      }).join('')||`<tr><td colspan="4" style="padding:8px 0;font-size:12px;color:var(--gray-400)">No visible change across the next ${capacityWeeksCount} weeks.</td></tr>`}</tbody>
-    </table>
+  const flags=getScheduleFlags();
+  const flagEntries=Object.entries(flags).map(([msId,f])=>{
+    const m=milestones.find(x=>x.id===msId);
+    const proj=projects.find(x=>x.id===f.project_id);
+    return m&&proj?{msId,m,proj,f}:null;
+  }).filter(Boolean).sort((a,b)=>(a.f.flagged_at||'').localeCompare(b.f.flagged_at||''));
+
+  const flagsPanel=flagEntries.length?`<div class="section" style="margin-bottom:14px">
+    <div class="section-head"><div class="section-title">⚠ Needs review — ${flagEntries.length} downstream date${flagEntries.length===1?'':'s'}</div><div class="section-meta">Left as-is after a production reschedule · not moved automatically</div></div>
+    <div style="padding:4px 14px 12px">
+      ${flagEntries.map(e=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--gray-100)">
+        <div style="min-width:0">
+          <span onclick="goToProjPage('${e.proj.id}')" style="font-size:12px;font-weight:600;cursor:pointer">${e.proj.name}</span>
+          <span style="font-size:11px;color:var(--gray-500)"> · ${TYPE_LBL[e.m.key]||e.m.key} · ${fmt(e.m.date)}</span>
+          <div style="font-size:10px;color:#92400e;margin-top:1px">${e.f.reason}</div>
+        </div>
+        <button onclick="clearScheduleFlag('${e.msId}')" style="font-size:10px;padding:3px 10px;border-radius:10px;border:1px solid var(--gray-300);background:white;color:var(--gray-700);cursor:pointer;font-family:var(--font);flex-shrink:0">✓ Reviewed</button>
+      </div>`).join('')}
+    </div>
   </div>`:'';
 
   el.innerHTML=`
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-      <div><div style="font-size:21px;font-weight:700">📊 Capacity &amp; Planning</div><div style="font-size:12px;color:var(--gray-500);margin-top:3px">Can we say yes to the next project, and what breaks if something slips?</div></div>
+      <div><div style="font-size:21px;font-weight:700">📊 Capacity &amp; Planning</div><div style="font-size:12px;color:var(--gray-500);margin-top:3px">What's entering production each week — drag a card to reschedule it for real</div></div>
       <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-500)">
         Weekly capacity
         <input type="number" min="1" value="${limit}" onchange="saveCapacityLimit(this.value)" style="width:56px;font-family:var(--font);font-size:12px;padding:4px 6px;border:1px solid var(--gray-300);border-radius:var(--radius);text-align:center">
@@ -1246,23 +1322,92 @@ function renderCapacity(){
       </div>
     </div>
     ${decisionBar}
-    <div class="section" style="margin-bottom:14px">
-      <div class="section-head"><div class="section-title">What if Procurement is late?</div><div class="section-meta">Simulation only — nothing is saved · ${noDataCount} active project${noDataCount===1?'':'s'} have no production dates yet and aren't counted anywhere on this page</div></div>
-      <div style="padding:12px 14px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <select id="cap-scenario-proj" style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);min-width:220px">
-          <option value="">Choose a project…</option>
-          ${scenarioProjOpts}
-        </select>
-        <span style="font-size:12px;color:var(--gray-500)">delay by</span>
-        <input id="cap-scenario-days" type="number" value="${capacityScenario.days||3}" style="width:60px;font-family:var(--font);font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);text-align:center">
-        <span style="font-size:12px;color:var(--gray-500)">days</span>
-        <button onclick="runCapacityScenario()" style="font-size:12px;font-weight:600;padding:6px 14px;border:none;border-radius:var(--radius);background:var(--black);color:white;cursor:pointer;font-family:var(--font)">Run scenario</button>
-        ${capacityScenario.active?`<button onclick="clearCapacityScenario()" style="font-size:12px;padding:6px 14px;border:1px solid var(--gray-300);border-radius:var(--radius);background:white;color:var(--gray-700);cursor:pointer;font-family:var(--font)">Clear</button>`:''}
-      </div>
-      <div style="font-size:10px;color:var(--gray-400);padding:8px 14px 0">This only shifts that one project's production window — it doesn't move QA, shipping, or installation dates yet.</div>
-      ${scenarioTable}
+    ${flagsPanel}
+    ${backlogCount?`<div style="font-size:11px;color:var(--gray-500);margin-bottom:10px">${backlogCount} active project${backlogCount===1?'':'s'} ${backlogCount===1?'has':'have'} no production dates yet, so ${backlogCount===1?'it isn\u2019t':'they aren\u2019t'} on this board.</div>`:''}
+    <div style="overflow-x:auto;padding-bottom:10px">
+      <div style="display:flex;gap:10px;min-width:max-content">${columns}</div>
+    </div>`;
+}
+
+// ── PRODUCTION QUEUE ─────────────────────────────────────────
+// Digital version of the physical board on the shop floor: three lanes by form
+// factor (Lockers / Vending / TED), each split into big, unmissable zones —
+// On Hold, W.I.P, Ready. Deliberately simple: no dates, no numbers to parse,
+// just "what is it, whose is it, where does it sit."
+const PROD_FAMILIES=[
+  {key:'lockers',label:'Lockers',icon:'🔒',color:'#7c3aed'},
+  {key:'vending',label:'Vending',icon:'🥤',color:'#2563eb'},
+  {key:'ted',label:'TED',icon:'🖥️',color:'#059669'},
+];
+function classifyFamily(p){
+  const t=(p.product_type||'').toLowerCase();
+  if(t.includes('locker'))return'lockers';
+  if(t.includes('ted'))return'ted';
+  return'vending';
+}
+// Only projects actually relevant to Production's own queue show up here —
+// still waiting on procurement (mo-release/parts-order) or already past
+// production (qa/shipping/delivered) fall off this board on purpose, same as
+// the paper version: only what's on the floor or about to be gets taped up.
+function getQueueZone(p){
+  if(p.status==='on-hold')return'hold';
+  const stage=getProjectStage(p);
+  if(stage==='production')return'wip';
+  if(stage==='parts-arrive')return'ready';
+  return null;
+}
+function computeProductionQueue(){
+  const lanes={};
+  PROD_FAMILIES.forEach(f=>{lanes[f.key]={hold:[],wip:[],ready:[],waiting:0};});
+  projects.filter(p=>p.status!=='complete').forEach(p=>{
+    const fam=classifyFamily(p);
+    const zone=getQueueZone(p);
+    if(zone)lanes[fam][zone].push(p);
+    else if(p.status!=='on-hold')lanes[fam].waiting++; // still upstream, not on the board yet
+  });
+  return lanes;
+}
+function queueCard(p){
+  const detail=[p.product_type,p.form_factor].filter(Boolean).join(' — ');
+  return`<div onclick="goToProjPage('${p.id}')" style="background:white;border:1px solid var(--gray-200);border-radius:8px;padding:10px 12px;margin-bottom:7px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.03)">
+    <div style="font-size:12.5px;font-weight:700;line-height:1.3">${p.name}</div>
+    ${detail?`<div style="font-size:10.5px;color:var(--gray-500);margin-top:2px">${detail}</div>`:''}
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:5px">
+      <span style="font-family:var(--mono);font-size:9.5px;color:var(--red)">${p.so_number||'—'}</span>
+      <span style="font-size:10px;color:var(--gray-500)">${p.pm||'—'}</span>
     </div>
-    <div>${rows}</div>`;
+  </div>`;
+}
+function renderProductionQueue(){
+  const el=document.getElementById('tab-prodqueue');if(!el)return;
+  const lanes=computeProductionQueue();
+  const zoneTag=(label,color)=>`<div style="display:inline-block;background:${color};color:white;font-size:11px;font-weight:800;letter-spacing:0.04em;padding:3px 12px;border-radius:4px;margin-bottom:10px;transform:rotate(-1deg)">${label}</div>`;
+  const zoneSection=(list,label,color)=>`
+    <div style="margin-bottom:6px">
+      ${zoneTag(label+` (${list.length})`,color)}
+      <div>${list.length?list.map(queueCard).join(''):`<div style="font-size:11px;color:var(--gray-300);padding:8px 0;text-align:center;border:1px dashed var(--gray-200);border-radius:6px">Empty</div>`}</div>
+    </div>`;
+  const columns=PROD_FAMILIES.map(f=>{
+    const lane=lanes[f.key];
+    return`<div style="min-width:270px;max-width:300px;flex-shrink:0;background:var(--gray-50);border-radius:10px;padding:12px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;padding-bottom:8px;border-bottom:2px solid ${f.color}">
+        <span style="font-size:16px">${f.icon}</span>
+        <span style="font-size:14px;font-weight:800;color:${f.color}">${f.label}</span>
+        ${lane.waiting?`<span style="margin-left:auto;font-size:10px;color:var(--gray-400)">+${lane.waiting} waiting on parts</span>`:''}
+      </div>
+      ${zoneSection(lane.hold,'⏸ ON HOLD','#6b6b6b')}
+      ${zoneSection(lane.wip,'⚙ W.I.P','#d97706')}
+      ${zoneSection(lane.ready,'✅ READY','#16a34a')}
+    </div>`;
+  }).join('');
+  el.innerHTML=`
+    <div style="margin-bottom:14px">
+      <div style="font-size:21px;font-weight:700">🧱 Production Queue</div>
+      <div style="font-size:12px;color:var(--gray-500);margin-top:3px">What's on the floor right now, by form factor — same as the board by the window</div>
+    </div>
+    <div style="overflow-x:auto;padding-bottom:10px">
+      <div style="display:flex;gap:14px;min-width:max-content">${columns}</div>
+    </div>`;
 }
 
 // ── AT A GLANCE ────────────────────────────────────────────
@@ -1549,6 +1694,18 @@ function getReadinessData(){
   add('missing-install-date','Installation milestone missing date','warning','operations',missingInstall,'Only flags projects that already have an installation milestone with no date.');
   add('missing-delivery-date','Delivery milestone missing date','warning','operations',missingDelivery,'Only flags projects that already have a delivery milestone with no date.');
   add('invalid-sequence','Invalid milestone order','critical','operations',badSequence,'Shipping must precede delivery, and delivery must precede installation.');
+
+  const staleFlags=[],freshFlags=[];
+  Object.entries(getScheduleFlags()).forEach(([msId,f])=>{
+    const m=milestones.find(x=>x.id===msId);
+    const p=projects.find(x=>x.id===f.project_id);
+    if(!m||!p)return;
+    const daysFlagged=f.flagged_at?Math.floor((Date.now()-new Date(f.flagged_at).getTime())/86400000):0;
+    const item=projectItem(p,`${TYPE_LBL[m.key]||m.key} · ${fmt(m.date)} · flagged ${daysFlagged}d ago`);
+    (daysFlagged>=7?staleFlags:freshFlags).push(item);
+  });
+  add('stale-schedule-flags','Unreviewed schedule change (7+ days)','critical','operations',staleFlags,'Production moved on the Capacity board over a week ago and this downstream date still hasn\'t been checked.');
+  add('schedule-flags','Unreviewed schedule change','warning','operations',freshFlags,'Production moved on the Capacity board; this downstream date hasn\'t been reviewed yet.');
   return issues;
 }
 
@@ -1615,6 +1772,8 @@ function renderOverview(){
     const st=isDone?{cls:'done',dcls:'done',txt:'Done ✓'}:isOverdue?{cls:'overdue',dcls:'overdue',txt:Math.abs(daysDiff(m.date))+'d overdue'}:msStatus(m.date);
     const ci=checkinStatus[m.id];
     const slDot=ci?.stoplight?`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ci.stoplight==='green'?'#22c55e':ci.stoplight==='yellow'?'#eab308':'#ef4444'};margin-left:4px" title="Dept: ${ci.stoplight}"></span>`:'';
+    const flag=getScheduleFlags()[m.id];
+    const flagBadge=flag?`<span onclick="event.stopPropagation();if(confirm('Mark this date as reviewed and clear the flag?'))clearScheduleFlag('${m.id}')" title="${flag.reason} — click to mark reviewed" style="display:inline-flex;align-items:center;gap:2px;font-size:9px;font-weight:600;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:1px 6px;margin-left:4px;cursor:pointer;white-space:nowrap">⚠ Verify date</span>`:'';
     const hist=milestoneHistory[m.id]||[];
     const origDate=m.original_date;
     const variance=origDate&&m.date?Math.round((new Date(m.date+'T00:00:00')-new Date(origDate+'T00:00:00'))/86400000):0;
@@ -1624,7 +1783,7 @@ function renderOverview(){
         <div class="ms-type">${TYPE_LBL[m.key]||m.key}</div>
         <button onclick="toggleMilestoneDone('${m.id}','${m.project_id}',event)" style="background:${isManualDone?'var(--success)':'transparent'};border:1px solid ${isManualDone?'var(--success)':'var(--gray-300)'};border-radius:10px;padding:1px 7px;font-size:10px;cursor:pointer;color:${isManualDone?'white':'var(--gray-500)'};font-family:var(--font);flex-shrink:0">${isManualDone?'✓ Done':'Mark done'}</button>
       </div>
-      <div class="ms-label" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}','${m.so_tag||''}','${m.project_id||''}')" style="cursor:pointer">${m.label}${slDot}${slippageTag}</div>
+      <div class="ms-label" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}','${m.so_tag||''}','${m.project_id||''}')" style="cursor:pointer">${m.label}${slDot}${slippageTag}${flagBadge}</div>
       <div class="ms-date" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}','${m.so_tag||''}','${m.project_id||''}')" style="cursor:pointer">${fmtFull(m.date)}</div>
       <div class="ms-days ${st.dcls}">${st.txt}</div>
       ${hist.length&&origDate?`<div style="font-size:9px;color:var(--gray-400);margin-top:1px">Orig: ${fmt(origDate)}</div>`:''}
