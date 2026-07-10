@@ -400,6 +400,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
             oninput="globalSearch(this.value)" onkeydown="if(event.key==='Escape'){this.value='';document.getElementById('gs-results').style.display='none';}">
           <div id="gs-results" style="display:none;position:absolute;top:calc(100% + 6px);right:0;width:320px;background:#1a1a1a;border:1px solid #333;border-radius:var(--radius);z-index:999;max-height:320px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,0.4)"></div>
         </div>
+        <button onclick="openCommandPalette()" title="Command palette" style="font-family:var(--mono);font-size:10px;color:#888;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:6px;padding:4px 8px;cursor:pointer">⌘K</button>
         <span class="hdate" id="hdate"></span>
         <div class="user-chip" id="user-chip">
           <div class="user-avatar" id="user-avatar">?</div>
@@ -1652,6 +1653,103 @@ function renderQueueBoard(boardKey){
 }
 function renderProductionQueue(){renderQueueBoard('production');}
 function renderQaQueue(){renderQueueBoard('qa');}
+
+// ── COMMAND PALETTE ────────────────────────────────────────
+// Ctrl/Cmd+K anywhere. Type a project name/SO/client/PM to jump straight to
+// it, or type a page name ("shipping", "capacity") to jump there. Reuses
+// gsGo() so filters get cleared the same way the header search already does.
+const CP_COMMANDS=[
+  {label:'At a glance',icon:'●',run:()=>setTab('glance')},
+  {label:'Project overview',icon:'●',run:()=>setTab('overview')},
+  {label:'Project page',icon:'●',run:()=>setTab('projpage')},
+  {label:'This week',icon:'●',run:()=>setTab('week')},
+  {label:'Readiness',icon:'🚨',run:()=>setTab('readiness')},
+  {label:'Capacity & Planning',icon:'📊',run:()=>setTab('capacity')},
+  {label:'Production Queue',icon:'🧱',run:()=>setTab('prodqueue')},
+  {label:'Quality / QA Queue',icon:'🔬',run:()=>setTab('qaqueue')},
+  {label:'Shipping',icon:'🚚',run:()=>setTab('shipping')},
+  {label:'Installation',icon:'🔧',run:()=>setTab('installation')},
+  {label:'Dept check-in',icon:'🚦',run:()=>setTab('checkin')},
+  {label:'Vinyl schedule',icon:'📀',run:()=>setTab('vinyl')},
+  {label:'Planogram',icon:'🗂',run:()=>setTab('planogram')},
+  {label:'Generate docs',icon:'📄',run:()=>setTab('gendocs')},
+  {label:'Templates',icon:'📐',run:()=>setTab('templates')},
+  {label:'Create project',icon:'➕',run:()=>setTab('intake')},
+  {label:'Pipeline',icon:'🗂',run:()=>setTab('pipeline')},
+  {label:'Mission Control (TV)',icon:'📺',run:()=>openMissionControl()},
+  {label:'Insights',icon:'📊',run:()=>setTab('insights')},
+  {label:'Calendar',icon:'📆',run:()=>setTab('calendar')},
+  {label:'Daily briefing',icon:'📋',run:()=>setTab('briefing')},
+  {label:'Activity log',icon:'🕓',run:()=>setTab('log')},
+  {label:'Settings',icon:'⚙️',run:()=>setTab('settings')},
+];
+let cpSelectedIdx=0,cpResults=[];
+function cpEsc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');}
+
+function openCommandPalette(){
+  const root=document.getElementById('modal-root');if(!root)return;
+  root.innerHTML=`
+    <div id="cp-overlay" onclick="if(event.target.id==='cp-overlay')closeCommandPalette()" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:2000;display:flex;align-items:flex-start;justify-content:center;padding-top:12vh">
+      <div style="background:#1a1a1a;border:1px solid #333;border-radius:12px;width:560px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden">
+        <input id="cp-input" placeholder="Search projects or jump anywhere…" autocomplete="off"
+          style="width:100%;font-family:var(--font);font-size:15px;padding:16px 18px;border:none;background:transparent;color:white;outline:none;border-bottom:1px solid #2a2a2a;box-sizing:border-box"
+          oninput="cpRender(this.value)" onkeydown="cpKeydown(event)">
+        <div id="cp-results" style="max-height:360px;overflow-y:auto"></div>
+        <div style="padding:8px 18px;font-size:10px;color:#666;border-top:1px solid #2a2a2a;display:flex;gap:14px">
+          <span>↑↓ navigate</span><span>↵ select</span><span>esc close</span>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('cp-input').focus();
+  cpRender('');
+}
+function closeCommandPalette(){const root=document.getElementById('modal-root');if(root)root.innerHTML='';}
+
+function cpRender(q){
+  const ql=q.trim().toLowerCase();
+  let results=[];
+  if(ql){
+    const projMatches=projects.filter(p=>
+      (p.name||'').toLowerCase().includes(ql)||
+      (p.so_number||'').toLowerCase().includes(ql)||
+      (p.client||'').toLowerCase().includes(ql)||
+      (p.pm||'').toLowerCase().includes(ql)
+    ).slice(0,6).map(p=>({type:'project',icon:'📁',label:p.name,sub:[p.so_number,p.client,p.pm].filter(Boolean).join(' · '),run:()=>gsGo(p.id)}));
+    const cmdMatches=CP_COMMANDS.filter(c=>c.label.toLowerCase().includes(ql)).slice(0,6).map(c=>({type:'command',icon:c.icon,label:c.label,sub:'Go to page',run:c.run}));
+    results=[...projMatches,...cmdMatches];
+  } else {
+    results=CP_COMMANDS.slice(0,8).map(c=>({type:'command',icon:c.icon,label:c.label,sub:'Go to page',run:c.run}));
+  }
+  cpResults=results;cpSelectedIdx=0;cpPaint();
+}
+function cpPaint(){
+  const el=document.getElementById('cp-results');if(!el)return;
+  if(!cpResults.length){el.innerHTML='<div style="padding:24px;text-align:center;color:#666;font-size:12px">No matches</div>';return;}
+  el.innerHTML=cpResults.map((r,i)=>`
+    <div onclick="cpRunIdx(${i})" onmouseover="cpSelectedIdx=${i};cpPaint()" style="padding:10px 18px;cursor:pointer;display:flex;align-items:center;gap:10px;background:${i===cpSelectedIdx?'#252525':'transparent'};border-left:2px solid ${i===cpSelectedIdx?'#e22f4a':'transparent'}">
+      <span style="font-size:14px;width:20px;text-align:center;flex-shrink:0">${r.icon}</span>
+      <div style="min-width:0;flex:1">
+        <div style="font-size:12.5px;font-weight:600;color:#e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${cpEsc(r.label)}</div>
+        ${r.sub?`<div style="font-size:10.5px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${cpEsc(r.sub)}</div>`:''}
+      </div>
+      <span style="font-size:9px;color:#555;flex-shrink:0">${r.type==='project'?'PROJECT':'GO'}</span>
+    </div>`).join('');
+}
+function cpRunIdx(i){const r=cpResults[i];if(!r)return;closeCommandPalette();r.run();}
+function cpKeydown(e){
+  if(e.key==='ArrowDown'){e.preventDefault();cpSelectedIdx=Math.min(cpResults.length-1,cpSelectedIdx+1);cpPaint();}
+  else if(e.key==='ArrowUp'){e.preventDefault();cpSelectedIdx=Math.max(0,cpSelectedIdx-1);cpPaint();}
+  else if(e.key==='Enter'){e.preventDefault();cpRunIdx(cpSelectedIdx);}
+  else if(e.key==='Escape'){closeCommandPalette();}
+}
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&(e.key==='k'||e.key==='K')){
+    e.preventDefault();
+    if(document.getElementById('cp-overlay'))closeCommandPalette();else openCommandPalette();
+  } else if(e.key==='Escape'&&document.getElementById('cp-overlay')){
+    closeCommandPalette();
+  }
+});
 
 // ── AT A GLANCE ────────────────────────────────────────────
 let glanceFilter='active'; // 'active' or 'archived'
