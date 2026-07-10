@@ -178,6 +178,8 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .sched-table tr.dragging{opacity:0.4;}
 .plan-card.dragging{opacity:0.35;}
 .plan-col.drag-over{background:var(--blue-bg)!important;border-color:var(--blue)!important;}
+.q-card.dragging{opacity:0.35;}
+.q-zone.drag-over{background:var(--blue-bg)!important;outline:2px dashed var(--blue);}
 .sched-table tr.drag-over td{border-top:2px solid var(--red);}
 .drag-handle{cursor:grab;color:var(--gray-300);font-size:15px;padding:0 4px;user-select:none;}
 .drag-handle:active{cursor:grabbing;}
@@ -355,36 +357,40 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
           <span class="logo-chevron" style="margin-left:4px">▾</span>
         </button>
         <div class="nav-dropdown" id="nav-dropdown">
-          <div class="nav-group-label">Overview</div>
+          <div class="nav-group-label">Daily</div>
           <button class="nav-item" id="ni-glance" onclick="setTab('glance')"><span class="nav-item-dot" style="background:#6b6b6b"></span>At a glance</button>
           <button class="nav-item" id="ni-overview" onclick="setTab('overview')"><span class="nav-item-dot" style="background:#6b6b6b"></span>Project overview</button>
           <button class="nav-item" id="ni-projpage" onclick="setTab('projpage')"><span class="nav-item-dot" style="background:#6b6b6b"></span>Project page</button>
           <button class="nav-item" id="ni-week" onclick="setTab('week')"><span class="nav-item-dot" style="background:#6b6b6b"></span>This week</button>
-          <button class="nav-item" id="ni-pipeline" onclick="setTab('pipeline')"><span class="nav-item-dot" style="background:#e22f4a"></span>Pipeline</button>
-          <button class="nav-item" onclick="openMissionControl()"><span class="nav-item-dot" style="background:#C8102E"></span>📺 Mission Control <span style="margin-left:auto;font-size:9px;color:#888;font-family:var(--mono)">TV</span></button>
-          <button class="nav-item" id="ni-insights" onclick="setTab('insights')"><span class="nav-item-dot" style="background:#0891b2"></span>📊 Insights</button>
-          <button class="nav-item" id="ni-calendar" onclick="setTab('calendar')"><span class="nav-item-dot" style="background:#059669"></span>📆 Calendar</button>
           <button class="nav-item" id="ni-readiness" onclick="setTab('readiness')"><span class="nav-item-dot" style="background:#ef4444"></span>🚨 Readiness</button>
           <button class="nav-item" id="ni-capacity" onclick="setTab('capacity')"><span class="nav-item-dot" style="background:#7c3aed"></span>📊 Capacity</button>
           <div class="nav-sep"></div>
           <div class="nav-group-label">Departments</div>
           <button class="nav-item" id="ni-prodqueue" onclick="setTab('prodqueue')"><span class="nav-item-dot" style="background:#7c3aed"></span>Production</button>
-          <button class="nav-item" id="ni-quality" onclick="setTab('quality')"><span class="nav-item-dot" style="background:#d97706"></span>Quality / QA</button>
+          <button class="nav-item" id="ni-qaqueue" onclick="setTab('qaqueue')"><span class="nav-item-dot" style="background:#d97706"></span>Quality / QA</button>
           <button class="nav-item" id="ni-shipping" onclick="setTab('shipping')"><span class="nav-item-dot" style="background:#059669"></span>Shipping</button>
           <button class="nav-item" id="ni-installation" onclick="setTab('installation')"><span class="nav-item-dot" style="background:#db2777"></span>Installation</button>
+          <button class="nav-item" id="ni-checkin" onclick="setTab('checkin')">🚦 Dept check-in</button>
           <div class="nav-sep"></div>
           <div class="nav-group-label">Schedules</div>
           <button class="nav-item" id="ni-vinyl" onclick="setTab('vinyl')"><span class="nav-item-dot" style="background:#2563eb"></span>Vinyl schedule</button>
           <button class="nav-item" id="ni-planogram" onclick="setTab('planogram')"><span class="nav-item-dot" style="background:#0891b2"></span>Planogram</button>
           <div class="nav-sep"></div>
           <div class="nav-group-label">Tools</div>
-          <button class="nav-item" id="ni-briefing" onclick="setTab('briefing')">📋 Daily briefing</button>
-          <button class="nav-item" id="ni-checkin" onclick="setTab('checkin')">🚦 Dept check-in</button>
-          <button class="nav-item" id="ni-log" onclick="setTab('log')">🕓 Activity log</button>
           <button class="nav-item" id="ni-gendocs" onclick="setTab('gendocs')">📄 Generate docs</button>
           <button class="nav-item" id="ni-templates" onclick="setTab('templates')">📐 Templates</button>
           <button class="nav-item" id="ni-intake" onclick="setTab('intake')">➕ New project</button>
-          <button class="nav-item" id="ni-settings" onclick="setTab('settings')">⚙️ Settings</button>
+          <div class="nav-sep"></div>
+          <button class="nav-item" id="nav-more-toggle" onclick="toggleNavMore()" style="color:#666"><span class="nav-more-arrow" style="width:7px;flex-shrink:0">▸</span>More</button>
+          <div id="nav-more" style="display:none">
+            <button class="nav-item" id="ni-pipeline" onclick="setTab('pipeline')"><span class="nav-item-dot" style="background:#e22f4a"></span>Pipeline</button>
+            <button class="nav-item" onclick="openMissionControl()"><span class="nav-item-dot" style="background:#C8102E"></span>📺 Mission Control <span style="margin-left:auto;font-size:9px;color:#888;font-family:var(--mono)">TV</span></button>
+            <button class="nav-item" id="ni-insights" onclick="setTab('insights')"><span class="nav-item-dot" style="background:#0891b2"></span>📊 Insights</button>
+            <button class="nav-item" id="ni-calendar" onclick="setTab('calendar')"><span class="nav-item-dot" style="background:#059669"></span>📆 Calendar</button>
+            <button class="nav-item" id="ni-briefing" onclick="setTab('briefing')">📋 Daily briefing</button>
+            <button class="nav-item" id="ni-log" onclick="setTab('log')">🕓 Activity log</button>
+            <button class="nav-item" id="ni-settings" onclick="setTab('settings')">⚙️ Settings</button>
+          </div>
         </div>
       </div>
       <div class="header-right">
@@ -415,7 +421,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
     <div id="tab-projpage" style="display:none"></div>
     <div id="tab-week" style="display:none"></div>
     <div id="tab-prodqueue" style="display:none"></div>
-    <div id="tab-quality" style="display:none"></div>
+    <div id="tab-qaqueue" style="display:none"></div>
     <div id="tab-shipping" style="display:none"></div>
     <div id="tab-installation" style="display:none"></div>
     <div id="tab-vinyl" style="display:none"></div>
@@ -693,13 +699,24 @@ function setTab(tab){
   currentTab=tab;
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
+  if(ni&&document.getElementById('nav-more')?.contains(ni))openNavMore();
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','pipeline','overview','projpage','week','prodqueue','quality','shipping','installation','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity'];
+  const ALL=['glance','pipeline','overview','projpage','week','prodqueue','qaqueue','shipping','installation','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
+function openNavMore(){
+  const el=document.getElementById('nav-more');if(!el)return;
+  el.style.display='block';
+  const arrow=document.querySelector('#nav-more-toggle .nav-more-arrow');if(arrow)arrow.textContent='▾';
+}
+function toggleNavMore(){
+  const el=document.getElementById('nav-more');if(!el)return;
+  if(el.style.display==='none')openNavMore();
+  else{el.style.display='none';const arrow=document.querySelector('#nav-more-toggle .nav-more-arrow');if(arrow)arrow.textContent='▸';}
+}
 function renderTab(){
-  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,prodqueue:renderProductionQueue,quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity};
+  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,prodqueue:renderProductionQueue,qaqueue:renderQaQueue,shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity};
   if(m[currentTab])m[currentTab]();
 }
 
@@ -1329,11 +1346,14 @@ function renderCapacity(){
     </div>`;
 }
 
-// ── PRODUCTION QUEUE ─────────────────────────────────────────
-// Digital version of the physical board on the shop floor: three lanes by form
-// factor (Lockers / Vending / TED), each split into big, unmissable zones —
-// On Hold, W.I.P, Ready. Deliberately simple: no dates, no numbers to parse,
-// just "what is it, whose is it, where does it sit."
+// ── QUEUE BOARDS (Production / QA / future depts) ─────────────
+// Same visual language as Pipeline: a bottleneck bar up top, columns by stage
+// (not by group), cards colored by health. Family (Lockers/Vending/TED) shows
+// as a badge on the card and an optional filter, same pattern as Pipeline's
+// PM filter. Dragging a card forward is REAL: it closes the milestone that
+// stage represents, which is what actually moves it — nothing here is a
+// separate "status" field pretending to track reality. One engine, multiple
+// board configs, so adding Shipping/Installation later is just a new config.
 const PROD_FAMILIES=[
   {key:'lockers',label:'Lockers',icon:'🔒',color:'#7c3aed'},
   {key:'vending',label:'Vending',icon:'🥤',color:'#2563eb'},
@@ -1345,70 +1365,291 @@ function classifyFamily(p){
   if(t.includes('ted'))return'ted';
   return'vending';
 }
-// Only projects actually relevant to Production's own queue show up here —
-// still waiting on procurement (mo-release/parts-order) or already past
-// production (qa/shipping/delivered) fall off this board on purpose, same as
-// the paper version: only what's on the floor or about to be gets taped up.
-function getQueueZone(p){
-  if(p.status==='on-hold')return'hold';
-  const stage=getProjectStage(p);
-  if(stage==='production')return'wip';
-  if(stage==='parts-arrive')return'ready';
-  return null;
+function msCrossedOrDone(pMs,key){
+  const m=pMs.find(x=>x.key===key);if(!m)return false;
+  if(isMilestoneDone(m))return true;
+  if(!m.date)return false;
+  return new Date(m.date+'T00:00:00')<=today();
 }
-function computeProductionQueue(){
-  const lanes={};
-  PROD_FAMILIES.forEach(f=>{lanes[f.key]={hold:[],wip:[],ready:[],waiting:0};});
+
+const QUEUE_BOARDS={
+  production:{
+    tabId:'prodqueue',title:'🧱 Production Queue',
+    subtitle:"on the floor · drag a card forward to close its milestone · click a card to open the project",
+    zones:[
+      {key:'hold',label:'On Hold',icon:'⏸',color:'#6b6b6b'},
+      {key:'waiting',label:'Waiting on Parts',icon:'⏳',color:'#b45309'},
+      {key:'ready',label:'Ready',icon:'✅',color:'#16a34a'},
+      {key:'wip',label:'W.I.P',icon:'⚙',color:'#d97706'},
+      {key:'qc',label:'Moved to QC',icon:'🔬',color:'#0891b2'},
+    ],
+    flow:['waiting','ready','wip','qc'],
+    zoneOf(p){
+      if(p.status==='on-hold')return'hold';
+      const stage=getProjectStage(p);
+      if(stage==='mo-release'||stage==='parts-order')return'waiting';
+      if(stage==='parts-arrive')return'ready';
+      if(stage==='production')return'wip';
+      if(stage==='qa')return'qc';
+      return null;
+    },
+    advanceKey(p,zoneKey){return{waiting:'arrival',ready:'production-start',wip:'production-end',qc:'quality-end'}[zoneKey];},
+  },
+  qa:{
+    tabId:'qaqueue',title:'🔬 QA Queue',
+    subtitle:"in QA right now · drag a card forward to close its milestone · click a card to open the project",
+    zones:[
+      {key:'hold',label:'On Hold',icon:'⏸',color:'#6b6b6b'},
+      {key:'preqa',label:'Pre-QA',icon:'🕓',color:'#b45309'},
+      {key:'integrated',label:'Integrated QA',icon:'🧪',color:'#0891b2'},
+      {key:'uat',label:'UAT',icon:'🧍',color:'#7c3aed'},
+      {key:'qc',label:'QC',icon:'🔍',color:'#d97706'},
+      {key:'packed',label:'Packed',icon:'📦',color:'#16a34a'},
+    ],
+    flow:['preqa','integrated','uat','qc','packed'],
+    // Falls back gracefully when a project has no dedicated UAT milestone — it
+    // just never lands in that zone rather than getting stuck.
+    zoneOf(p){
+      if(p.status==='on-hold')return'hold';
+      const pMs=milestones.filter(m=>m.project_id===p.id);
+      const has=k=>pMs.some(m=>m.key===k);
+      const prodDone=msCrossedOrDone(pMs,'production-end');
+      const qaStarted=has('quality-start')?msCrossedOrDone(pMs,'quality-start'):prodDone;
+      if(!prodDone&&!qaStarted)return null; // hasn't reached QA yet — not this board's concern
+      if(has('shipping')&&msCrossedOrDone(pMs,'shipping'))return null; // already shipped, off this board
+      if(has('quality-end')&&msCrossedOrDone(pMs,'quality-end'))return'packed';
+      if(has('final-qc')&&msCrossedOrDone(pMs,'final-qc'))return'qc';
+      if(has('uat')&&msCrossedOrDone(pMs,'uat'))return'uat';
+      if(qaStarted)return'integrated';
+      return'preqa';
+    },
+    advanceKey(p,zoneKey){
+      const pMs=milestones.filter(m=>m.project_id===p.id);
+      const has=k=>pMs.some(m=>m.key===k);
+      if(zoneKey==='preqa')return'quality-start';
+      if(zoneKey==='integrated')return has('uat')?'uat':'final-qc';
+      if(zoneKey==='uat')return'final-qc';
+      if(zoneKey==='qc')return'quality-end';
+      return null;
+    },
+  },
+};
+
+let queueFamilyFilter={};
+function computeQueueBoard(boardKey){
+  const cfg=QUEUE_BOARDS[boardKey];
+  const zones={};
+  cfg.zones.forEach(z=>zones[z.key]=[]);
+  const fam=queueFamilyFilter[boardKey]||'';
   projects.filter(p=>p.status!=='complete').forEach(p=>{
-    const fam=classifyFamily(p);
-    const zone=getQueueZone(p);
-    if(zone)lanes[fam][zone].push(p);
-    else if(p.status!=='on-hold')lanes[fam].waiting++; // still upstream, not on the board yet
+    if(fam&&classifyFamily(p)!==fam)return;
+    const zone=cfg.zoneOf(p);
+    if(zone)zones[zone].push(p);
   });
-  return lanes;
+  return zones;
 }
-function queueCard(p){
+
+// Phase 1 images: paste a URL per project (hosted anywhere) rather than a real
+// upload — no Storage bucket required, works immediately.
+function getProjectImages(){return appSettings['project_images']||{};}
+async function setProjectImage(projId,boardKey){
+  const p=projects.find(x=>x.id===projId);if(!p)return;
+  const current=getProjectImages()[projId]||'';
+  const url=prompt(`Image URL for ${p.name}:`,current);
+  if(url===null)return;
+  const imgs=getProjectImages();
+  if(url.trim())imgs[projId]=url.trim();else delete imgs[projId];
+  appSettings['project_images']=imgs;
+  await sb.from('app_settings').upsert({key:'project_images',value:imgs,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
+  renderQueueBoard(boardKey);
+}
+
+// Separate from milestone completion on purpose: this is Production's own
+// acknowledgment that they've physically received the work order, stamped
+// with who and when — not tied to any date field that could get overwritten.
+function getProductionReceipts(){return appSettings['production_received']||{};}
+async function toggleProductionReceived(projId,boardKey,e){
+  e?.stopPropagation();
+  const receipts=getProductionReceipts();
+  if(receipts[projId]){
+    if(!confirm('Un-mark this as received?'))return;
+    delete receipts[projId];
+  } else {
+    receipts[projId]={by:currentUserName,at:new Date().toISOString()};
+  }
+  appSettings['production_received']=receipts;
+  await sb.from('app_settings').upsert({key:'production_received',value:receipts,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
+  renderQueueBoard(boardKey);
+}
+
+let queueDragProjId=null,queueDragBoard=null;
+function queueDragStart(e,pid,boardKey){queueDragProjId=pid;queueDragBoard=boardKey;e.currentTarget.classList.add('dragging');}
+function queueDragEnd(e){e.currentTarget.classList.remove('dragging');}
+function queueZoneOver(e){e.preventDefault();e.currentTarget.classList.add('drag-over');}
+function queueZoneLeave(e){e.currentTarget.classList.remove('drag-over');}
+
+// Marks/unmarks a milestone done using the same insert/delete pattern as the
+// manual "Mark done" button everywhere else, so it shows up identically on
+// the project page, Pipeline, and Readiness — this isn't a parallel status.
+async function setMilestoneDoneState(mid,pid,wantDone){
+  const isDone=!!milestoneDone[mid];
+  if(wantDone===isDone)return;
+  if(wantDone){
+    const{data}=await sb.from('milestone_done').insert({milestone_id:mid,project_id:pid,marked_by:currentUserName}).select().single();
+    if(data)milestoneDone[mid]=data;
+  } else {
+    await sb.from('milestone_done').delete().eq('milestone_id',mid);
+    delete milestoneDone[mid];
+  }
+  const ms=milestones.find(m=>m.id===mid);
+  if(ms&&(ms.key==='shipping'||ms.key==='delivery')){
+    const proj=projects.find(p=>p.id===ms.project_id);
+    if(proj)await saveShippingStatus(ms.project_id,ms.so_tag||null,getShippingStatusAuto(ms.project_id,ms.so_tag||null));
+  }
+}
+
+async function queueDrop(e,boardKey,targetZone){
+  e.preventDefault();e.currentTarget.classList.remove('drag-over');
+  const pid=queueDragProjId;queueDragProjId=null;queueDragBoard=null;
+  if(!pid)return;
+  const cfg=QUEUE_BOARDS[boardKey];
+  const p=projects.find(x=>x.id===pid);if(!p)return;
+  const currentZone=cfg.zoneOf(p);
+  if(!currentZone||currentZone===targetZone)return;
+
+  if(targetZone==='hold'){
+    await sb.from('projects').update({status:'on-hold'}).eq('id',pid);
+    p.status='on-hold';
+    await logActivity('put on hold',p.name,p.name,pid,null,null);
+    showToast(`${p.name} put on hold`);
+    renderQueueBoard(boardKey);
+    return;
+  }
+  if(currentZone==='hold'){
+    await sb.from('projects').update({status:'active'}).eq('id',pid);
+    p.status='active';
+    await logActivity('resumed from hold',p.name,p.name,pid,null,null);
+    showToast(`${p.name} resumed — now showing its actual stage`);
+    renderQueueBoard(boardKey);
+    return;
+  }
+
+  const fromIdx=cfg.flow.indexOf(currentZone),toIdx=cfg.flow.indexOf(targetZone);
+  if(fromIdx===-1||toIdx===-1)return;
+
+  if(toIdx>fromIdx){
+    let closed=0;
+    for(let i=fromIdx;i<toIdx;i++){
+      // Re-fetch each pass — closing one milestone can change what the next zone's key resolves to (e.g. skipping UAT)
+      const key=cfg.advanceKey(p,cfg.flow[i]);
+      if(!key)continue;
+      const pMs=milestones.filter(m=>m.project_id===pid);
+      const ms=pMs.find(m=>m.key===key);
+      if(!ms)continue;
+      if(!ms.date||ms.date>ymd(today())){
+        const oldDate=ms.date;const newDate=ymd(today());
+        await sb.from('milestones').update({date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',ms.id);
+        if(oldDate)await sb.from('milestone_history').insert({milestone_id:ms.id,project_id:pid,old_date:oldDate,new_date:newDate,changed_by:currentUserName,reason:`Closed via ${cfg.title} drag`});
+        ms.date=newDate;
+      }
+      await setMilestoneDoneState(ms.id,pid,true);
+      closed++;
+    }
+    showToast(`${p.name} moved forward — ${closed} milestone${closed===1?'':'s'} closed ✓`);
+  } else {
+    showToast(`Can't drag backward — edit the milestone date on ${p.name}'s project page to move it back a stage`);
+    renderQueueBoard(boardKey);
+    return;
+  }
+  renderQueueBoard(boardKey);
+}
+
+function queueCard(p,boardKey){
   const detail=[p.product_type,p.form_factor].filter(Boolean).join(' — ');
-  return`<div onclick="goToProjPage('${p.id}')" style="background:white;border:1px solid var(--gray-200);border-radius:8px;padding:10px 12px;margin-bottom:7px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.03)">
-    <div style="font-size:12.5px;font-weight:700;line-height:1.3">${p.name}</div>
-    ${detail?`<div style="font-size:10.5px;color:var(--gray-500);margin-top:2px">${detail}</div>`:''}
+  const fam=PROD_FAMILIES.find(f=>f.key===classifyFamily(p));
+  const health=getStageHealth(p,getProjectStage(p));
+  const healthColor=health==='red'?'#ef4444':health==='amber'?'#f59e0b':'#22c55e';
+  const healthBg=health==='red'?'#fef2f2':health==='amber'?'#fffbeb':'#f0fdf4';
+  const borderColor=health==='red'?'#fca5a5':health==='amber'?'#fde68a':'#bbf7d0';
+  const imgUrl=getProjectImages()[p.id];
+  const photoBlock=imgUrl
+    ?`<div style="position:relative;margin:-9px -11px 7px">
+        <img src="${imgUrl}" style="width:100%;height:76px;object-fit:cover;border-radius:7px 7px 0 0;display:block" onerror="this.parentElement.style.display='none'">
+        <button onclick="event.stopPropagation();setProjectImage('${p.id}','${boardKey}')" title="Change photo" style="position:absolute;top:4px;right:4px;width:18px;height:18px;border-radius:50%;border:none;background:rgba(0,0,0,0.55);color:white;font-size:9px;cursor:pointer;line-height:1">✎</button>
+      </div>`
+    :`<button onclick="event.stopPropagation();setProjectImage('${p.id}','${boardKey}')" style="width:100%;font-size:9.5px;color:var(--gray-400);background:white;border:1px dashed var(--gray-200);border-radius:6px;padding:4px;margin:-1px 0 6px;cursor:pointer;font-family:var(--font)">+ Add photo</button>`;
+  const receipt=getProductionReceipts()[p.id];
+  const receiptLabel=boardKey==='qa'?'Received by QA':'Received';
+  const receiptBlock=receipt
+    ?`<div onclick="toggleProductionReceived('${p.id}','${boardKey}',event)" title="Click to un-mark" style="cursor:pointer;font-size:9.5px;color:#15803d;font-weight:600;margin-top:5px">✓ ${receiptLabel} ${fmt(receipt.at.slice(0,10))} · ${receipt.by||''}</div>`
+    :`<button onclick="toggleProductionReceived('${p.id}','${boardKey}',event)" style="margin-top:5px;font-size:9.5px;color:var(--gray-500);background:transparent;border:1px solid var(--gray-300);border-radius:8px;padding:2px 8px;cursor:pointer;font-family:var(--font)">☐ Mark ${receiptLabel.toLowerCase()}</button>`;
+  return`<div class="q-card" draggable="true" ondragstart="queueDragStart(event,'${p.id}','${boardKey}')" ondragend="queueDragEnd(event)" onclick="goToProjPage('${p.id}')" style="background:${healthBg};border:1px solid ${borderColor};border-radius:8px;padding:9px 11px;margin-bottom:7px;cursor:grab">
+    ${photoBlock}
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+      <div style="font-size:12px;font-weight:700;line-height:1.3">${p.name}</div>
+      <span style="font-size:12px;flex-shrink:0" title="${fam.label}">${fam.icon}</span>
+    </div>
+    ${detail?`<div style="font-size:10px;color:var(--gray-500);margin-top:2px">${detail}</div>`:''}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-top:5px">
       <span style="font-family:var(--mono);font-size:9.5px;color:var(--red)">${p.so_number||'—'}</span>
       <span style="font-size:10px;color:var(--gray-500)">${p.pm||'—'}</span>
     </div>
+    <div style="display:flex;align-items:center;gap:4px;margin-top:4px">
+      <div style="width:7px;height:7px;border-radius:50%;background:${healthColor}"></div>
+      <span style="font-size:9px;color:var(--gray-400)">${health==='red'?'behind':health==='amber'?'due soon':'on track'}</span>
+    </div>
+    ${receiptBlock}
   </div>`;
 }
-function renderProductionQueue(){
-  const el=document.getElementById('tab-prodqueue');if(!el)return;
-  const lanes=computeProductionQueue();
-  const zoneTag=(label,color)=>`<div style="display:inline-block;background:${color};color:white;font-size:11px;font-weight:800;letter-spacing:0.04em;padding:3px 12px;border-radius:4px;margin-bottom:10px;transform:rotate(-1deg)">${label}</div>`;
-  const zoneSection=(list,label,color)=>`
-    <div style="margin-bottom:6px">
-      ${zoneTag(label+` (${list.length})`,color)}
-      <div>${list.length?list.map(queueCard).join(''):`<div style="font-size:11px;color:var(--gray-300);padding:8px 0;text-align:center;border:1px dashed var(--gray-200);border-radius:6px">Empty</div>`}</div>
+
+function renderQueueBoard(boardKey){
+  const cfg=QUEUE_BOARDS[boardKey];
+  const el=document.getElementById('tab-'+cfg.tabId);if(!el)return;
+  const zones=computeQueueBoard(boardKey);
+  const totalActive=cfg.zones.reduce((n,z)=>n+zones[z.key].length,0);
+
+  const summaryHtml=`
+    <div style="display:grid;grid-template-columns:repeat(${cfg.zones.length},1fr);gap:6px;margin-bottom:1rem">
+      ${cfg.zones.map(z=>`
+        <div onclick="document.getElementById('${cfg.tabId}-col-${z.key}').scrollIntoView({behavior:'smooth',block:'nearest'})" style="background:white;border:1px solid var(--gray-100);border-left:3px solid ${z.color};border-radius:8px;padding:8px 12px;cursor:pointer">
+          <div style="font-size:18px;font-weight:700">${zones[z.key].length}</div>
+          <div style="font-size:10px;font-weight:600;color:${z.color};margin-top:1px">${z.icon} ${z.label}</div>
+        </div>`).join('')}
     </div>`;
-  const columns=PROD_FAMILIES.map(f=>{
-    const lane=lanes[f.key];
-    return`<div style="min-width:270px;max-width:300px;flex-shrink:0;background:var(--gray-50);border-radius:10px;padding:12px">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;padding-bottom:8px;border-bottom:2px solid ${f.color}">
-        <span style="font-size:16px">${f.icon}</span>
-        <span style="font-size:14px;font-weight:800;color:${f.color}">${f.label}</span>
-        ${lane.waiting?`<span style="margin-left:auto;font-size:10px;color:var(--gray-400)">+${lane.waiting} waiting on parts</span>`:''}
+
+  const fam=queueFamilyFilter[boardKey]||'';
+  const familyFilterHtml=`<select onchange="queueFamilyFilter['${boardKey}']=this.value;renderQueueBoard('${boardKey}')" style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)">
+    <option value="">All families</option>
+    ${PROD_FAMILIES.map(f=>`<option value="${f.key}"${fam===f.key?' selected':''}>${f.icon} ${f.label}</option>`).join('')}
+  </select>`;
+
+  const columns=cfg.zones.map(z=>{
+    const list=zones[z.key];
+    return`<div id="${cfg.tabId}-col-${z.key}" class="q-zone" ondragover="queueZoneOver(event)" ondragleave="queueZoneLeave(event)" ondrop="queueDrop(event,'${boardKey}','${z.key}')" style="min-width:230px;max-width:260px;flex-shrink:0;background:var(--gray-50);border:1px dashed var(--gray-200);border-radius:8px;padding:10px;transition:background 0.1s">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid ${z.color}">
+        <span style="font-size:13px">${z.icon}</span>
+        <span style="font-size:12px;font-weight:700;color:${z.color}">${z.label}</span>
+        <span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;background:${z.color}18;color:${z.color};margin-left:auto">${list.length}</span>
       </div>
-      ${zoneSection(lane.hold,'⏸ ON HOLD','#6b6b6b')}
-      ${zoneSection(lane.wip,'⚙ W.I.P','#d97706')}
-      ${zoneSection(lane.ready,'✅ READY','#16a34a')}
+      ${list.length?list.map(p=>queueCard(p,boardKey)).join(''):`<div style="text-align:center;padding:1.5rem 0;color:var(--gray-300);font-size:11px">Nothing here</div>`}
     </div>`;
   }).join('');
+
   el.innerHTML=`
-    <div style="margin-bottom:14px">
-      <div style="font-size:21px;font-weight:700">🧱 Production Queue</div>
-      <div style="font-size:12px;color:var(--gray-500);margin-top:3px">What's on the floor right now, by form factor — same as the board by the window</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:8px">
+      <div>
+        <div style="font-size:16px;font-weight:600">${cfg.title}</div>
+        <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${totalActive} ${cfg.subtitle}</div>
+      </div>
+      ${familyFilterHtml}
     </div>
-    <div style="overflow-x:auto;padding-bottom:10px">
-      <div style="display:flex;gap:14px;min-width:max-content">${columns}</div>
+    ${summaryHtml}
+    <div style="overflow-x:auto;padding-bottom:1rem">
+      <div style="display:flex;gap:12px;min-width:max-content;align-items:flex-start">${columns}</div>
     </div>`;
 }
+function renderProductionQueue(){renderQueueBoard('production');}
+function renderQaQueue(){renderQueueBoard('qa');}
 
 // ── AT A GLANCE ────────────────────────────────────────────
 let glanceFilter='active'; // 'active' or 'archived'
