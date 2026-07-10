@@ -121,6 +121,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
       <button class="wtab" id="wt-3" style="display:none" onclick="setWeek('3',this)">Week 4</button>
     </div>
     <div id="summary-bar"></div>
+    <div id="attention-summary"></div>
     <div id="ci-content"></div>
   </div>
 </div>
@@ -187,6 +188,7 @@ let currentUserName=null;
 let projects=[];
 let milestones=[];
 let checkins={};
+let extensionRequests=[];
 let currentWeek='this';
 
 // ── UTILS ──────────────────────────────────────────────────
@@ -248,16 +250,18 @@ function getGreeting(){const h=new Date().getHours();return h<12?'morning':h<17?
 
 // ── DATA ──────────────────────────────────────────────────
 async function loadCheckinData(){
-  const[pr,ms,ci,ah,sod]=await Promise.all([
+  const[pr,ms,ci,ah,sod,ext]=await Promise.all([
     sb.from('projects').select('*').neq('status','complete').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('checkin_status').select('*'),
     sb.from('adhoc_schedule').select('*').order('created_at'),
     sb.from('so_details').select('*'),
+    sb.from('extension_requests').select('*').eq('status','pending'),
   ]);
   projects=pr.data||[];
   milestones=ms.data||[];
   window._soDetails=sod.data||[];
+  extensionRequests=ext.data||[];
   checkins={};
   (ci.data||[]).forEach(c=>{checkins[c.milestone_id]=c;});
   // Also index by adhoc id for ad hoc stoplights
@@ -353,6 +357,15 @@ function render(){
       <div><div class="sb-val sb-red">${reds}</div><div class="sb-label">Escalation</div></div>
     </div>`:'';
 
+  const pendingForDept=extensionRequests.filter(r=>r.dept===dept.name&&r.status==='pending').length;
+  const unchecked=allItems.filter(m=>!checkins[m._id||m.id]?.checked).length;
+  const attention=[];
+  if(reds)attention.push(`<span style="color:#b91c1c;font-weight:700">🔴 ${reds} escalation${reds===1?'':'s'}</span>`);
+  if(yellows)attention.push(`<span style="color:#a16207;font-weight:700">🟡 ${yellows} in trouble</span>`);
+  if(unchecked)attention.push(`<span style="color:#374151;font-weight:600">☐ ${unchecked} not checked in</span>`);
+  if(pendingForDept)attention.push(`<span style="color:#7c3aed;font-weight:700">⏳ ${pendingForDept} extension request${pendingForDept===1?'':'s'} pending</span>`);
+  document.getElementById('attention-summary').innerHTML=attention.length?`<div style="background:white;border:1px solid var(--gray-100);border-radius:var(--radius-lg);padding:10px 14px;margin-bottom:1rem"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--gray-500);margin-bottom:6px">Needs attention</div><div style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px">${attention.join('')}</div></div>`:'';
+
   const fmtRange=(s,e)=>fmt(isoD(s))+' – '+fmt(isoD(e));
   const thisBase=monday(today());
   document.getElementById('wt-this').textContent='This week  '+fmtRange(thisBase,addD(thisBase,4));
@@ -414,6 +427,9 @@ function ciRow(id,m,dept,bucket){
   // For SO-split rows show the specific SO tag (the one this milestone belongs to),
   // not all SOs on the project — each row is now its own individual SO
   const soDisplay=m._adhoc?(m.so||''):m.so_tag||(proj?.so_number||'');
+  const pmDisplay=proj?.pm||'';
+  const soDetail=(!m._adhoc&&m.so_tag)?(window._soDetails||[]).find(x=>x.project_id===m.project_id&&x.so_tag===m.so_tag):null;
+  const namingDisplay=soDetail?.naming_convention||proj?.naming_convention||'';
 
   // Stoplight border accent
   const borderColor=stoplight==='green'?'#22c55e':stoplight==='yellow'?'#eab308':stoplight==='red'?'#ef4444':'#e2e8f0';
@@ -439,7 +455,9 @@ function ciRow(id,m,dept,bucket){
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:2px">
           <span style="font-size:13px;font-weight:600;color:var(--black)">${projName}${m._adhoc?` <span style="font-size:10px;background:var(--blue);color:white;padding:1px 5px;border-radius:6px;font-weight:600">Ad hoc</span>`:''}</span>
           ${soDisplay?`<span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:600">${soDisplay}</span>`:''}
+          ${pmDisplay?`<span style="font-size:10px;color:var(--gray-500);font-weight:600">PM: ${pmDisplay}</span>`:`<span style="font-size:10px;color:#b91c1c;font-weight:700">PM missing</span>`}
         </div>
+        ${namingDisplay?`<div style="font-family:var(--mono);font-size:9px;color:var(--gray-500);margin-bottom:4px;overflow-wrap:anywhere">${namingDisplay}</div>`:(soDisplay?`<div style="font-size:9px;color:#a16207;font-weight:700;margin-bottom:4px">Naming convention missing</div>`:'')}
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:${dateBg};color:${dateColor}">${dateLabel}</span>
           ${shipStatusSel}
