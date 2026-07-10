@@ -1080,6 +1080,61 @@ function clearCapacityScenario(){
   renderCapacity();
 }
 
+function capacityWeekLabel(i,w){return i===0?'This week':i===1?'Next week':`Week of ${fmt(ymd(w.start))}`;}
+
+// What each project in a week is actually doing right now — pulled from its production
+// check-in (the same stoplight + note your dept check-in already collects), not a new field.
+function getProjectRiskStatus(p){
+  const pMs=milestones.filter(m=>m.project_id===p.id);
+  const anchor=pMs.find(m=>m.key==='production-start')||pMs.find(m=>m.key==='production-end');
+  const ci=anchor?checkinStatus[anchor.id]:null;
+  const sl=ci?.stoplight||'';
+  const risk=sl==='red'?'🔴':sl==='yellow'?'🟡':sl==='green'?'🟢':'⚪';
+  const status=ci?.notes?ci.notes:(sl==='red'?'Flagged red':sl==='yellow'?'At risk':sl==='green'?'On track':'Not checked in');
+  return{risk,status};
+}
+
+// Reuses the same stage/lateness logic as the Pipeline page — whichever stage currently
+// has the most "red" (past-due) projects is the one most likely to cause the next delay.
+function getMostLikelyDelayDept(){
+  const active=projects.filter(p=>p.status!=='complete');
+  const counts={};
+  PIPELINE_STAGES.forEach(s=>counts[s.id]=0);
+  active.forEach(p=>{
+    const stage=getProjectStage(p);
+    if(getStageHealth(p,stage)==='red')counts[stage]=(counts[stage]||0)+1;
+  });
+  let best=null,bestN=0;
+  PIPELINE_STAGES.forEach(s=>{if(counts[s.id]>bestN){best=s;bestN=counts[s.id];}});
+  return best?{label:best.label,count:bestN}:null;
+}
+
+// Finds the first over-capacity week and proposes moving the most movable project
+// (the one whose whole production window sits inside that single week) into the
+// nearest week downstream that has room. Real logic against real dates — not decorative.
+function getCapacityRecommendation(weeks,limit){
+  const overIdx=weeks.findIndex(w=>w.projects.length>limit);
+  if(overIdx===-1)return null;
+  const week=weeks[overIdx];
+  const candidates=week.projects.filter(p=>{
+    const r=getProdRange(p);if(!r)return false;
+    const s=new Date(r.start+'T00:00:00'),e=new Date(r.end+'T00:00:00');
+    return s>=week.start&&e<=week.end; // fits fully within this week — easiest to shift
+  }).sort((a,b)=>new Date(getProdRange(b).start)-new Date(getProdRange(a).start));
+  const target=candidates[0]||week.projects[0];
+  if(!target)return null;
+  let destIdx=-1;
+  for(let j=overIdx+1;j<weeks.length;j++){if(weeks[j].projects.length+1<=limit){destIdx=j;break;}}
+  const overBy=week.projects.length-limit;
+  if(destIdx===-1){
+    return{text:`${capacityWeekLabel(overIdx,week)} is over by ${overBy} project${overBy===1?'':'s'}, but no open week in the next ${weeks.length} weeks can absorb it. Capacity may need to increase, or a project needs to move further out.`,project:null};
+  }
+  return{
+    text:`Move ${target.name}${target.pm?' ('+target.pm+')':''} from ${capacityWeekLabel(overIdx,week)} to ${capacityWeekLabel(destIdx,weeks[destIdx])} → ${capacityWeekLabel(overIdx,week)} drops to ${week.projects.length-1}/${limit}, ${capacityWeekLabel(destIdx,weeks[destIdx])} becomes ${weeks[destIdx].projects.length+1}/${limit}.`,
+    project:target
+  };
+}
+
 function renderCapacity(){
   const el=document.getElementById('tab-capacity');if(!el)return;
   const limit=capacityLimit();
@@ -1087,19 +1142,55 @@ function renderCapacity(){
   const scenarioWeeks=capacityScenario.active?computeWeeklyLoad(capacityWeeksCount,capacityScenario):null;
   const overCount=weeks.filter(w=>w.projects.length>limit).length;
   const thisWeek=weeks[0]?.projects.length||0;
+  const remaining=limit-thisWeek;
+  const canAccept=remaining>0;
   const noDataCount=projects.filter(p=>p.status!=='complete'&&!getProdRange(p)).length;
+
+  // Biggest risk = week furthest over capacity; if none are over, the closest to it
+  let biggestRiskIdx=0,biggestRiskVal=-Infinity;
+  weeks.forEach((w,i)=>{const v=w.projects.length-limit;if(v>biggestRiskVal){biggestRiskVal=v;biggestRiskIdx=i;}});
+  const biggestRisk=biggestRiskVal>0?{label:capacityWeekLabel(biggestRiskIdx,weeks[biggestRiskIdx]),over:biggestRiskVal}:null;
+
+  const delayDept=getMostLikelyDelayDept();
+  const recommendation=getCapacityRecommendation(weeks,limit);
 
   const scenarioProjOpts=projects.filter(p=>p.status!=='complete'&&getProdRange(p))
     .sort((a,b)=>a.name.localeCompare(b.name))
     .map(p=>`<option value="${p.id}"${capacityScenario.projectId===p.id?' selected':''}>${p.name}${p.pm?' — '+p.pm:''}</option>`).join('');
 
+  const decisionBar=`
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--gray-100);border-radius:var(--radius-lg);overflow:hidden;margin-bottom:14px;background:white">
+      <div style="padding:14px 16px;border-right:1px solid var(--gray-100)">
+        <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Can we take on another project?</div>
+        <div style="font-size:22px;font-weight:700;color:${canAccept?'#16a34a':'#ef4444'};margin-top:4px">${canAccept?'YES':'NO'}</div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${canAccept?remaining+' slot'+(remaining===1?'':'s')+' open this week':'This week is already full'}</div>
+      </div>
+      <div style="padding:14px 16px;border-right:1px solid var(--gray-100)">
+        <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Remaining capacity</div>
+        <div style="font-size:22px;font-weight:700;margin-top:4px">${Math.max(0,remaining)}</div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">of ${limit} slots this week</div>
+      </div>
+      <div style="padding:14px 16px;border-right:1px solid var(--gray-100)">
+        <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Biggest risk</div>
+        <div style="font-size:15px;font-weight:700;margin-top:6px;color:${biggestRisk?'#ef4444':'#16a34a'}">${biggestRisk?biggestRisk.label:'None'}</div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${biggestRisk?'over by '+biggestRisk.over+' project'+(biggestRisk.over===1?'':'s'):'no week is over capacity'}</div>
+      </div>
+      <div style="padding:14px 16px">
+        <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Most likely to slip</div>
+        <div style="font-size:15px;font-weight:700;margin-top:6px">${delayDept?delayDept.label:'—'}</div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${delayDept?delayDept.count+' project'+(delayDept.count===1?'':'s')+' already past due there':'nothing flagged red right now'}</div>
+      </div>
+    </div>
+    ${recommendation?`<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-lg);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:18px">💡</span>
+      <div><div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.03em;margin-bottom:2px">Recommendation</div><div style="font-size:12px;color:#78350f">${recommendation.text}</div></div>
+    </div>`:''}`;
+
   const rows=weeks.map((w,i)=>{
     const count=w.projects.length;
     const st=capacityStatus(count,limit);
     const pct=Math.min(100,Math.round((count/(limit||1))*100));
-    const scCount=scenarioWeeks?scenarioWeeks[i].projects.length:null;
-    const scSt=scCount!==null?capacityStatus(scCount,limit):null;
-    const label=i===0?'This week':i===1?'Next week':`Week of ${fmt(ymd(w.start))}`;
+    const label=capacityWeekLabel(i,w);
     const isSel=capacitySelectedWeek===i;
     return`<div style="border:1px solid ${isSel?st.color:'var(--gray-100)'};border-left:3px solid ${st.color};border-radius:8px;margin-bottom:6px;overflow:hidden">
       <button onclick="toggleCapacityWeek(${i})" style="width:100%;text-align:left;background:${isSel?st.bg:'white'};border:none;cursor:pointer;font-family:var(--font);padding:10px 14px;display:flex;align-items:center;gap:14px">
@@ -1110,42 +1201,54 @@ function renderCapacity(){
         <div style="flex:1;min-width:120px">
           <div style="height:8px;background:var(--gray-100);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${st.color}"></div></div>
         </div>
-        <div style="font-size:12px;font-weight:700;white-space:nowrap;min-width:70px;text-align:right">${count} / ${limit}</div>
+        <div style="font-size:12px;font-weight:700;white-space:nowrap;min-width:150px;text-align:right">${count} committed · ${Math.max(0,limit-count)} open</div>
         <div style="font-size:11px;font-weight:600;color:${st.color};white-space:nowrap;min-width:118px">${st.label}</div>
-        ${scCount!==null?`<div style="font-size:11px;font-weight:600;color:${scSt.color};white-space:nowrap;border-left:1px dashed var(--gray-300);padding-left:12px">Scenario: ${scCount} ${scSt.label}</div>`:''}
       </button>
       ${isSel?`<div style="padding:10px 14px 12px;background:var(--gray-50);border-top:1px solid var(--gray-100)">
         ${w.projects.length?`<table style="width:100%;border-collapse:collapse">
-          <thead><tr style="font-size:10px;color:var(--gray-500);text-align:left"><th style="padding:4px 8px 4px 0;font-weight:600">Project</th><th style="padding:4px 8px;font-weight:600">SO</th><th style="padding:4px 8px;font-weight:600">PM</th><th style="padding:4px 8px;font-weight:600">Prod window</th></tr></thead>
-          <tbody>${w.projects.map(p=>{const r=getProdRange(p);return`<tr onclick="goToProjPage('${p.id}')" style="cursor:pointer;border-top:1px solid var(--gray-100)">
+          <thead><tr style="font-size:10px;color:var(--gray-500);text-align:left"><th style="padding:4px 8px 4px 0;font-weight:600">Project</th><th style="padding:4px 8px;font-weight:600">PM</th><th style="padding:4px 8px;font-weight:600">Status</th><th style="padding:4px 8px;font-weight:600">Risk</th></tr></thead>
+          <tbody>${w.projects.map(p=>{const rs=getProjectRiskStatus(p);return`<tr onclick="goToProjPage('${p.id}')" style="cursor:pointer;border-top:1px solid var(--gray-100)">
             <td style="padding:6px 8px 6px 0;font-size:12px;font-weight:600">${p.name}</td>
-            <td style="padding:6px 8px;font-family:var(--mono);font-size:10px;color:var(--gray-500)">${p.so_number||'—'}</td>
             <td style="padding:6px 8px;font-size:11px;color:var(--gray-500)">${p.pm||'—'}</td>
-            <td style="padding:6px 8px;font-size:11px;color:var(--gray-500)">${r?fmt(r.start)+' – '+fmt(r.end):'—'}</td>
+            <td style="padding:6px 8px;font-size:11px;color:var(--gray-700)">${rs.status}</td>
+            <td style="padding:6px 8px;font-size:13px">${rs.risk}</td>
           </tr>`;}).join('')}</tbody>
         </table>`:`<div style="font-size:12px;color:var(--gray-400);padding:6px 0">No projects scheduled in production this week.</div>`}
       </div>`:''}
     </div>`;
   }).join('');
 
+  const scenarioTable=scenarioWeeks?`<div style="margin-top:12px;padding:0 14px 14px">
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="font-size:10px;color:var(--gray-500);text-align:left"><th style="padding:4px 8px 4px 0;font-weight:600">Week</th><th style="padding:4px 8px;font-weight:600">Before</th><th style="padding:4px 8px;font-weight:600">After</th><th style="padding:4px 8px;font-weight:600">Change</th></tr></thead>
+      <tbody>${weeks.map((w,i)=>{
+        const before=w.projects.length,after=scenarioWeeks[i].projects.length;
+        if(before===after&&before<=limit)return'';
+        const afterSt=capacityStatus(after,limit);
+        const delta=after-before;
+        return`<tr style="border-top:1px solid var(--gray-100)">
+          <td style="padding:6px 8px 6px 0;font-size:12px;font-weight:600">${capacityWeekLabel(i,w)}</td>
+          <td style="padding:6px 8px;font-size:12px;color:var(--gray-500)">${before} / ${limit}</td>
+          <td style="padding:6px 8px;font-size:12px;font-weight:700;color:${afterSt.color}">${after} / ${limit} ${afterSt.label}</td>
+          <td style="padding:6px 8px;font-size:11px;color:${delta>0?'#ef4444':delta<0?'#16a34a':'var(--gray-500)'}">${delta>0?'+':''}${delta}</td>
+        </tr>`;
+      }).join('')||`<tr><td colspan="4" style="padding:8px 0;font-size:12px;color:var(--gray-400)">No visible change across the next ${capacityWeeksCount} weeks.</td></tr>`}</tbody>
+    </table>
+  </div>`:'';
+
   el.innerHTML=`
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-      <div><div style="font-size:21px;font-weight:700">📊 Operations Capacity</div><div style="font-size:12px;color:var(--gray-500);margin-top:3px">Production load by week, based on each project's production window · click a week to see what's in it</div></div>
+      <div><div style="font-size:21px;font-weight:700">📊 Capacity &amp; Planning</div><div style="font-size:12px;color:var(--gray-500);margin-top:3px">Can we say yes to the next project, and what breaks if something slips?</div></div>
       <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-500)">
         Weekly capacity
         <input type="number" min="1" value="${limit}" onchange="saveCapacityLimit(this.value)" style="width:56px;font-family:var(--font);font-size:12px;padding:4px 6px;border:1px solid var(--gray-300);border-radius:var(--radius);text-align:center">
         projects
       </div>
     </div>
-    <div class="metrics-row" style="grid-template-columns:repeat(4,1fr)">
-      <div class="metric"><div class="metric-label">This week</div><div class="metric-val ${thisWeek>limit?'red':''}">${thisWeek}</div><div class="metric-sub">of ${limit} capacity</div></div>
-      <div class="metric"><div class="metric-label">Weeks over capacity</div><div class="metric-val ${overCount>0?'red':''}">${overCount}</div><div class="metric-sub">of next ${capacityWeeksCount}</div></div>
-      <div class="metric"><div class="metric-label">Active projects</div><div class="metric-val">${projects.filter(p=>p.status!=='complete').length}</div><div class="metric-sub">in hub</div></div>
-      <div class="metric"><div class="metric-label">Missing prod dates</div><div class="metric-val ${noDataCount>0?'amber':''}">${noDataCount}</div><div class="metric-sub">not shown below</div></div>
-    </div>
+    ${decisionBar}
     <div class="section" style="margin-bottom:14px">
-      <div class="section-head"><div class="section-title">What if a project slips?</div><div class="section-meta">Simulation only — nothing is saved</div></div>
-      <div style="padding:12px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <div class="section-head"><div class="section-title">What if Procurement is late?</div><div class="section-meta">Simulation only — nothing is saved · ${noDataCount} active project${noDataCount===1?'':'s'} have no production dates yet and aren't counted anywhere on this page</div></div>
+      <div style="padding:12px 14px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <select id="cap-scenario-proj" style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);min-width:220px">
           <option value="">Choose a project…</option>
           ${scenarioProjOpts}
@@ -1156,6 +1259,8 @@ function renderCapacity(){
         <button onclick="runCapacityScenario()" style="font-size:12px;font-weight:600;padding:6px 14px;border:none;border-radius:var(--radius);background:var(--black);color:white;cursor:pointer;font-family:var(--font)">Run scenario</button>
         ${capacityScenario.active?`<button onclick="clearCapacityScenario()" style="font-size:12px;padding:6px 14px;border:1px solid var(--gray-300);border-radius:var(--radius);background:white;color:var(--gray-700);cursor:pointer;font-family:var(--font)">Clear</button>`:''}
       </div>
+      <div style="font-size:10px;color:var(--gray-400);padding:8px 14px 0">This only shifts that one project's production window — it doesn't move QA, shipping, or installation dates yet.</div>
+      ${scenarioTable}
     </div>
     <div>${rows}</div>`;
 }
