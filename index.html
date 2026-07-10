@@ -362,6 +362,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
           <button class="nav-item" onclick="openMissionControl()"><span class="nav-item-dot" style="background:#C8102E"></span>📺 Mission Control <span style="margin-left:auto;font-size:9px;color:#888;font-family:var(--mono)">TV</span></button>
           <button class="nav-item" id="ni-insights" onclick="setTab('insights')"><span class="nav-item-dot" style="background:#0891b2"></span>📊 Insights</button>
           <button class="nav-item" id="ni-calendar" onclick="setTab('calendar')"><span class="nav-item-dot" style="background:#059669"></span>📆 Calendar</button>
+          <button class="nav-item" id="ni-readiness" onclick="setTab('readiness')"><span class="nav-item-dot" style="background:#ef4444"></span>🚨 Readiness</button>
           <div class="nav-sep"></div>
           <div class="nav-group-label">Departments</div>
           <button class="nav-item" id="ni-production" onclick="setTab('production')"><span class="nav-item-dot" style="background:#7c3aed"></span>Production</button>
@@ -404,6 +405,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
     <div id="tab-glance"></div>
     <div id="tab-insights" style="display:none"></div>
     <div id="tab-calendar" style="display:none"></div>
+    <div id="tab-readiness" style="display:none"></div>
     <div id="tab-pipeline" style="display:none"></div>
     <div id="tab-overview" style="display:none"></div>
     <div id="tab-projpage" style="display:none"></div>
@@ -450,6 +452,8 @@ let adHocRows={shipping:[],installation:[]}; // standalone entries not tied to a
 let pmFilter='';
 let salesFilter='';
 let weekDeptFilter='';
+let readinessFilter='all';
+let readinessIssueFilter='';
 
 // ── UTILS ──────────────────────────────────────────────────
 function truncateSO(so,max=2){
@@ -686,12 +690,12 @@ function setTab(tab){
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','pipeline','overview','projpage','week','production','quality','shipping','installation','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar'];
+  const ALL=['glance','pipeline','overview','projpage','week','production','quality','shipping','installation','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
 function renderTab(){
-  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar};
+  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,production:()=>renderDeptView('production'),quality:()=>renderDeptView('quality'),shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness};
   if(m[currentTab])m[currentTab]();
 }
 
@@ -1216,6 +1220,125 @@ ${pmDropdown('renderGlance')}${salesDropdown('renderGlance')}
       <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
     </div>
     ${visibleProjects.length?`<div class="glance-grid">${cards}</div>`:'<div class="empty-state" style="margin-top:2rem">'+(glanceFilter==='archived'?'No completed projects yet. Mark a project complete using the ✓ button on its card.':'No active projects. Check the Completed tab or add a new project.')+'</div>'}`;
+}
+
+// ── READINESS CENTER ─────────────────────────────────────────
+function getReadinessData(){
+  const active=projects.filter(p=>p.status!=='complete');
+  const issues=[];
+  const add=(id,label,severity,group,items,why)=>{
+    const unique=[];const seen=new Set();
+    (items||[]).forEach(item=>{const key=item.project_id||item.id||item.name;if(!seen.has(key)){seen.add(key);unique.push(item);}});
+    issues.push({id,label,severity,group,items:unique,why});
+  };
+  const projectItem=(p,detail='')=>({project_id:p.id,name:p.name,so:p.so_number||'',pm:p.pm||'',sales:p.sales||'',detail});
+
+  add('missing-pm','Missing PM','critical','pm',active.filter(p=>!(p.pm||'').trim()).map(p=>projectItem(p)),
+    'Every active project should have a clear PM owner.');
+  add('missing-sales','Missing salesperson','critical','sales',active.filter(p=>!(p.sales||'').trim()).map(p=>projectItem(p)),
+    'Sales ownership is required for Sales reporting and follow-up.');
+  add('missing-so','Missing Sales Order','critical','sales',active.filter(p=>!(p.so_number||'').trim()).map(p=>projectItem(p)),
+    'Active projects should be tied to a Sales Order.');
+
+  const missingNaming=[];
+  active.forEach(p=>{
+    const sos=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+    if(!sos.length)return;
+    if(sos.length===1){
+      const d=soDetails.find(x=>x.project_id===p.id&&x.so_tag===sos[0]);
+      if(!((d?.naming_convention||p.naming_convention||'').trim()))missingNaming.push(projectItem(p,sos[0]));
+    }else{
+      sos.forEach(so=>{const d=soDetails.find(x=>x.project_id===p.id&&x.so_tag===so);if(!(d?.naming_convention||'').trim())missingNaming.push(projectItem(p,so));});
+    }
+  });
+  add('missing-naming','Missing naming convention','warning','sales',missingNaming,
+    'Naming is checked per Sales Order. Multi-SO projects require naming for each SO.');
+
+  const duplicateMap={};
+  active.forEach(p=>(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(so=>{(duplicateMap[so]??=[]).push(p);}));
+  const duplicates=[];
+  Object.entries(duplicateMap).filter(([,ps])=>ps.length>1).forEach(([so,ps])=>ps.forEach(p=>duplicates.push(projectItem(p,so))));
+  add('duplicate-so','Duplicate Sales Orders','critical','sales',duplicates,
+    'The same Sales Order appears on more than one active project.');
+
+  const pending=extensionRequests.filter(r=>r.status==='pending').map(r=>{
+    const p=projects.find(x=>x.id===r.project_id);
+    return {project_id:r.project_id||r.id,name:p?.name||r.so_tag||'Unlinked request',so:r.so_tag||p?.so_number||'',pm:p?.pm||'',sales:p?.sales||'',detail:`${r.dept||''} · +${r.days||0}d · ${r.requested_by||''}`};
+  });
+  add('pending-extensions','Pending extension requests','critical','operations',pending,
+    'These requests are waiting for PM review.');
+
+  const red=[],yellow=[];
+  Object.values(checkinStatus).forEach(c=>{
+    if(c.stoplight!=='red'&&c.stoplight!=='yellow')return;
+    const m=milestones.find(x=>x.id===c.milestone_id);const p=projects.find(x=>x.id===(m?.project_id||c.project_id));
+    const item={project_id:p?.id||c.project_id||c.id,name:p?.name||'Unlinked check-in',so:m?.so_tag||p?.so_number||'',pm:p?.pm||'',sales:p?.sales||'',detail:`${c.dept||''}${c.notes?' · '+c.notes:''}`};
+    (c.stoplight==='red'?red:yellow).push(item);
+  });
+  add('red-checkins','Red check-ins','critical','operations',red,'Department escalations requiring immediate attention.');
+  add('yellow-checkins','Yellow check-ins','warning','operations',yellow,'Department items marked in trouble.');
+
+  const overdue=milestones.filter(m=>isMilestoneOverdue(m)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{project_id:m.project_id,name:p?.name||'Unknown project',so:m.so_tag||p?.so_number||'',pm:p?.pm||'',sales:p?.sales||'',detail:`${m.label} · ${fmtFull(m.date)}`};});
+  add('overdue-milestones','Overdue milestones','critical','operations',overdue,'Milestones past due and not completed.');
+
+  const missingInstall=[],missingDelivery=[],badSequence=[];
+  active.forEach(p=>{
+    const pms=milestones.filter(m=>m.project_id===p.id);
+    pms.filter(m=>m.key==='installation'&&!m.date).forEach(m=>missingInstall.push(projectItem(p,m.so_tag||m.label)));
+    pms.filter(m=>m.key==='delivery'&&!m.date).forEach(m=>missingDelivery.push(projectItem(p,m.so_tag||m.label)));
+    const tags=[...new Set(pms.map(m=>m.so_tag||'__project'))];
+    tags.forEach(tag=>{
+      const find=k=>pms.find(m=>m.key===k&&(m.so_tag||'__project')===tag)?.date;
+      const ship=find('shipping'),del=find('delivery'),inst=find('installation');
+      if(ship&&del&&ship>del)badSequence.push(projectItem(p,`${tag==='__project'?'Project':tag}: shipping after delivery`));
+      if(del&&inst&&del>inst)badSequence.push(projectItem(p,`${tag==='__project'?'Project':tag}: delivery after installation`));
+    });
+  });
+  add('missing-install-date','Installation milestone missing date','warning','operations',missingInstall,'Only flags projects that already have an installation milestone with no date.');
+  add('missing-delivery-date','Delivery milestone missing date','warning','operations',missingDelivery,'Only flags projects that already have a delivery milestone with no date.');
+  add('invalid-sequence','Invalid milestone order','critical','operations',badSequence,'Shipping must precede delivery, and delivery must precede installation.');
+  return issues;
+}
+
+function openReadinessProject(pid){
+  if(!pid)return;
+  selectedProjId=pid;
+  setTab('projpage');
+}
+function setReadinessGroup(group){readinessFilter=group;readinessIssueFilter='';renderReadiness();}
+function setReadinessIssue(id){readinessIssueFilter=readinessIssueFilter===id?'':id;renderReadiness();}
+function renderReadiness(){
+  const el=document.getElementById('tab-readiness');if(!el)return;
+  const all=getReadinessData();
+  const visible=all.filter(i=>readinessFilter==='all'||i.group===readinessFilter);
+  const shown=readinessIssueFilter?visible.filter(i=>i.id===readinessIssueFilter):visible;
+  const critical=visible.filter(i=>i.severity==='critical').reduce((n,i)=>n+i.items.length,0);
+  const warning=visible.filter(i=>i.severity==='warning').reduce((n,i)=>n+i.items.length,0);
+  const issueCount=visible.filter(i=>i.items.length).length;
+  const groupBtn=(id,label)=>`<button class="ftab${readinessFilter===id?' active':''}" onclick="setReadinessGroup('${id}')">${label}</button>`;
+  const cards=visible.map(i=>{
+    const color=i.severity==='critical'?'#ef4444':'#d97706';
+    const bg=i.severity==='critical'?'#fef2f2':'#fffbeb';
+    const examples=i.items.slice(0,3).map(x=>`<div style="font-size:11px;color:var(--gray-700);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.name}${x.detail?` · ${x.detail}`:''}</div>`).join('');
+    return`<button onclick="setReadinessIssue('${i.id}')" style="text-align:left;background:${bg};border:1px solid ${color}33;border-left:4px solid ${color};border-radius:var(--radius-lg);padding:14px;cursor:pointer;font-family:var(--font);min-height:128px">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><div style="font-size:12px;font-weight:700;color:var(--black)">${i.label}</div><div style="font-size:24px;font-weight:700;color:${color}">${i.items.length}</div></div>
+      <div style="font-size:10px;color:var(--gray-500);margin:4px 0 8px">${i.why}</div>${examples||'<div style="font-size:11px;color:var(--success);font-weight:600">✓ Clear</div>'}
+      ${i.items.length>3?`<div style="font-size:10px;color:${color};font-weight:600;margin-top:4px">+${i.items.length-3} more</div>`:''}
+    </button>`;
+  }).join('');
+  const rows=shown.flatMap(i=>i.items.map(x=>({issue:i,...x}))).map(r=>`<tr onclick="openReadinessProject('${r.project_id||''}')" style="cursor:${r.project_id?'pointer':'default'}">
+    <td><span style="font-size:10px;font-weight:700;color:${r.issue.severity==='critical'?'#ef4444':'#d97706'}">${r.issue.label}</span></td>
+    <td style="font-weight:600">${r.name||'—'}</td><td class="date-cell">${r.so||'—'}</td><td>${r.pm||'—'}</td><td>${r.sales||'—'}</td><td>${r.detail||'—'}</td></tr>`).join('');
+  el.innerHTML=`
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <div><div style="font-size:21px;font-weight:700">🚨 Operations Readiness</div><div style="font-size:12px;color:var(--gray-500);margin-top:3px">Live checks from projects, milestones, extensions and department check-ins. URLs are intentionally not treated as required.</div></div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--gray-500)">Refreshed ${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
+    </div>
+    <div class="metrics-row" style="grid-template-columns:repeat(3,1fr)"><div class="metric"><div class="metric-label">Critical items</div><div class="metric-val red">${critical}</div><div class="metric-sub">need attention</div></div><div class="metric"><div class="metric-label">Warnings</div><div class="metric-val amber">${warning}</div><div class="metric-sub">should be reviewed</div></div><div class="metric"><div class="metric-label">Issue types</div><div class="metric-val">${issueCount}</div><div class="metric-sub">currently active</div></div></div>
+    <div class="filter-toggle">${groupBtn('all','All')}${groupBtn('sales','Sales')}${groupBtn('pm','PM')}${groupBtn('operations','Operations')}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin-bottom:14px">${cards}</div>
+    <div class="section"><div class="section-head"><div class="section-title">${readinessIssueFilter?(visible.find(i=>i.id===readinessIssueFilter)?.label||'Issue details'):'All readiness items'}</div><div class="section-meta">${rows?shown.reduce((n,i)=>n+i.items.length,0):0} items${readinessIssueFilter?' · click the selected card again to clear':''}</div></div>
+      <div class="dept-table-wrap">${rows?`<table class="dept-table"><thead><tr><th>Issue</th><th>Project</th><th>SO</th><th>PM</th><th>Sales</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="empty-state">Everything in this view is clear 🎉</div>'}</div></div>`;
 }
 
 // ── OVERVIEW ───────────────────────────────────────────────
@@ -3364,7 +3487,7 @@ function renderProjPage(){
     <div class="proj-sel-bar">
       <label>Project</label>
       <div style="flex:1;display:flex;gap:6px">
-        <input id="pp-proj-search" list="pp-proj-list" placeholder="Type to search..." style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);flex:1;min-width:0" onchange="onProjPageSearch(this.value)" oninput="onProjPageSearch(this.value)">
+        <input id="pp-proj-search" list="pp-proj-list" placeholder="Type to search..." style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);flex:1;min-width:0" onchange="onProjPageSearch(this.value)">
         <datalist id="pp-proj-list">${projOpts}</datalist>
         <select style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);max-width:260px" onchange="switchProjPage(this.value)">
           ${selectOpts}
@@ -6796,7 +6919,7 @@ function cpFilter(){
   const tabs=CP_TABS.map(([id,name,ico])=>({t:'tab',ico,name:'Go to · '+name,run:()=>{cpClose();setTab(id);},score:cpScore(name,q)}));
   const projs=(typeof projects!=='undefined'?projects:[]).filter(p=>p.status!=='complete').map(p=>({
     t:'proj',ico:'📁',name:p.name,meta:[p.so_number,p.pm].filter(Boolean).join(' · '),
-    run:()=>{cpClose();selectedProjId=p.id;ppProjId=p.id;setTab('projpage');},
+    run:()=>{cpClose();gsGo(p.id);},
     score:Math.max(cpScore(p.name,q),cpScore(p.so_number||'',q),cpScore(p.client||'',q),cpScore(p.pm||'',q))
   }));
   cpItems=[...acts,...tabs,...projs].filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,14);
@@ -6960,7 +7083,7 @@ function renderInsights(){
 </style>
 <script>
 // ── VERSION BADGE ──────────────────────────────────────────
-const OPS_VERSION='v1.9.0';
+const OPS_VERSION='v1.9.1';
 try{const hd=document.getElementById('hdate');if(hd)hd.insertAdjacentHTML('beforebegin','<span style="font-family:var(--mono);font-size:9px;color:#555;border:1px solid #2a2a2a;border-radius:10px;padding:2px 8px" title="Mission Control · ⌘K palette · Live sync · Insights · Calendar">'+OPS_VERSION+'</span>');}catch(e){}
 // ── CONFETTI on milestone done ─────────────────────────────
 function opsConfetti(){const C=['#C8102E','#22c55e','#2563eb','#eab308','#db2777','#7c3aed'];for(let i=0;i<70;i++){const d=document.createElement('div');d.className='cf';d.style.left=Math.random()*100+'vw';d.style.background=C[i%C.length];d.style.setProperty('--cx',(Math.random()*160-80)+'px');d.style.animationDelay=(Math.random()*0.4)+'s';document.body.appendChild(d);setTimeout(()=>d.remove(),2300);}}
@@ -7062,6 +7185,49 @@ fireConfetti=function(){
     frame++;
     if(frame<300&&(pieces.length||frame<170))requestAnimationFrame(draw);else cv.remove();
   })();
+};
+</script>
+
+<!-- ══════════ SEARCH FIX v1.9.1 — reliable project selection ══════════ -->
+<script>
+// Navigate to a project reliably, clearing any filter that would hide it
+function gsGo(id){
+  const p=projects.find(x=>x.id===id);if(!p)return;
+  try{if(pmFilter&&p.pm!==pmFilter){pmFilter='';showToast('PM filter cleared to show this project');}}catch(e){}
+  try{if(salesFilter&&p.sales!==salesFilter)salesFilter='';}catch(e){}
+  selectedProjId=id;ppProjId=id;setTab('projpage');
+}
+// FIX 1+3: header global search — results now navigate via gsGo (filter-proof) + names HTML-escaped
+globalSearch=function(q){
+  const el=document.getElementById('gs-results');
+  if(!q||q.length<2){el.style.display='none';return;}
+  const ql=q.toLowerCase(),esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const matches=projects.filter(p=>(p.name||'').toLowerCase().includes(ql)||(p.so_number||'').toLowerCase().includes(ql)||(p.client||'').toLowerCase().includes(ql)||(p.pm||'').toLowerCase().includes(ql)).slice(0,8);
+  if(!matches.length){el.style.display='none';return;}
+  el.style.display='block';
+  el.innerHTML=matches.map(p=>{
+    const next=milestones.filter(m=>m.project_id===p.id&&m.date&&daysDiff(m.date)>=0).sort((a,b)=>a.date.localeCompare(b.date))[0];
+    return`<div onclick="document.getElementById('global-search').value='';document.getElementById('gs-results').style.display='none';gsGo('${p.id}')"
+      style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;justify-content:space-between"
+      onmouseover="this.style.background='#252525'" onmouseout="this.style.background='transparent'">
+      <div><div style="font-size:12px;font-weight:600;color:#e5e7eb">${esc(p.name)}</div>
+      <div style="font-size:10px;color:#6b7280;margin-top:2px">${esc(p.so_number||'')} · ${esc(p.client||'')} · ${esc(p.pm||'No PM')}</div></div>
+      <div style="text-align:right;flex-shrink:0;margin-left:10px">${next?`<div style="font-size:10px;color:#60a5fa">${esc(next.label)}</div><div style="font-size:9px;color:#6b7280">${fmt(next.date)}</div>`:'<div style="font-size:10px;color:#4b5563">No upcoming</div>'}</div></div>`;
+  }).join('');
+};
+// FIX 2: project-page picker — exact match first, longest-SO wins (child beats master), commit-only
+onProjPageSearch=function(val){
+  if(!val||val.trim().length<2)return;
+  const vl=val.trim().toLowerCase();
+  const disp=p=>(p.name+(p.so_number?' — '+p.so_number:'')).toLowerCase();
+  const match=projects.find(p=>disp(p)===vl)
+    ||projects.find(p=>(p.name||'').toLowerCase()===vl)
+    ||projects.filter(p=>p.so_number&&vl.includes(p.so_number.toLowerCase())).sort((a,b)=>(b.so_number||'').length-(a.so_number||'').length)[0]
+    ||projects.find(p=>disp(p).startsWith(vl)||(p.name||'').toLowerCase().startsWith(vl));
+  const inp=document.getElementById('pp-proj-search');
+  if(!match){if(inp)inp.style.borderColor='var(--red)';return;}
+  if(inp){inp.value='';inp.style.borderColor='';inp.blur();}
+  if(match.id!==ppProjId)switchProjPage(match.id);
 };
 </script>
 
