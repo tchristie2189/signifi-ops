@@ -2656,6 +2656,41 @@ async function rqaSetSO(pid,val){
   });
 }
 
+// ── SHARED PROJECT / SO CONFIG SYNC ─────────────────────────
+const SHARED_CONFIG_FIELDS=['address','naming_convention','form_factor','qa_task_url','odoo_url','install_ticket_url','ui_task_url'];
+function projectSOList(proj){return (proj?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);}
+function singleProjectSO(proj){const list=projectSOList(proj);return list.length===1?list[0]:'';}
+function effectiveProjectConfig(proj){
+  const so=singleProjectSO(proj);
+  const d=so?soDetails.find(x=>x.project_id===proj.id&&x.so_tag===so):null;
+  const merged={...proj};
+  if(d)SHARED_CONFIG_FIELDS.forEach(f=>{if(d[f]!==undefined&&d[f]!==null)merged[f]=d[f];});
+  return merged;
+}
+async function syncProjectFieldsToSingleSO(projId,updates){
+  const proj=projects.find(p=>p.id===projId);if(!proj)return;
+  const so=singleProjectSO(proj);if(!so)return;
+  const clean={};SHARED_CONFIG_FIELDS.forEach(f=>{if(Object.prototype.hasOwnProperty.call(updates,f))clean[f]=updates[f]??'';});
+  if(!Object.keys(clean).length)return;
+  const existing=soDetails.find(d=>d.project_id===projId&&d.so_tag===so);
+  if(existing){
+    await sb.from('so_details').update({...clean,updated_at:new Date().toISOString()}).eq('id',existing.id);
+    Object.assign(existing,clean);
+  }else{
+    const row={project_id:projId,so_tag:so};
+    SHARED_CONFIG_FIELDS.forEach(f=>row[f]=Object.prototype.hasOwnProperty.call(clean,f)?clean[f]:(proj[f]||''));
+    const{data}=await sb.from('so_details').insert(row).select().single();
+    if(data)soDetails.push(data);
+  }
+}
+async function syncSingleSOFieldsToProject(projId,so,updates){
+  const proj=projects.find(p=>p.id===projId);if(!proj||singleProjectSO(proj)!==so)return;
+  const clean={};SHARED_CONFIG_FIELDS.forEach(f=>{if(Object.prototype.hasOwnProperty.call(updates,f))clean[f]=updates[f]||null;});
+  if(!Object.keys(clean).length)return;
+  await sb.from('projects').update({...clean,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',projId);
+  Object.assign(proj,clean);
+}
+
 // ── OVERVIEW ───────────────────────────────────────────────
 function renderOverview(){
   const el=document.getElementById('tab-overview');
@@ -2663,6 +2698,8 @@ function renderOverview(){
   const overdue=milestones.filter(m=>isMilestoneOverdue(m)).length;
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
   const proj=activeProjects('overview').find(p=>p.id===selectedProjId)||projects.find(p=>p.id===selectedProjId);
+  const overviewNaming=proj?(getSOConfigSummary(proj).naming_convention||''):'';
+  const overviewNamingSafe=overviewNaming.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
   // Check if milestones are already split by SO
   const soList=(proj?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
@@ -2726,12 +2763,13 @@ function renderOverview(){
   } else {
     msHtml=splitBtnHtml+buildMsHtml(projMs,'');
   }
-  const pillsHtml=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:1rem">
-    <div class="proj-pills" style="margin-bottom:0;flex:1">${filterBySales(filterByPM(activeProjects('overview'))).map(p=>`<button class="ppill${p.id===selectedProjId?' active':''}" onclick="selProj('${p.id}')">${p.name}</button>`).join('')}</div>
-    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-      <label style="font-size:11px;color:var(--gray-500);white-space:nowrap">PM:</label>
-      ${pmDropdown('renderOverview')}${salesDropdown('renderOverview')}
-    </div>
+  const overviewProjects=filterBySales(filterByPM(activeProjects('overview')));
+  const pillsHtml=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem;padding:10px 12px;background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);flex-wrap:wrap">
+    <label style="font-size:10px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.05em;white-space:nowrap">Project</label>
+    <select onchange="selProj(this.value)" style="font-family:var(--font);font-size:12px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);min-width:280px;flex:1">
+      ${overviewProjects.map(p=>`<option value="${p.id}"${p.id===selectedProjId?' selected':''}>${p.name}${p.so_number?' — '+p.so_number:''}</option>`).join('')}
+    </select>
+    <div style="display:flex;align-items:center;gap:6px;margin-left:auto">${pmDropdown('renderOverview')}${salesDropdown('renderOverview')}</div>
   </div>`;
   el.innerHTML=`
     <div class="metrics-row" style="grid-template-columns:repeat(4,1fr)">
@@ -2746,21 +2784,24 @@ function renderOverview(){
         <div class="section-title">${proj.name} <span style="font-size:11px;font-weight:400;color:var(--gray-500)">— ${proj.client}</span>
           <button onclick="goToProjPage('${proj.id}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font);margin-left:6px;vertical-align:middle" title="Open project page">↗ Project page</button>
         </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          ${hideCompletedBtn('overview')}
+        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end">
           <span style="font-family:var(--mono);color:var(--red);font-size:11px" title="${proj.so_number||''}">${truncateSO(proj.so_number)}</span>
+          ${overviewNamingSafe?`<span style="font-family:var(--mono);font-size:10px;color:var(--gray-500);max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${overviewNamingSafe}">${overviewNamingSafe}</span>`:''}
           ${healthRing(proj.id)}
-          <button class="btn btn-primary" style="font-size:10px;padding:4px 10px" onclick="openEditProj('${proj.id}')">✏ Edit</button>
-          <button class="btn" style="font-size:10px;padding:4px 10px" onclick="markAllMsDone('${proj.id}')" title="Mark all past milestones as done">✓ Mark all done</button>
-          <button class="btn" style="font-size:10px;padding:4px 10px;color:var(--blue);border-color:var(--blue)" onclick="openAddMsForProj('${proj.id}')">+ Add milestone</button>
-          <button class="btn" style="font-size:10px;padding:4px 10px" onclick="cloneProject('${proj.id}')" title="Clone this project">⎘ Clone</button>
-          <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
+          ${hideCompletedBtn('overview')}
+          <button class="btn btn-primary" style="font-size:10px;padding:5px 12px" onclick="openEditProj('${proj.id}')">✏ Edit</button>
+          <button class="btn" style="font-size:10px;padding:5px 12px;color:var(--blue);border-color:var(--blue)" onclick="openAddMsForProj('${proj.id}')">+ Milestone</button>
+          <details style="position:relative">
+            <summary class="btn" style="font-size:10px;padding:5px 10px;list-style:none;cursor:pointer">More ▾</summary>
+            <div style="position:absolute;right:0;top:calc(100% + 5px);z-index:20;background:white;border:1px solid var(--gray-200);border-radius:var(--radius);box-shadow:0 8px 20px rgba(0,0,0,.12);min-width:165px;padding:5px">
+              <button onclick="markAllMsDone('${proj.id}')" style="width:100%;text-align:left;border:0;background:transparent;padding:7px 9px;font:11px var(--font);cursor:pointer;border-radius:4px">✓ Mark all done</button>
+              <button onclick="cloneProject('${proj.id}')" style="width:100%;text-align:left;border:0;background:transparent;padding:7px 9px;font:11px var(--font);cursor:pointer;border-radius:4px">⎘ Clone project</button>
+              <button onclick="exportToExcel()" style="width:100%;text-align:left;border:0;background:transparent;padding:7px 9px;font:11px var(--font);cursor:pointer;border-radius:4px">⬇ Export Excel</button>
+            </div>
+          </details>
         </div>
       </div>
       ${(()=>{const b=getProjectBlocker(proj);if(!b)return'';return`<div style="padding:8px 14px;background:${b.overdue?'var(--red-light)':'var(--gray-50)'};border-bottom:1px solid var(--gray-100);font-size:11.5px;color:${b.overdue?'var(--red)':'var(--gray-600)'}">🔗 ${b.blockedStage.label} is blocked by ${b.blockingStage.label} · ${b.estimate}</div>`;})()}
-      ${(()=>{
-        const sos=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
-        const rows=(sos.length?sos:['']).map(so=>{const c=getSOConfigSummary(proj,so);const links=[['QA',c.qa_task_url],['Odoo',c.odoo_url],['Install',c.install_ticket_url],['UI',c.ui_task_url]].filter(x=>x[1]);if(!c.form_factor&&!links.length)return'';return`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 14px;border-bottom:1px solid var(--gray-100);background:var(--gray-50);font-size:11px">${so?`<strong style="color:var(--red)">${so}</strong>`:''}${c.form_factor?`<span><strong>Configuration:</strong> ${c.form_factor}</span>`:''}${links.map(x=>`<a href="${x[1]}" target="_blank" style="color:var(--blue);text-decoration:none">${x[0]} ↗</a>`).join('')}</div>`;}).join('');return rows;})()}
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
     </div>`:'<div class="empty-state">No projects yet.</div>'}`;
 }
@@ -4303,6 +4344,7 @@ function clearIntake(){document.querySelectorAll('#tab-intake input,#tab-intake 
 // ── EDIT ───────────────────────────────────────────────────
 function openEditProj(id){
   const proj=projects.find(p=>p.id===id);if(!proj)return;
+  const overviewConfig=effectiveProjectConfig(proj);
   const projMs=milestones.filter(m=>m.project_id===id);
   const hasSoTags=projMs.some(m=>m.so_tag);
   const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
@@ -4341,8 +4383,9 @@ function openEditProj(id){
         <div class="field"><label>Sales</label><input id="ep-sales" list="ep-sales-list" value="${proj.sales||''}" placeholder="Sales contact"><datalist id="ep-sales-list">${getSalesList().map(s=>`<option>${s}</option>`).join('')}</datalist></div>
         <div class="field"><label>Account Manager</label><input id="ep-am" list="ep-am-list" value="${proj.account_manager||''}" placeholder="Account Manager"><datalist id="ep-am-list">${getAMList().map(a=>`<option>${a}</option>`).join('')}</datalist></div>
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
-        <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${proj.naming_convention||''}</textarea></div>
-        <div class="field full"><label>Installation address</label><input id="ep-address" value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
+        <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${overviewConfig.naming_convention||''}</textarea></div>
+        <div class="field full"><label>Installation address</label><input id="ep-address" value="${overviewConfig.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
+        <div class="field full"><label>Configuration / Form factor</label><input id="ep-form-factor" value="${overviewConfig.form_factor||''}" placeholder="e.g. 18, Spark XL, Smart Companion"></div>
         <div class="field full"><label>Notes</label><textarea id="ep-notes" style="min-height:55px">${proj.notes||''}</textarea></div>
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">🔗 Links — auto-populate into Generate Docs</div>
@@ -4354,19 +4397,19 @@ function openEditProj(id){
           <label style="display:flex;align-items:center;justify-content:space-between">Odoo task URL
             <button type="button" onclick="clearEpField('ep-odoo')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
           </label>
-          <input id="ep-odoo" value="${proj.odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..." style="font-family:var(--mono);font-size:12px">
+          <input id="ep-odoo" value="${overviewConfig.odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..." style="font-family:var(--mono);font-size:12px">
         </div>
         <div class="field full">
           <label style="display:flex;align-items:center;justify-content:space-between">Jira / UI task URL
             <button type="button" onclick="clearEpField('ep-jira')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
           </label>
-          <input id="ep-jira" value="${proj.ui_task_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px">
+          <input id="ep-jira" value="${overviewConfig.ui_task_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px">
         </div>
         <div class="field full">
           <label style="display:flex;align-items:center;justify-content:space-between">QA task URL
             <button type="button" onclick="clearEpField('ep-qa')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
           </label>
-          <input id="ep-qa" value="${proj.qa_task_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px">
+          <input id="ep-qa" value="${overviewConfig.qa_task_url||''}" placeholder="https://signifisolutions.atlassian.net/browse/SD-..." style="font-family:var(--mono);font-size:12px">
         </div>
         <div class="field full">
           <label style="display:flex;align-items:center;justify-content:space-between">Product template URL
@@ -4408,7 +4451,7 @@ function openEditProj(id){
           <label style="display:flex;align-items:center;justify-content:space-between">Installation Ticket URL
             <button type="button" onclick="clearEpField('ep-install-ticket')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
           </label>
-          <input id="ep-install-ticket" value="${proj.install_ticket_url||''}" placeholder="https://..." style="font-family:var(--mono);font-size:12px">
+          <input id="ep-install-ticket" value="${overviewConfig.install_ticket_url||''}" placeholder="https://..." style="font-family:var(--mono);font-size:12px">
         </div>
         <div class="field full">
           <label style="display:flex;align-items:center;justify-content:space-between">Vision Training URL
@@ -4458,6 +4501,7 @@ async function saveEditProj(id){
     vision_training_url:document.getElementById('ep-vision-training')?.value.trim()||null,
     naming_convention:document.getElementById('ep-naming')?.value.trim()||null,
     address:document.getElementById('ep-address')?.value.trim()||null,
+    form_factor:document.getElementById('ep-form-factor')?.value.trim()||null,
     kickoff_deck_url:document.getElementById('ep-kickoff-deck')?.value.trim()||null,
     install_ticket_url:document.getElementById('ep-install-ticket')?.value.trim()||null,
     vinyl_odoo_url:document.getElementById('ep-vinyl-odoo')?.value.trim()||null,
@@ -4501,6 +4545,15 @@ async function saveEditProj(id){
     }
   }
 
+  await syncProjectFieldsToSingleSO(id,{
+    address:document.getElementById('ep-address')?.value.trim()||'',
+    naming_convention:document.getElementById('ep-naming')?.value.trim()||'',
+    form_factor:document.getElementById('ep-form-factor')?.value.trim()||'',
+    odoo_url:document.getElementById('ep-odoo')?.value.trim()||'',
+    ui_task_url:document.getElementById('ep-jira')?.value.trim()||'',
+    qa_task_url:document.getElementById('ep-qa')?.value.trim()||'',
+    install_ticket_url:document.getElementById('ep-install-ticket')?.value.trim()||''
+  });
   closeModal();showToast('Saved ✓');await loadAll();
 }
 // ── SO SPLITTING ────────────────────────────────────────────
@@ -5543,7 +5596,10 @@ async function saveSODetail(projId,so,field,val){
     }).select().single();
     if(data)soDetails.push(data);
   }
+  await syncSingleSOFieldsToProject(projId,so,{[field]:val});
   showPPSaved();
+  if(currentTab==='overview')renderOverview();
+  if(currentTab==='gendocs')renderGenDocs();
 }
 
 function openSOConfigModal(projId,so){
@@ -5616,6 +5672,7 @@ async function saveSOConfig(projId,so){
     }).select().single();
     if(data)soDetails.push(data);
   }
+  await syncSingleSOFieldsToProject(projId,so,updates);
   closeModal();showToast('SO '+so+' config saved ✓');
   if(currentTab==='projpage')renderProjPageBody(projId);
   if(currentTab==='overview')renderOverview();
@@ -5625,7 +5682,10 @@ async function saveSOConfig(projId,so){
 async function saveProjField(projId,field,val){
   await sb.from('projects').update({[field]:val||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',projId);
   const p=projects.find(x=>x.id===projId);if(p)p[field]=val||null;
+  await syncProjectFieldsToSingleSO(projId,{[field]:val||''});
   showPPSaved();
+  if(currentTab==='overview')renderOverview();
+  if(currentTab==='gendocs')renderGenDocs();
 }
 async function savePPSection(key,value){
   const existing=ppData.sections[key];
