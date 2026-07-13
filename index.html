@@ -479,6 +479,27 @@ function truncateSO(so,max=2){
 }
 function truncateSOTitle(so){return so||'';}
 
+// Returns the SO-specific record that should drive shared views. For a single-SO
+// project, use that SO automatically; for multi-SO projects, use the explicitly
+// selected SO when one is supplied.
+function getEffectiveSODetail(proj,soTag=''){
+  if(!proj)return null;
+  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const effectiveSO=soTag||(soList.length===1?soList[0]:'');
+  return effectiveSO?soDetails.find(d=>d.project_id===proj.id&&d.so_tag===effectiveSO)||null:null;
+}
+function getSOConfigSummary(proj,soTag=''){
+  const d=getEffectiveSODetail(proj,soTag);
+  return {
+    so:soTag||((proj?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean).length===1?(proj.so_number||'').trim():''),
+    form_factor:d?.form_factor??proj?.form_factor??proj?.product_type??'',
+    qa_task_url:d?.qa_task_url??proj?.qa_task_url??'',
+    odoo_url:d?.odoo_url??proj?.odoo_url??'',
+    install_ticket_url:d?.install_ticket_url??proj?.install_ticket_url??'',
+    ui_task_url:d?.ui_task_url??proj?.ui_task_url??'',
+  };
+}
+
 function today(){let t=new Date();t.setHours(0,0,0,0);return t;}
 function monday(dt){let r=new Date(dt);let d=r.getDay();r.setDate(r.getDate()+(d===0?-6:1-d));r.setHours(0,0,0,0);return r;}
 function addD(dt,n){let r=new Date(dt);r.setDate(r.getDate()+n);return r;}
@@ -2735,6 +2756,9 @@ function renderOverview(){
         </div>
       </div>
       ${(()=>{const b=getProjectBlocker(proj);if(!b)return'';return`<div style="padding:8px 14px;background:${b.overdue?'var(--red-light)':'var(--gray-50)'};border-bottom:1px solid var(--gray-100);font-size:11.5px;color:${b.overdue?'var(--red)':'var(--gray-600)'}">🔗 ${b.blockedStage.label} is blocked by ${b.blockingStage.label} · ${b.estimate}</div>`;})()}
+      ${(()=>{
+        const sos=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+        const rows=(sos.length?sos:['']).map(so=>{const c=getSOConfigSummary(proj,so);const links=[['QA',c.qa_task_url],['Odoo',c.odoo_url],['Install',c.install_ticket_url],['UI',c.ui_task_url]].filter(x=>x[1]);if(!c.form_factor&&!links.length)return'';return`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 14px;border-bottom:1px solid var(--gray-100);background:var(--gray-50);font-size:11px">${so?`<strong style="color:var(--red)">${so}</strong>`:''}${c.form_factor?`<span><strong>Configuration:</strong> ${c.form_factor}</span>`:''}${links.map(x=>`<a href="${x[1]}" target="_blank" style="color:var(--blue);text-decoration:none">${x[0]} ↗</a>`).join('')}</div>`;}).join('');return rows;})()}
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
     </div>`:'<div class="empty-state">No projects yet.</div>'}`;
 }
@@ -5591,7 +5615,11 @@ async function saveSOConfig(projId,so){
     if(data)soDetails.push(data);
   }
   closeModal();showToast('SO '+so+' config saved ✓');
+  if(currentTab==='projpage')renderProjPageBody(projId);
+  if(currentTab==='overview')renderOverview();
+  if(currentTab==='gendocs')renderGenDocs();
 }
+
 async function saveProjField(projId,field,val){
   await sb.from('projects').update({[field]:val||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',projId);
   const p=projects.find(x=>x.id===projId);if(p)p[field]=val||null;
@@ -6014,10 +6042,10 @@ function getDocDate(key){if(!selectedDocProjId)return'';const m=milestones.find(
 function getDocLink(label){
   const p=getDocProj();
   // If a specific SO is selected, check that SO's overrides first
-  if(selectedDocSO){
-    const soDet=soDetails.find(d=>d.project_id===p.id&&d.so_tag===selectedDocSO);
+  {
+    const soDet=getEffectiveSODetail(p,selectedDocSO);
     const SO_MAP={'Odoo Task':soDet?.odoo_url,'Jira / UI Task':soDet?.ui_task_url,'QA Task':soDet?.qa_task_url,'Installation Ticket':soDet?.install_ticket_url};
-    if(SO_MAP[label])return SO_MAP[label];
+    if(soDet&&SO_MAP[label])return SO_MAP[label];
   }
   // Check direct project record fields next
   const DIRECT={'Odoo Task':p.odoo_url,'Jira / UI Task':p.ui_task_url,'QA Task':p.qa_task_url,'Product Template':p.product_template_url,'Badge Reader':p.badge_reader_url,'Employee List':p.employee_list_url,'Facility Site Survey':p.facility_survey_url,'IT Site Survey':p.it_survey_url};
@@ -6083,7 +6111,7 @@ function pullField(label,val,editHint){
 function renderInstallForm(){
   const p=getDocProj();
   const instDate=getDocDate('installation');
-  const soDet=selectedDocSO?soDetails.find(d=>d.project_id===p.id&&d.so_tag===selectedDocSO):null;
+  const soDet=getEffectiveSODetail(p,selectedDocSO);
   const naming=soDet?.naming_convention??p.naming_convention??'';
   const address=soDet?.address??p.address??'';
   const formFactor=soDet?.form_factor||[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'';
@@ -6270,7 +6298,7 @@ function generateDoc(type){
   let text='';
   if(type==='install'){
     const instP=proj||getDocProj();
-    const instSoDet=selectedDocSO?soDetails.find(d=>d.project_id===instP.id&&d.so_tag===selectedDocSO):null;
+    const instSoDet=getEffectiveSODetail(instP,selectedDocSO);
     const instNaming=instSoDet?.naming_convention??instP.naming_convention??'';
     const instAddress=instSoDet?.address??instP.address??'';
     const instFormFactor=instSoDet?.form_factor||[instP.product_type,instP.form_factor].filter(Boolean).join(' — ')||'';
@@ -6406,7 +6434,7 @@ ${g('qf-special')?`\nSpecial Requirements:\n${g('qf-special')}`:''}`;
   ds[type].__output=text;
   if(type==='install'){
     const htmlP=getDocProj();
-    const htmlSoDet=selectedDocSO?soDetails.find(d=>d.project_id===htmlP.id&&d.so_tag===selectedDocSO):null;
+    const htmlSoDet=getEffectiveSODetail(htmlP,selectedDocSO);
     const namingForSubject=htmlSoDet?.naming_convention??htmlP.naming_convention??'';
     const subjectParts=['Installation Request',htmlP.client||'',namingForSubject||'',g('if-inst')||''].filter(Boolean);
     const subject=subjectParts.join(' - ');
@@ -7498,8 +7526,11 @@ async function renamePPLink(oldLabel,newLabel){
   showPPSaved();
   showToast('Link name saved ✓');
 }
-function openLinksPopout(){
+function openLinksPopout(soOverride=''){
   const proj=projects.find(p=>p.id===ppProjId)||{};
+  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const activeSO=soOverride||(soList.length===1?soList[0]:'');
+  const soConfig=getSOConfigSummary(proj,activeSO);
   const ALL_LINKS=[
     {cat:'Meetings',items:['Kickoff recording','Meeting minutes']},
     {cat:'Project Documents',items:['Statement of Work','Installation Ticket','Vision Training']},
@@ -7517,6 +7548,11 @@ function openLinksPopout(){
   if(proj.it_survey_url)lv['IT Site Survey']=proj.it_survey_url;
   if(proj.vision_training_url)lv['Vision Training']=proj.vision_training_url;
   if(proj.vinyl_odoo_url)lv['Vinyl Render Odoo']=proj.vinyl_odoo_url;
+  // SO configuration overrides the same shared fields everywhere.
+  if(soConfig.odoo_url)lv['Odoo Task']=soConfig.odoo_url;
+  if(soConfig.ui_task_url)lv['Jira / UI Task']=soConfig.ui_task_url;
+  if(soConfig.qa_task_url)lv['QA Task']=soConfig.qa_task_url;
+  if(soConfig.install_ticket_url)lv['Installation Ticket']=soConfig.install_ticket_url;
   const catsHtml=ALL_LINKS.map(cat=>{
     const isCustom=cat.cat==='Custom Links';
     const itemsHtml=cat.items.map(label=>{
@@ -7562,7 +7598,8 @@ function openLinksPopout(){
   document.getElementById('modal-root').innerHTML=`
   <div class="modal-backdrop" onclick="closeModal()">
     <div class="modal" data-modal="links-popout" style="width:600px;max-height:85vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
-      <div class="modal-head"><span class="modal-title">🔗 Quick links — ${proj.name||''}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div class="modal-head"><span class="modal-title">🔗 Quick links — ${proj.name||''}${activeSO?' · '+activeSO:''}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      ${soList.length>1?`<div style="padding:10px 20px;border-bottom:1px solid var(--gray-100);display:flex;align-items:center;gap:8px"><label style="font-size:11px;font-weight:600;color:var(--gray-500)">SO configuration</label><select onchange="openLinksPopout(this.value)" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value="">Master defaults</option>${soList.map(so=>`<option value="${so}"${activeSO===so?' selected':''}>${so}</option>`).join('')}</select>${activeSO&&soConfig.form_factor?`<span style="font-size:11px;color:var(--gray-500)">${soConfig.form_factor}</span>`:''}</div>`:''}
       <div style="overflow-y:auto;flex:1;padding:12px 0">${catsHtml}</div>
       <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>
     </div>
