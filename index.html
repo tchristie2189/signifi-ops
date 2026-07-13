@@ -1936,27 +1936,28 @@ function getProcRisk(p){
   return{level:'green',label:'On track'};
 }
 // The one recommendation that's honestly derivable from milestone state alone.
-// "Engineering Required"/"Inventory Check"/"Customer Approval" aren't — there's
-// no field that distinguishes them — so those live in the manual root-cause tag
-// instead of being guessed here.
+// MO Release sits with Engineering, not Procurement — Procurement can't order
+// until it's released, so it's shown here, but the action and blame point at
+// the right team instead of asking Procurement to fix something they don't own.
 function getRecommendedAction(p){
   const stage=getProcStage(p);
   const days=getDaysUntilProduction(p);
-  if(stage==='mo-release')return'Release MO';
+  if(stage==='mo-release')return'Escalate Engineering';
   if(stage==='parts-order')return'Release PO';
   if(stage==='parts-arrive')return(days!==null&&days<=3)?'Expedite Shipment':'Contact Supplier';
   return null;
 }
 function getBlockingDept(p){
   const stage=getProcStage(p);
-  return{'mo-release':'Procurement (MO)','parts-order':'Procurement (PO)','parts-arrive':'Supplier','done':null}[stage];
+  return{'mo-release':'Engineering (MO Release)','parts-order':'Procurement (PO)','parts-arrive':'Supplier','done':null}[stage];
 }
 function procurementActiveProjects(){return projects.filter(p=>p.status!=='complete'&&getProcStage(p)!=='done');}
 
-// Real average delay, pulled from actual milestone_history entries on
-// procurement milestones — not estimated.
+// Real average delay, pulled from actual milestone_history entries. MO Release
+// is deliberately excluded — it's an Engineering handoff, not something
+// Procurement's own performance should be measured against.
 function getAvgProcurementDelay(){
-  const keys=['mo-release','po-release','arrival'];
+  const keys=['po-release','arrival'];
   const relevantMsIds=new Set(milestones.filter(m=>keys.includes(m.key)).map(m=>m.id));
   const delays=[];
   relevantMsIds.forEach(mid=>{
@@ -2134,7 +2135,7 @@ function renderProcurementCC(){
     const taggedPids=new Set(Object.keys(tags).filter(pid=>tags[pid]===pccRootCauseFilter));
     supNames=supNames.filter(name=>Object.keys(supTags).some(pid=>supTags[pid]===name&&taggedPids.has(pid)));
   }
-  const keys=['mo-release','po-release','arrival'];
+  const keys=['po-release','arrival']; // MO Release excluded — it's Engineering, not a supplier
   const supRows=supNames.map(name=>{
     const pids=Object.keys(supTags).filter(pid=>supTags[pid]===name&&(!pccRootCauseFilter||tags[pid]===pccRootCauseFilter));
     const msIds=milestones.filter(m=>pids.includes(m.project_id)&&keys.includes(m.key)).map(m=>m.id);
