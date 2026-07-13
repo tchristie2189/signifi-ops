@@ -251,7 +251,7 @@ function getGreeting(){const h=new Date().getHours();return h<12?'morning':h<17?
 // ── DATA ──────────────────────────────────────────────────
 async function loadCheckinData(){
   const[pr,ms,ci,ah,sod,ext]=await Promise.all([
-    sb.from('projects').select('*').neq('status','complete').order('created_at'),
+    sb.from('projects').select('*').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('checkin_status').select('*'),
     sb.from('adhoc_schedule').select('*').order('created_at'),
@@ -311,6 +311,10 @@ function render(){
 
   const deptMilestones=milestones.filter(m=>{
     if(!m.date)return false;
+    // A scheduled milestone can still belong to a project marked complete/archived.
+    // Keep those projects loaded so Shipping/Check-in can resolve the project name,
+    // but suppress truly orphaned milestone rows instead of rendering a blank card.
+    if(!m.project_id||!projects.some(p=>p.id===m.project_id))return false;
     const d=new Date(m.date+'T00:00:00');
     if(d<start||d>end)return false;
     if(dept.milestoneKeys.includes(m.key))return true;
@@ -321,6 +325,7 @@ function render(){
   const adHocItems=[];
   if(dept.passcode==='ship2026'){
     (window._adHocShipping||[]).forEach(r=>{
+      if(!(r.name||'').trim())return;
       const d=r.ship_date||'';if(!d)return;
       const dt=new Date(d+'T00:00:00');
       if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-ship-'+r.id,_adhoc:true,key:'shipping',label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||'',_ticketUrl:r.install_ticket_url||''});
@@ -328,6 +333,7 @@ function render(){
   }
   if(dept.passcode==='deploy2026'){
     (window._adHocInstall||[]).forEach(r=>{
+      if(!(r.name||'').trim())return;
       const d=r.install_date||'';if(!d)return;
       const dt=new Date(d+'T00:00:00');
       if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-inst-'+r.id,_adhoc:true,key:'installation',label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||'',_ticketUrl:r.install_ticket_url||''});
