@@ -369,8 +369,9 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
           <div class="nav-group-label">Departments</div>
           <button class="nav-item" id="ni-prodqueue" onclick="setTab('prodqueue')"><span class="nav-item-dot" style="background:#7c3aed"></span>Production</button>
           <button class="nav-item" id="ni-qaqueue" onclick="setTab('qaqueue')"><span class="nav-item-dot" style="background:#d97706"></span>Quality / QA</button>
-          <button class="nav-item" id="ni-shipping" onclick="setTab('shipping')"><span class="nav-item-dot" style="background:#059669"></span>Shipping</button>
-          <button class="nav-item" id="ni-installation" onclick="setTab('installation')"><span class="nav-item-dot" style="background:#db2777"></span>Installation</button>
+          <button class="nav-item" id="ni-shipqueue" onclick="setTab('shipqueue')"><span class="nav-item-dot" style="background:#059669"></span>Shipping</button>
+          <button class="nav-item" id="ni-installqueue" onclick="setTab('installqueue')"><span class="nav-item-dot" style="background:#db2777"></span>Installation</button>
+          <button class="nav-item" id="ni-procurement" onclick="setTab('procurement')"><span class="nav-item-dot" style="background:#6b6b6b"></span>🔧 Procurement Command Center</button>
           <button class="nav-item" id="ni-checkin" onclick="setTab('checkin')">🚦 Dept check-in</button>
           <div class="nav-sep"></div>
           <div class="nav-group-label">Schedules</div>
@@ -424,8 +425,9 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
     <div id="tab-week" style="display:none"></div>
     <div id="tab-prodqueue" style="display:none"></div>
     <div id="tab-qaqueue" style="display:none"></div>
-    <div id="tab-shipping" style="display:none"></div>
-    <div id="tab-installation" style="display:none"></div>
+    <div id="tab-shipqueue" style="display:none"></div>
+    <div id="tab-installqueue" style="display:none"></div>
+    <div id="tab-procurement" style="display:none"></div>
     <div id="tab-vinyl" style="display:none"></div>
     <div id="tab-planogram" style="display:none"></div>
     <div id="tab-briefing" style="display:none"></div>
@@ -726,7 +728,7 @@ function setTab(tab){
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   if(ni&&document.getElementById('nav-more')?.contains(ni))openNavMore();
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','pipeline','overview','projpage','week','prodqueue','qaqueue','shipping','installation','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity'];
+  const ALL=['glance','pipeline','overview','projpage','week','prodqueue','qaqueue','shipqueue','installqueue','procurement','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
@@ -741,7 +743,7 @@ function toggleNavMore(){
   else{el.style.display='none';const arrow=document.querySelector('#nav-more-toggle .nav-more-arrow');if(arrow)arrow.textContent='▸';}
 }
 function renderTab(){
-  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,prodqueue:renderProductionQueue,qaqueue:renderQaQueue,shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity};
+  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,prodqueue:renderProductionQueue,qaqueue:renderQaQueue,shipqueue:renderShipQueue,installqueue:renderInstallQueue,procurement:renderProcurementCC,vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity};
   if(m[currentTab])m[currentTab]();
 }
 
@@ -920,6 +922,27 @@ function getProjectStage(proj){
   return'mo-release'; // default — not started yet
 }
 
+// Dependencies, honestly derived: whatever stage a project is CURRENTLY in is,
+// by definition, what every later stage is waiting on. This doesn't invent a
+// new signal — it just puts a name on what getProjectStage() already knows,
+// answering "why isn't this moving" instead of just "where is it."
+function getProjectBlocker(proj){
+  const stage=getProjectStage(proj);
+  const idx=PIPELINE_STAGES.findIndex(s=>s.id===stage);
+  if(idx===-1||idx===PIPELINE_STAGES.length-1)return null; // delivered — nothing downstream waiting
+  const curStage=PIPELINE_STAGES[idx],nextStage=PIPELINE_STAGES[idx+1];
+  const doneMs=curStage.doneKey?milestones.find(m=>m.project_id===proj.id&&m.key===curStage.doneKey):null;
+  let estimate='No date set yet',overdue=false;
+  if(doneMs?.date){
+    const d=daysDiff(doneMs.date);
+    if(d<0){estimate=`Overdue by ${Math.abs(d)}d`;overdue=true;}
+    else if(d===0)estimate='Today';
+    else if(d===1)estimate='Tomorrow';
+    else estimate=`In ${d}d`;
+  }
+  return{blockingStage:curStage,blockedStage:nextStage,estimate,overdue};
+}
+
 function getDaysInStage(proj,stageId){
   const pMs=milestones.filter(m=>m.project_id===proj.id);
   const getDate=key=>pMs.find(m=>m.key===key)?.date||null;
@@ -1074,20 +1097,36 @@ function getProdRange(p){
   return{start:s||e,end:e||s};
 }
 
-function capacityLimit(){return Number(appSettings['capacity_weekly_limit'])||10;}
+// Five departments, one limit each — replaces the old single production-only
+// number. Reads the legacy key once so nobody's existing setting gets lost.
+const CAP_DEPTS=[
+  {key:'procurement',label:'Procurement',icon:'📋',msKey:'mo-release'},
+  {key:'production',label:'Production',icon:'🧱',msKey:'production-start'},
+  {key:'qa',label:'QA',icon:'🔬',msKey:'quality-start'},
+  {key:'shipping',label:'Shipping',icon:'🚚',msKey:'shipping'},
+  {key:'installation',label:'Installation',icon:'🔧',msKey:'installation'},
+];
+function getCapacityLimits(){
+  if(appSettings['capacity_limits'])return appSettings['capacity_limits'];
+  const legacy=Number(appSettings['capacity_weekly_limit'])||10;
+  return{procurement:10,production:legacy,qa:10,shipping:10,installation:10};
+}
+async function saveCapacityLimit(dept,val){
+  const n=Math.max(1,parseInt(val)||10);
+  const limits=getCapacityLimits();
+  limits[dept]=n;
+  appSettings['capacity_limits']=limits;
+  await sb.from('app_settings').upsert({key:'capacity_limits',value:limits,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
+  renderCapacity();
+}
+// Back-compat shim — the old Production board's input used the one-arg form.
+function capacityLimit(){return getCapacityLimits().production;}
 
 function capacityStatus(count,limit){
   const pct=limit?count/limit:0;
   if(pct>1)return{color:'#ef4444',bg:'#fef2f2',label:'🔴 Over capacity'};
   if(pct>=0.85)return{color:'#d97706',bg:'#fffbeb',label:'🟡 Near capacity'};
   return{color:'#16a34a',bg:'#f0fdf4',label:'🟢 Healthy'};
-}
-
-async function saveCapacityLimit(val){
-  const n=Math.max(1,parseInt(val)||10);
-  appSettings['capacity_weekly_limit']=n;
-  await sb.from('app_settings').upsert({key:'capacity_weekly_limit',value:n,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
-  renderCapacity();
 }
 
 function capacityWeekLabel(i,w){return i===0?'This week':i===1?'Next week':`Week of ${fmt(ymd(w.start))}`;}
@@ -1118,6 +1157,33 @@ function getMostLikelyDelayDept(){
   PIPELINE_STAGES.forEach(s=>{if(counts[s.id]>bestN){best=s;bestN=counts[s.id];}});
   return best?{label:best.label,count:bestN}:null;
 }
+
+// The cross-department matrix: for each of the next N weeks, which projects
+// are ENTERING each of the five departments that week. Same "entering" logic
+// already proven out on the Production Queue board, just applied to all five
+// department-entry milestones instead of one.
+function computeCapacityMatrix(count){
+  const start0=monday(today());
+  const weeks=[];
+  for(let i=0;i<count;i++){
+    const ws=addD(start0,i*7),we=addD(ws,6);
+    const dept={};CAP_DEPTS.forEach(d=>dept[d.key]=[]);
+    weeks.push({start:ws,end:we,dept});
+  }
+  projects.filter(p=>p.status!=='complete').forEach(p=>{
+    const pMs=milestones.filter(m=>m.project_id===p.id);
+    CAP_DEPTS.forEach(d=>{
+      const m=pMs.find(x=>x.key===d.msKey);
+      if(!m?.date)return;
+      const dt=new Date(m.date+'T00:00:00');
+      const idx=weeks.findIndex(w=>dt>=w.start&&dt<=w.end);
+      if(idx!==-1)weeks[idx].dept[d.key].push(p);
+    });
+  });
+  return weeks;
+}
+let matrixSelectedWeek=0;
+function toggleMatrixWeek(i){matrixSelectedWeek=matrixSelectedWeek===i?null:i;renderCapacity();}
 
 let planDragProjId=null;
 
@@ -1263,16 +1329,24 @@ function planCard(p){
 
 function renderCapacity(){
   const el=document.getElementById('tab-capacity');if(!el)return;
-  const limit=capacityLimit();
+  const limits=getCapacityLimits();
+  const limit=limits.production;
   const weeks=computeBoardWeeks(capacityWeeksCount);
-  const thisWeekCount=boardWeekCount(weeks[0]||{ready:[],waiting:[],risk:[]});
-  const remaining=limit-thisWeekCount;
-  const canAccept=remaining>0;
+  const matrix=computeCapacityMatrix(capacityWeeksCount);
   const backlogCount=projects.filter(p=>p.status!=='complete'&&!getProdRange(p)).length;
 
-  let biggestRiskIdx=-1,biggestRiskVal=-Infinity;
-  weeks.forEach((w,i)=>{const v=boardWeekCount(w)-limit;if(v>biggestRiskVal){biggestRiskVal=v;biggestRiskIdx=i;}});
-  const biggestRisk=biggestRiskVal>0?{label:capacityWeekLabel(biggestRiskIdx,weeks[biggestRiskIdx]),over:biggestRiskVal}:null;
+  // Decision bar is now bottleneck-aware across all five departments, not just Production.
+  const thisWeekMatrix=matrix[0];
+  const thisWeekDeptLoads=CAP_DEPTS.map(d=>({...d,count:thisWeekMatrix.dept[d.key].length,limit:limits[d.key],remaining:limits[d.key]-thisWeekMatrix.dept[d.key].length}));
+  const bottleneck=thisWeekDeptLoads.reduce((a,b)=>a.remaining<b.remaining?a:b);
+  const canAccept=bottleneck.remaining>0;
+
+  let biggestRiskIdx=-1,biggestRiskDept=null,biggestRiskVal=-Infinity;
+  matrix.forEach((w,i)=>CAP_DEPTS.forEach(d=>{
+    const v=w.dept[d.key].length-limits[d.key];
+    if(v>biggestRiskVal){biggestRiskVal=v;biggestRiskIdx=i;biggestRiskDept=d;}
+  }));
+  const biggestRisk=biggestRiskVal>0?{label:`${biggestRiskDept.label} · ${capacityWeekLabel(biggestRiskIdx,matrix[biggestRiskIdx])}`,over:biggestRiskVal}:null;
 
   const delayDept=getMostLikelyDelayDept();
   const recommendation=getBoardRecommendation(weeks,limit);
@@ -1282,28 +1356,62 @@ function renderCapacity(){
       <div style="padding:14px 16px;border-right:1px solid var(--gray-100)">
         <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Can we take on another project?</div>
         <div style="font-size:22px;font-weight:700;color:${canAccept?'#16a34a':'#ef4444'};margin-top:4px">${canAccept?'YES':'NO'}</div>
-        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${canAccept?remaining+' slot'+(remaining===1?'':'s')+' open this week':'This week is already full'}</div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${canAccept?bottleneck.remaining+' slot'+(bottleneck.remaining===1?'':'s')+' open at '+bottleneck.label+' (tightest)':bottleneck.label+' is already full this week'}</div>
       </div>
       <div style="padding:14px 16px;border-right:1px solid var(--gray-100)">
-        <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Entering production</div>
-        <div style="font-size:22px;font-weight:700;margin-top:4px">${thisWeekCount} / ${limit}</div>
-        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">this week</div>
+        <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Tightest department</div>
+        <div style="font-size:22px;font-weight:700;margin-top:4px">${bottleneck.icon} ${bottleneck.count} / ${bottleneck.limit}</div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${bottleneck.label} this week</div>
       </div>
       <div style="padding:14px 16px;border-right:1px solid var(--gray-100)">
         <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Biggest risk</div>
         <div style="font-size:15px;font-weight:700;margin-top:6px;color:${biggestRisk?'#ef4444':'#16a34a'}">${biggestRisk?biggestRisk.label:'None'}</div>
-        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${biggestRisk?'over by '+biggestRisk.over+' project'+(biggestRisk.over===1?'':'s'):'no week is over capacity'}</div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${biggestRisk?'over by '+biggestRisk.over+' project'+(biggestRisk.over===1?'':'s'):'nothing over capacity anywhere'}</div>
       </div>
       <div style="padding:14px 16px">
         <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Most likely to slip</div>
         <div style="font-size:15px;font-weight:700;margin-top:6px">${delayDept?delayDept.label:'—'}</div>
         <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${delayDept?delayDept.count+' project'+(delayDept.count===1?'':'s')+' already past due there':'nothing flagged red right now'}</div>
       </div>
+    </div>`;
+
+  // ── Cross-department matrix ──
+  const matrixDot=(count,limitN)=>{
+    const st=capacityStatus(count,limitN);
+    return`<div style="text-align:center"><div style="width:9px;height:9px;border-radius:50%;background:${st.color};margin:0 auto 3px"></div><div style="font-size:10.5px;font-weight:700;color:${st.color}">${count}/${limitN}</div></div>`;
+  };
+  const matrixRows=matrix.map((w,i)=>{
+    const isSel=matrixSelectedWeek===i;
+    return`<tr onclick="toggleMatrixWeek(${i})" style="cursor:pointer;background:${isSel?'var(--gray-50)':'transparent'}">
+      <td style="padding:8px 10px;font-size:11.5px;font-weight:600;white-space:nowrap">${capacityWeekLabel(i,w)}<div style="font-size:9.5px;font-weight:400;color:var(--gray-400)">${fmt(ymd(w.start))}</div></td>
+      ${CAP_DEPTS.map(d=>`<td style="padding:8px 10px">${matrixDot(w.dept[d.key].length,limits[d.key])}</td>`).join('')}
+    </tr>`;
+  }).join('');
+  const selWeek=matrixSelectedWeek!==null?matrix[matrixSelectedWeek]:null;
+  const matrixDetail=selWeek?`<div style="padding:12px 14px;background:var(--gray-50);border-top:1px solid var(--gray-100);display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+    ${CAP_DEPTS.map(d=>{
+      const list=selWeek.dept[d.key];
+      return`<div>
+        <div style="font-size:10.5px;font-weight:700;margin-bottom:4px">${d.icon} ${d.label} <span style="color:var(--gray-400);font-weight:500">(${list.length}/${limits[d.key]})</span></div>
+        ${list.length?list.map(p=>`<div onclick="goToProjPage('${p.id}')" style="font-size:11px;padding:3px 0;cursor:pointer;color:var(--gray-700)">• ${p.name}</div>`).join(''):`<div style="font-size:10.5px;color:var(--gray-300)">Nothing entering</div>`}
+      </div>`;
+    }).join('')}
+  </div>`:'';
+  const matrixSection=`<div class="section" style="margin-bottom:14px">
+    <div class="section-head"><div class="section-title">Operations Capacity — all departments</div><div class="section-meta">Click a week to see who's entering where · limits editable below</div></div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="border-bottom:1px solid var(--gray-100)">
+          <th style="text-align:left;padding:6px 10px;font-size:10px;color:var(--gray-500)">Week</th>
+          ${CAP_DEPTS.map(d=>`<th style="padding:6px 10px;font-size:10px;color:var(--gray-500)">
+            ${d.icon} ${d.label}<br><input type="number" min="1" value="${limits[d.key]}" onclick="event.stopPropagation()" onchange="event.stopPropagation();saveCapacityLimit('${d.key}',this.value)" style="width:42px;font-family:var(--font);font-size:10px;padding:2px 3px;border:1px solid var(--gray-300);border-radius:4px;text-align:center;margin-top:2px">
+          </th>`).join('')}
+        </tr></thead>
+        <tbody>${matrixRows}</tbody>
+      </table>
     </div>
-    ${recommendation?`<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-lg);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:10px">
-      <span style="font-size:18px">💡</span>
-      <div><div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.03em;margin-bottom:2px">Recommendation</div><div style="font-size:12px;color:#78350f">${recommendation.text}</div></div>
-    </div>`:''}`;
+    ${matrixDetail}
+  </div>`;
 
   const bucketBlock=(w,key,label,icon,color)=>{
     const list=w[key];
@@ -1356,15 +1464,16 @@ function renderCapacity(){
 
   el.innerHTML=`
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-      <div><div style="font-size:21px;font-weight:700">📊 Capacity &amp; Planning</div><div style="font-size:12px;color:var(--gray-500);margin-top:3px">What's entering production each week — drag a card to reschedule it for real</div></div>
-      <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-500)">
-        Weekly capacity
-        <input type="number" min="1" value="${limit}" onchange="saveCapacityLimit(this.value)" style="width:56px;font-family:var(--font);font-size:12px;padding:4px 6px;border:1px solid var(--gray-300);border-radius:var(--radius);text-align:center">
-        projects
-      </div>
+      <div><div style="font-size:21px;font-weight:700">📊 Capacity &amp; Planning</div><div style="font-size:12px;color:var(--gray-500);margin-top:3px">Operations capacity across all five departments — not just Production</div></div>
     </div>
     ${decisionBar}
+    ${matrixSection}
+    ${recommendation?`<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-lg);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:18px">💡</span>
+      <div><div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.03em;margin-bottom:2px">Production recommendation</div><div style="font-size:12px;color:#78350f">${recommendation.text}</div></div>
+    </div>`:''}
     ${flagsPanel}
+    <div class="section-head" style="padding:0 0 8px"><div class="section-title" style="font-size:14px">🧱 Production — detail &amp; rescheduling</div><div class="section-meta">What's entering production each week · drag a card to reschedule it for real</div></div>
     ${backlogCount?`<div style="font-size:11px;color:var(--gray-500);margin-bottom:10px">${backlogCount} active project${backlogCount===1?'':'s'} ${backlogCount===1?'has':'have'} no production dates yet, so ${backlogCount===1?'it isn\u2019t':'they aren\u2019t'} on this board.</div>`:''}
     <div style="overflow-x:auto;padding-bottom:10px">
       <div style="display:flex;gap:10px;min-width:max-content">${columns}</div>
@@ -1457,6 +1566,54 @@ const QUEUE_BOARDS={
       if(zoneKey==='qc')return'quality-end';
       return null;
     },
+  },
+  shipping:{
+    tabId:'shipqueue',title:'🚚 Shipping Queue',
+    subtitle:"moving through shipping · drag a card forward to close its milestone · click a card to open the project",
+    zones:[
+      {key:'hold',label:'On Hold',icon:'⏸',color:'#6b6b6b'},
+      {key:'ready',label:'Ready to Ship',icon:'📦',color:'#b45309'},
+      {key:'shipped',label:'Shipped',icon:'🚚',color:'#0891b2'},
+      {key:'delivered',label:'Delivered',icon:'✅',color:'#16a34a'},
+    ],
+    flow:['ready','shipped','delivered'],
+    // Falls back to the shared stage engine if a project has no quality-end
+    // milestone at all, same graceful-degrade pattern as the QA board.
+    zoneOf(p){
+      if(p.status==='on-hold')return'hold';
+      const pMs=milestones.filter(m=>m.project_id===p.id);
+      const has=k=>pMs.some(m=>m.key===k);
+      const stage=getProjectStage(p);
+      const qaDone=has('quality-end')?msCrossedOrDone(pMs,'quality-end'):(stage==='shipping'||stage==='delivered');
+      if(!qaDone)return null; // not out of QA yet — not this board's concern
+      if(has('shipping')&&msCrossedOrDone(pMs,'shipping')){
+        if(has('delivery')&&msCrossedOrDone(pMs,'delivery'))return'delivered';
+        return'shipped';
+      }
+      return'ready';
+    },
+    advanceKey(p,zoneKey){return{ready:'shipping',shipped:'delivery'}[zoneKey];},
+  },
+  installation:{
+    tabId:'installqueue',title:'🔧 Installation Queue',
+    subtitle:"waiting on or completing install · drag a card forward to close its milestone · click a card to open the project",
+    zones:[
+      {key:'hold',label:'On Hold',icon:'⏸',color:'#6b6b6b'},
+      {key:'ready',label:'Ready to Install',icon:'🚛',color:'#b45309'},
+      {key:'installed',label:'Installed',icon:'✅',color:'#16a34a'},
+    ],
+    flow:['ready','installed'],
+    zoneOf(p){
+      if(p.status==='on-hold')return'hold';
+      const pMs=milestones.filter(m=>m.project_id===p.id);
+      const has=k=>pMs.some(m=>m.key===k);
+      const stage=getProjectStage(p);
+      const deliveryDone=has('delivery')?msCrossedOrDone(pMs,'delivery'):stage==='delivered';
+      if(!deliveryDone)return null; // hasn't arrived on site yet — not this board's concern
+      if(has('installation')&&msCrossedOrDone(pMs,'installation'))return'installed';
+      return'ready';
+    },
+    advanceKey(p,zoneKey){return{ready:'installation'}[zoneKey];},
   },
 };
 
@@ -1655,11 +1812,30 @@ function queueCard(p,boardKey){
   </div>`;
 }
 
+function adHocQueueCard(r,dept){
+  const isShip=dept==='shipping';
+  const dateLine=isShip?`Ship: ${r.shipDate?fmt(r.shipDate):'—'} · Deliver: ${r.deliveryDate?fmt(r.deliveryDate):'—'}`:`Train: ${r.trainingDate?fmt(r.trainingDate):'—'} · Install: ${r.installDate?fmt(r.installDate):'—'}`;
+  const idx=(adHocRows[dept]||[]).indexOf(r);
+  return`<div style="background:white;border:1px solid var(--gray-200);border-radius:8px;padding:9px 11px;margin-bottom:7px">
+    <div style="display:flex;justify-content:space-between;gap:6px;align-items:flex-start">
+      <div style="min-width:0">
+        <div style="font-size:12px;font-weight:700">${r.name}${r.so?` <span style="font-family:var(--mono);font-size:9.5px;color:var(--red);font-weight:500">${r.so}</span>`:''}</div>
+        <div style="font-size:10px;color:var(--gray-500);margin-top:2px">${dateLine} · ${r.pm||'—'}</div>
+      </div>
+      <button onclick="openEditAdHoc('${dept}',${idx})" style="font-size:9px;padding:2px 7px;border:1px solid var(--gray-200);border-radius:4px;background:white;cursor:pointer;font-family:var(--font);flex-shrink:0">Edit</button>
+    </div>
+    <div style="margin-top:5px">${isShip?adHocShipStatusDropdown(r.id,r.status):`<select onchange="quickStatusAdHoc('${r.id}',this.value)" style="font-size:10px;padding:2px 7px;border:1px solid var(--gray-200);border-radius:10px;font-family:var(--font)"><option value="Scheduled"${r.status!=='Complete'?' selected':''}>Scheduled</option><option value="Complete"${r.status==='Complete'?' selected':''}>Complete</option></select>`}</div>
+  </div>`;
+}
+
 function renderQueueBoard(boardKey){
   const cfg=QUEUE_BOARDS[boardKey];
   const el=document.getElementById('tab-'+cfg.tabId);if(!el)return;
   const zones=computeQueueBoard(boardKey);
   const totalActive=cfg.zones.reduce((n,z)=>n+zones[z.key].length,0);
+  // Shipping/Installation also carry one-off items not tied to a tracked project.
+  const isAdHocDept=boardKey==='shipping'||boardKey==='installation';
+  const adHocList=isAdHocDept?(adHocRows[boardKey]||[]):[];
 
   const summaryHtml=`
     <div style="display:grid;grid-template-columns:repeat(${cfg.zones.length},1fr);gap:6px;margin-bottom:1rem">
@@ -1675,6 +1851,7 @@ function renderQueueBoard(boardKey){
     <option value="">All families</option>
     ${PROD_FAMILIES.map(f=>`<option value="${f.key}"${fam===f.key?' selected':''}>${f.icon} ${f.label}</option>`).join('')}
   </select>`;
+  const addAdHocBtn=isAdHocDept?`<button onclick="openAdHocModal('${boardKey}')" style="font-size:12px;font-weight:600;padding:6px 14px;border:none;border-radius:var(--radius);background:var(--black);color:white;cursor:pointer;font-family:var(--font)">+ Add ${boardKey==='shipping'?'shipment':'installation'}</button>`:'';
 
   const columns=cfg.zones.map(z=>{
     const list=zones[z.key];
@@ -1688,21 +1865,288 @@ function renderQueueBoard(boardKey){
     </div>`;
   }).join('');
 
+  const adHocSection=isAdHocDept?`<div class="section" style="margin-top:14px">
+    <div class="section-head"><div class="section-title">📦 Ad hoc ${boardKey==='shipping'?'shipments':'installations'}</div><div class="section-meta">Not tied to a tracked project · ${adHocList.length} entr${adHocList.length===1?'y':'ies'}</div></div>
+    <div style="padding:10px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">
+      ${adHocList.length?adHocList.map(r=>adHocQueueCard(r,boardKey)).join(''):`<div style="font-size:11px;color:var(--gray-400);grid-column:1/-1;text-align:center;padding:10px 0">None yet — use "+ Add ${boardKey==='shipping'?'shipment':'installation'}" above</div>`}
+    </div>
+  </div>`:'';
+
   el.innerHTML=`
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:8px">
       <div>
         <div style="font-size:16px;font-weight:600">${cfg.title}</div>
         <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${totalActive} ${cfg.subtitle}</div>
       </div>
-      ${familyFilterHtml}
+      <div style="display:flex;gap:8px;align-items:center">${addAdHocBtn}${familyFilterHtml}</div>
     </div>
     ${summaryHtml}
     <div style="overflow-x:auto;padding-bottom:1rem">
       <div style="display:flex;gap:12px;min-width:max-content;align-items:flex-start">${columns}</div>
-    </div>`;
+    </div>
+    ${adHocSection}`;
 }
 function renderProductionQueue(){renderQueueBoard('production');}
 function renderQaQueue(){renderQueueBoard('qa');}
+function renderShipQueue(){renderQueueBoard('shipping');}
+function renderInstallQueue(){renderQueueBoard('installation');}
+
+// ── PROCUREMENT COMMAND CENTER ────────────────────────────────
+// Every number here is computed from real project/milestone/history data.
+// The two places real data doesn't exist yet (root cause, supplier) are
+// manual tag scaffolds using the same app_settings pattern as schedule
+// flags/photos — they start empty and fill in as people tag things, rather
+// than showing fabricated categories or supplier names.
+const ROOT_CAUSE_CATEGORIES=['Supplier Delay','Purchase Order Delay','Engineering Delay','Inventory Shortage','Customer Approval','Long Lead Item','Vendor Issue','Shipping Delay','Other'];
+
+function getProcMs(p){
+  const pMs=milestones.filter(m=>m.project_id===p.id);
+  return{
+    mo:pMs.find(m=>m.key==='mo-release'),
+    po:pMs.find(m=>m.key==='po-release'),
+    arrival:pMs.find(m=>m.key==='arrival'),
+    prodStart:pMs.find(m=>m.key==='production-start'),
+  };
+}
+function msDone(m){return m&&(milestoneDone[m.id]||( m.date&&new Date(m.date+'T00:00:00')<=today()));}
+
+// 'mo-release' | 'parts-order' | 'parts-arrive' | 'done' — mirrors the same
+// crossed/done logic getProjectStage uses, scoped to just procurement's slice.
+function getProcStage(p){
+  const{mo,po,arrival}=getProcMs(p);
+  if(msDone(arrival))return'done';
+  if(msDone(po))return'parts-arrive'; // waiting on arrival
+  if(msDone(mo))return'parts-order';  // waiting on PO
+  return'mo-release';                 // waiting on MO
+}
+function getDaysUntilProduction(p){
+  const{prodStart}=getProcMs(p);
+  if(!prodStart?.date)return null;
+  return daysDiff(prodStart.date); // negative = overdue, existing helper
+}
+// Risk purely from real signals: how close production is vs. how much
+// procurement work is still open. No fabricated inputs.
+function getProcRisk(p){
+  const stage=getProcStage(p);
+  if(stage==='done')return{level:'green',label:'Clear'};
+  const days=getDaysUntilProduction(p);
+  if(days===null)return{level:'grey',label:'No production date'};
+  if(days<=3)return{level:'red',label:'Critical'};
+  if(days<=7)return{level:'amber',label:'At risk'};
+  return{level:'green',label:'On track'};
+}
+// The one recommendation that's honestly derivable from milestone state alone.
+// "Engineering Required"/"Inventory Check"/"Customer Approval" aren't — there's
+// no field that distinguishes them — so those live in the manual root-cause tag
+// instead of being guessed here.
+function getRecommendedAction(p){
+  const stage=getProcStage(p);
+  const days=getDaysUntilProduction(p);
+  if(stage==='mo-release')return'Release MO';
+  if(stage==='parts-order')return'Release PO';
+  if(stage==='parts-arrive')return(days!==null&&days<=3)?'Expedite Shipment':'Contact Supplier';
+  return null;
+}
+function getBlockingDept(p){
+  const stage=getProcStage(p);
+  return{'mo-release':'Procurement (MO)','parts-order':'Procurement (PO)','parts-arrive':'Supplier','done':null}[stage];
+}
+function procurementActiveProjects(){return projects.filter(p=>p.status!=='complete'&&getProcStage(p)!=='done');}
+
+// Real average delay, pulled from actual milestone_history entries on
+// procurement milestones — not estimated.
+function getAvgProcurementDelay(){
+  const keys=['mo-release','po-release','arrival'];
+  const relevantMsIds=new Set(milestones.filter(m=>keys.includes(m.key)).map(m=>m.id));
+  const delays=[];
+  relevantMsIds.forEach(mid=>{
+    (milestoneHistory[mid]||[]).forEach(h=>{
+      if(!h.old_date||!h.new_date)return;
+      const d=Math.round((new Date(h.new_date+'T00:00:00')-new Date(h.old_date+'T00:00:00'))/86400000);
+      if(d>0)delays.push(d);
+    });
+  });
+  if(!delays.length)return null;
+  return Math.round((delays.reduce((a,b)=>a+b,0)/delays.length)*10)/10;
+}
+
+function getRootCauseTags(){return appSettings['procurement_root_cause']||{};}
+async function setRootCause(pid,cat){
+  const tags=getRootCauseTags();
+  const old=tags[pid];
+  if(cat)tags[pid]=cat;else delete tags[pid];
+  appSettings['procurement_root_cause']=tags;
+  await sb.from('app_settings').upsert({key:'procurement_root_cause',value:tags,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
+  renderProcurementCC();
+  if(cat)showUndoToast(`Root cause set to ${cat}`,async()=>{
+    const t=getRootCauseTags();if(old)t[pid]=old;else delete t[pid];appSettings['procurement_root_cause']=t;
+    await sb.from('app_settings').upsert({key:'procurement_root_cause',value:t,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
+    renderProcurementCC();showToast('Undone ✓');
+  });
+}
+function getSupplierTags(){return appSettings['project_suppliers']||{};}
+async function setSupplierTag(pid,name){
+  const v=(name||'').trim();
+  const tags=getSupplierTags();
+  const old=tags[pid];
+  if(v)tags[pid]=v;else delete tags[pid];
+  appSettings['project_suppliers']=tags;
+  await sb.from('app_settings').upsert({key:'project_suppliers',value:tags,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
+  renderProcurementCC();
+}
+
+let pccActionFilter='';
+function pccSetActionFilter(a){pccActionFilter=pccActionFilter===a?'':a;renderProcurementCC();}
+
+function renderProcurementCC(){
+  const el=document.getElementById('tab-procurement');if(!el)return;
+  const active=procurementActiveProjects();
+  const withRisk=active.map(p=>({p,risk:getProcRisk(p),action:getRecommendedAction(p),days:getDaysUntilProduction(p),blocking:getBlockingDept(p)}));
+  const critical=withRisk.filter(r=>r.risk.level==='red');
+  const atRisk=withRisk.filter(r=>r.risk.level==='amber');
+  const readyForProduction=projects.filter(p=>p.status!=='complete'&&getProcStage(p)==='done'&&getDaysUntilProduction(p)!==null&&getDaysUntilProduction(p)>=0&&!msDone(getProcMs(p).prodStart));
+  const avgDelay=getAvgProcurementDelay();
+  const healthPct=active.length?Math.round(100*(active.length-critical.length-atRisk.length)/active.length):100;
+
+  // ── Section 1: Operations Summary ──
+  const s1=`<div class="metrics-row" style="grid-template-columns:repeat(6,1fr)">
+    <div class="metric"><div class="metric-label">Open procurement items</div><div class="metric-val">${active.length}</div><div class="metric-sub">projects</div></div>
+    <div class="metric"><div class="metric-label">Waiting on procurement</div><div class="metric-val">${active.length}</div><div class="metric-sub">not yet at arrival</div></div>
+    <div class="metric"><div class="metric-label">Critical risks</div><div class="metric-val red">${critical.length}</div><div class="metric-sub">≤3 days to production</div></div>
+    <div class="metric"><div class="metric-label">Ready for production</div><div class="metric-val green">${readyForProduction.length}</div><div class="metric-sub">arrival done</div></div>
+    <div class="metric"><div class="metric-label">Avg procurement delay</div><div class="metric-val ${avgDelay?'amber':''}">${avgDelay!==null?avgDelay+'d':'—'}</div><div class="metric-sub">${avgDelay!==null?'from history':'no slips logged yet'}</div></div>
+    <div class="metric"><div class="metric-label">Procurement health</div><div class="metric-val ${healthPct<70?'red':healthPct<90?'amber':'green'}">${healthPct}%</div><div class="metric-sub">not at risk</div></div>
+  </div>`;
+
+  // ── Section 2: Critical Risk Queue ──
+  const queue=withRisk.filter(r=>r.risk.level==='red'||r.risk.level==='amber')
+    .filter(r=>!pccActionFilter||r.action===pccActionFilter)
+    .sort((a,b)=>(a.days??999)-(b.days??999));
+  const tags=getRootCauseTags();
+  const queueRows=queue.map(r=>{
+    const{p}=r;
+    const rc=tags[p.id]||'';
+    return`<tr onclick="goToProjPage('${p.id}')" style="cursor:pointer">
+      <td style="font-weight:600">${p.name}</td>
+      <td>${p.client||'—'}</td>
+      <td>${p.pm||'—'}</td>
+      <td>${p.sales||'—'}</td>
+      <td class="date-cell">${getProcMs(p).prodStart?.date?fmt(getProcMs(p).prodStart.date):'—'}</td>
+      <td>${{'mo-release':'Waiting on MO Release','parts-order':'Waiting on PO Release','parts-arrive':'Waiting on Arrival'}[getProcStage(p)]||'—'}</td>
+      <td style="font-weight:700;color:${r.days!==null&&r.days<0?'var(--red)':'inherit'}">${r.days===null?'—':r.days+'d'}</td>
+      <td><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:${r.risk.level==='red'?'var(--red-light)':'var(--warning-bg)'};color:${r.risk.level==='red'?'var(--red)':'var(--warning)'}">${r.risk.label}</span></td>
+      <td style="font-size:11px;color:var(--gray-500)">${r.blocking||'—'}</td>
+      <td style="font-weight:600;font-size:11px">${r.action||'—'}</td>
+      <td onclick="event.stopPropagation()"><select onchange="setRootCause('${p.id}',this.value)" style="font-family:var(--font);font-size:10.5px;padding:2px 4px;border:1px solid var(--gray-200);border-radius:4px;background:${rc?'white':'#fffbeb'}">
+        <option value="">${rc?'Change…':'Tag root cause…'}</option>
+        ${ROOT_CAUSE_CATEGORIES.map(c=>`<option value="${c}"${rc===c?' selected':''}>${c}</option>`).join('')}
+      </select></td>
+    </tr>`;
+  }).join('');
+  const s2=`<div class="section" style="margin-bottom:14px">
+    <div class="section-head"><div class="section-title">🔥 Critical Risk Queue</div><div class="section-meta">${queue.length} project${queue.length===1?'':'s'} at risk from procurement${pccActionFilter?` · filtered: ${pccActionFilter} (click again in Recommendations to clear)`:''}</div></div>
+    <div class="dept-table-wrap">${queue.length?`<table class="dept-table"><thead><tr><th>Project</th><th>Client</th><th>PM</th><th>Sales</th><th>Prod start</th><th>Procurement status</th><th>Days until prod</th><th>Risk</th><th>Blocking</th><th>Recommended</th><th>Root cause</th></tr></thead><tbody>${queueRows}</tbody></table>`:'<div class="empty-state">Nothing critical right now 🎉</div>'}</div>
+  </div>`;
+
+  // ── Section 3: Upcoming Production Impact (next 14 days) ──
+  const upcoming=projects.filter(p=>{
+    if(p.status==='complete')return false;
+    const d=getDaysUntilProduction(p);
+    return d!==null&&d>=0&&d<=14;
+  }).sort((a,b)=>getDaysUntilProduction(a)-getDaysUntilProduction(b));
+  const impactCard=p=>{
+    const stage=getProcStage(p);
+    const days=getDaysUntilProduction(p);
+    const status=stage==='done'?{label:'✅ Ready',color:'var(--success)',bg:'var(--success-bg)'}:days<=3?{label:'🔴 Blocked',color:'var(--red)',bg:'var(--red-light)'}:{label:'🟡 At Risk',color:'var(--warning)',bg:'var(--warning-bg)'};
+    return`<div onclick="goToProjPage('${p.id}')" style="background:${status.bg};border-left:3px solid ${status.color};border-radius:8px;padding:10px 12px;cursor:pointer">
+      <div style="display:flex;justify-content:space-between;gap:8px"><span style="font-size:12px;font-weight:700">${p.name}</span><span style="font-size:10px;font-weight:700;color:${status.color}">${status.label}</span></div>
+      <div style="font-size:10.5px;color:var(--gray-500);margin-top:2px">${days}d to production · ${p.pm||'—'}</div>
+    </div>`;
+  };
+  const s3=`<div class="section" style="margin-bottom:14px">
+    <div class="section-head"><div class="section-title">📅 Upcoming Production Impact (14 days)</div><div class="section-meta">${upcoming.length} project${upcoming.length===1?'':'s'} entering production soon</div></div>
+    <div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px">
+      ${upcoming.length?upcoming.map(impactCard).join(''):'<div class="empty-state">Nothing entering production in the next 14 days</div>'}
+    </div>
+  </div>`;
+
+  // ── Section 4: Root Cause Analysis ──
+  const rcCounts={};
+  ROOT_CAUSE_CATEGORIES.forEach(c=>rcCounts[c]=0);
+  Object.values(tags).forEach(c=>{if(rcCounts[c]!==undefined)rcCounts[c]++;});
+  const rcTotal=Object.values(rcCounts).reduce((a,b)=>a+b,0);
+  const s4=`<div class="section" style="margin-bottom:14px">
+    <div class="section-head"><div class="section-title">🔎 Root Cause Analysis</div><div class="section-meta">${rcTotal?`${rcTotal} project${rcTotal===1?'':'s'} tagged`:'No projects tagged yet — tag root causes in the Critical Risk Queue above'}</div></div>
+    <div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
+      ${ROOT_CAUSE_CATEGORIES.map(c=>`<div style="background:var(--gray-50);border-radius:8px;padding:10px 12px">
+        <div style="font-size:18px;font-weight:700">${rcCounts[c]}</div>
+        <div style="font-size:10.5px;color:var(--gray-500)">${c}</div>
+      </div>`).join('')}
+    </div>
+  </div>`;
+
+  // ── Section 5: Supplier Performance ──
+  const supTags=getSupplierTags();
+  const supNames=[...new Set(Object.values(supTags))].sort();
+  const keys=['mo-release','po-release','arrival'];
+  const supRows=supNames.map(name=>{
+    const pids=Object.keys(supTags).filter(pid=>supTags[pid]===name);
+    const msIds=milestones.filter(m=>pids.includes(m.project_id)&&keys.includes(m.key)).map(m=>m.id);
+    const hist=[];
+    msIds.forEach(mid=>(milestoneHistory[mid]||[]).forEach(h=>{if(h.old_date&&h.new_date&&h.new_date>h.old_date)hist.push(h);}));
+    const avg=hist.length?Math.round((hist.reduce((s,h)=>s+(new Date(h.new_date+'T00:00:00')-new Date(h.old_date+'T00:00:00'))/86400000,0)/hist.length)*10)/10:null;
+    const impacted=pids.filter(pid=>{const p=projects.find(x=>x.id===pid);return p&&getProcRisk(p).level!=='green';}).length;
+    return`<tr><td style="font-weight:600">${name}</td><td>${pids.length}</td><td>${hist.length}</td><td>${avg!==null?avg+'d':'—'}</td><td>${impacted}</td></tr>`;
+  }).join('');
+  const s5=`<div class="section" style="margin-bottom:14px">
+    <div class="section-head"><div class="section-title">🏭 Supplier Performance</div><div class="section-meta">${supNames.length?`${supNames.length} supplier${supNames.length===1?'':'s'} tagged`:'No suppliers tagged yet'}</div></div>
+    ${supNames.length?`<div class="dept-table-wrap"><table class="dept-table"><thead><tr><th>Supplier</th><th>Projects supplied</th><th>Late deliveries</th><th>Avg delay</th><th>Projects impacted</th></tr></thead><tbody>${supRows}</tbody></table></div>`
+      :`<div style="padding:12px 14px">
+          <div class="empty-state" style="margin-bottom:10px">No supplier data yet — tag a project below to start tracking.</div>
+          <div style="display:flex;gap:8px;align-items:center;max-width:420px">
+            <select id="pcc-sup-proj" style="flex:1;font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius)">
+              <option value="">Choose a project…</option>
+              ${active.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}
+            </select>
+            <input id="pcc-sup-name" placeholder="Supplier name" style="flex:1;font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius)">
+            <button onclick="setSupplierTag(document.getElementById('pcc-sup-proj').value,document.getElementById('pcc-sup-name').value)" style="font-size:12px;font-weight:600;padding:6px 14px;border:none;border-radius:var(--radius);background:var(--black);color:white;cursor:pointer;font-family:var(--font)">Tag</button>
+          </div>
+        </div>`}
+  </div>`;
+
+  // ── Section 6: Operational Impact (visual chain, informational only) ──
+  const chainCounts=PIPELINE_STAGES.map(s=>({...s,count:projects.filter(p=>p.status!=='complete'&&getProjectStage(p)===s.id).length}));
+  const s6=`<div class="section" style="margin-bottom:14px">
+    <div class="section-head"><div class="section-title">🔗 Operational Impact</div><div class="section-meta">Where active projects sit right now — informational only, nothing here moves a date</div></div>
+    <div style="padding:16px 14px;display:flex;align-items:center;gap:6px;overflow-x:auto">
+      ${chainCounts.map((s,i)=>`${i>0?'<span style="color:var(--gray-300);font-size:16px;flex-shrink:0">→</span>':''}
+        <div style="flex-shrink:0;text-align:center;min-width:90px;background:var(--gray-50);border-top:3px solid ${s.color};border-radius:8px;padding:10px 8px">
+          <div style="font-size:18px">${s.icon}</div>
+          <div style="font-size:16px;font-weight:700;margin-top:2px">${s.count}</div>
+          <div style="font-size:9.5px;color:var(--gray-500)">${s.label}</div>
+        </div>`).join('')}
+    </div>
+  </div>`;
+
+  // ── Section 7: Recommendations (aggregated from Section 2) ──
+  const actionCounts={};
+  withRisk.forEach(r=>{if(r.action)actionCounts[r.action]=(actionCounts[r.action]||0)+1;});
+  const s7=`<div class="section">
+    <div class="section-head"><div class="section-title">💡 Recommendations</div><div class="section-meta">Click to filter the Critical Risk Queue above</div></div>
+    <div style="padding:12px 14px;display:flex;flex-wrap:wrap;gap:8px">
+      ${Object.keys(actionCounts).length?Object.entries(actionCounts).sort((a,b)=>b[1]-a[1]).map(([action,n])=>`
+        <button onclick="pccSetActionFilter('${action}')" style="font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;border-radius:20px;border:1px solid ${pccActionFilter===action?'var(--black)':'var(--gray-200)'};background:${pccActionFilter===action?'var(--black)':'white'};color:${pccActionFilter===action?'white':'var(--gray-700)'};cursor:pointer">${action} <span style="opacity:0.6">(${n})</span></button>
+      `).join(''):'<div class="empty-state">No open recommendations</div>'}
+    </div>
+  </div>`;
+
+  el.innerHTML=`
+    <div style="margin-bottom:14px">
+      <div style="font-size:21px;font-weight:700">🔧 Procurement Command Center</div>
+      <div style="font-size:12px;color:var(--gray-500);margin-top:3px">What will cause the biggest operational problems, and what to chase today</div>
+    </div>
+    ${s1}<div style="margin-bottom:14px"></div>${s2}${s3}${s4}${s5}${s6}${s7}`;
+}
 
 // ── COMMAND PALETTE ────────────────────────────────────────
 // Ctrl/Cmd+K anywhere. Type a project name/SO/client/PM to jump straight to
@@ -1717,8 +2161,8 @@ const CP_COMMANDS=[
   {label:'Capacity & Planning',icon:'📊',run:()=>setTab('capacity')},
   {label:'Production Queue',icon:'🧱',run:()=>setTab('prodqueue')},
   {label:'Quality / QA Queue',icon:'🔬',run:()=>setTab('qaqueue')},
-  {label:'Shipping',icon:'🚚',run:()=>setTab('shipping')},
-  {label:'Installation',icon:'🔧',run:()=>setTab('installation')},
+  {label:'Shipping',icon:'🚚',run:()=>setTab('shipqueue')},
+  {label:'Installation',icon:'🔧',run:()=>setTab('installqueue')},
   {label:'Dept check-in',icon:'🚦',run:()=>setTab('checkin')},
   {label:'Vinyl schedule',icon:'📀',run:()=>setTab('vinyl')},
   {label:'Planogram',icon:'🗂',run:()=>setTab('planogram')},
@@ -2305,6 +2749,7 @@ function renderOverview(){
           <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
         </div>
       </div>
+      ${(()=>{const b=getProjectBlocker(proj);if(!b)return'';return`<div style="padding:8px 14px;background:${b.overdue?'var(--red-light)':'var(--gray-50)'};border-bottom:1px solid var(--gray-100);font-size:11.5px;color:${b.overdue?'var(--red)':'var(--gray-600)'}">🔗 ${b.blockedStage.label} is blocked by ${b.blockingStage.label} · ${b.estimate}</div>`;})()}
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
     </div>`:'<div class="empty-state">No projects yet.</div>'}`;
 }
@@ -3942,8 +4387,6 @@ function openEditProj(id){
           </label>
           <input id="ep-it-survey" value="${proj.it_survey_url||''}" placeholder="https://..." style="font-family:var(--mono);font-size:12px">
         </div>
-        <div class="field"><label>Naming convention</label><input id="ep-naming" value="${proj.naming_convention||''}" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono)"></div>
-        <div class="field full"><label>Installation Address</label><input id="ep-address" value="${proj.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
         <div class="field full">
           <label style="display:flex;align-items:center;justify-content:space-between">Kickoff Deck URL
             <button type="button" onclick="clearEpField('ep-kickoff-deck')" style="font-size:10px;padding:1px 8px;border:1px solid var(--red-mid);border-radius:4px;background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear</button>
@@ -4177,7 +4620,16 @@ async function saveEditMs(id,oldLabel,oldDate){
     }
   }
 
-  closeModal();showToast('Updated ✓');await loadAll();
+  closeModal();
+  showUndoToast(`${newLabel} updated to ${newDate?fmt(newDate):'no date'}`,async()=>{
+    await sb.from('milestones').update({label:oldLabel,date:oldDate||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',id);
+    if(oldDate!==newDate){
+      await sb.from('milestone_history').insert({milestone_id:id,project_id:proj?.id||null,old_date:newDate||null,new_date:oldDate||null,changed_by:currentUserName,reason:'Undo of manual edit'});
+    }
+    await loadAll();
+    showToast('Undone ✓');
+  });
+  await loadAll();
 }
 
 async function pushSODateToOthers(projId,fromSO,msKey,newDate,msLabel){
@@ -4800,6 +5252,7 @@ function renderProjPageBody(){
           ${proj.naming_convention?`<span>🏷 ${proj.naming_convention}</span>`:''}
           ${proj.address?`<span>📍 ${proj.address}</span>`:''}
           ${goLive?`<span>🎯 Go-live: <strong>${fmt(goLive)}</strong></span>`:''}
+          ${(()=>{const b=getProjectBlocker(proj);if(!b)return'';return`<span style="color:${b.overdue?'#fca5a5':'#93c5fd'}">🔗 ${b.blockedStage.label} blocked by ${b.blockingStage.label} · ${b.estimate}</span>`;})()}
         </div>
         <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <select class="pp-status ${statusCls}" style="border:none;cursor:pointer;font-family:var(--font);font-size:12px;font-weight:600;padding:4px 12px;border-radius:20px" onchange="savePPSection('status',this.value);this.className='pp-status '+(this.value==='on-track'?'pp-status-green':this.value==='at-risk'?'pp-status-amber':'pp-status-red')">
@@ -6174,7 +6627,7 @@ async function saveAdHoc(dept){
   }
   const{error}=await sb.from('adhoc_schedule').insert(row);
   if(error){alert('Error saving: '+error.message);return;}
-  closeModal();showToast('Added and saved ✓');await loadAll();renderDeptView(dept);
+  closeModal();showToast('Added and saved ✓');await loadAll();dept==='shipping'?renderShipQueue():renderInstallQueue();
 }
 function openEditAdHoc(dept,idx){
   const r=adHocRows[dept][idx];
@@ -6247,7 +6700,7 @@ async function saveEditAdHoc(dept,idx){
     shipDate:updates.ship_date,deliveryDate:updates.delivery_date,
     trainingDate:updates.training_date,installDate:updates.install_date,
   });
-  closeModal();showToast('Saved ✓');renderDeptView(dept);
+  closeModal();showToast('Saved ✓');dept==='shipping'?renderShipQueue():renderInstallQueue();
 }
 
 async function removeAdHoc(dept,idx){
@@ -6256,7 +6709,7 @@ async function removeAdHoc(dept,idx){
     await sb.from('adhoc_schedule').delete().eq('id',item.id);
   }
   adHocRows[dept].splice(idx,1);
-  renderDeptView(dept);showToast('Removed');
+  dept==='shipping'?renderShipQueue():renderInstallQueue();showToast('Removed');
 }
 
 // ── SETTINGS ──────────────────────────────────────────────
@@ -7781,22 +8234,8 @@ function mcRender(){
 }
 </script>
 
-<!-- ══════════════ SPRINT PACK: ⌘K PALETTE · LIVE SYNC · INSIGHTS ══════════════ -->
+<!-- ══════════════ SPRINT PACK: LIVE SYNC · INSIGHTS ══════════════ -->
 <style>
-/* ── COMMAND PALETTE ── */
-#cp-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:100000;display:none;align-items:flex-start;justify-content:center;padding-top:12vh;backdrop-filter:blur(2px);}
-#cp-backdrop.open{display:flex;}
-#cp-box{background:var(--white);border-radius:14px;width:560px;max-width:92%;box-shadow:0 24px 64px rgba(0,0,0,0.35);overflow:hidden;animation:cpIn .16s ease;}
-@keyframes cpIn{from{transform:translateY(-8px);opacity:0}to{transform:none;opacity:1}}
-#cp-input{width:100%;border:none;outline:none;font-family:var(--font);font-size:15px;padding:16px 18px;border-bottom:1px solid var(--gray-100);}
-#cp-results{max-height:46vh;overflow-y:auto;padding:6px;}
-.cp-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;}
-.cp-item.sel{background:var(--gray-100);}
-.cp-item .cp-ico{width:22px;text-align:center;flex-shrink:0;}
-.cp-item .cp-meta{font-family:var(--mono);font-size:10px;color:var(--gray-500);margin-left:auto;flex-shrink:0;}
-.cp-group{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-500);padding:8px 12px 3px;}
-.cp-foot{display:flex;gap:14px;padding:8px 14px;border-top:1px solid var(--gray-100);font-size:10px;color:var(--gray-500);background:var(--gray-50);}
-.cp-foot kbd{font-family:var(--mono);background:var(--white);border:1px solid var(--gray-300);border-radius:4px;padding:0 5px;font-size:9px;}
 /* ── INSIGHTS ── */
 .ins-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px;}
 .ins-kpi{background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);padding:14px 16px;border-left:3px solid var(--kc,var(--gray-300));}
@@ -7820,57 +8259,7 @@ function mcRender(){
 #live-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:5px;animation:mcPulse 1.8s infinite;}
 </style>
 
-<!-- COMMAND PALETTE -->
-<div id="cp-backdrop" onclick="if(event.target===this)cpClose()">
-  <div id="cp-box">
-    <input id="cp-input" placeholder="Search projects, jump anywhere…  (Esc to close)" autocomplete="off" oninput="cpFilter()" onkeydown="cpKeys(event)">
-    <div id="cp-results"></div>
-    <div class="cp-foot"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>Esc</kbd> close</span><span style="margin-left:auto"><kbd>Ctrl/⌘ K</kbd> anywhere</span></div>
-  </div>
-</div>
-
 <script>
-// ── ⌘K COMMAND PALETTE ─────────────────────────────────────
-let cpSel=0,cpItems=[];
-const CP_TABS=[['glance','At a glance','🏠'],['overview','Project overview','📋'],['projpage','Project page','📁'],['week','This week','🗓'],['pipeline','Pipeline','🔴'],['production','Production','🏭'],['quality','Quality / QA','🔍'],['shipping','Shipping','📦'],['installation','Installation','🔧'],['vinyl','Vinyl schedule','🎨'],['planogram','Planogram','🗂'],['briefing','Daily briefing','📋'],['checkin','Dept check-in','🚦'],['insights','Insights','📊'],['log','Activity log','🕓'],['gendocs','Generate docs','📄'],['templates','Templates','📐'],['intake','New project','➕'],['settings','Settings','⚙️']];
-function cpOpen(){document.getElementById('cp-backdrop').classList.add('open');const i=document.getElementById('cp-input');i.value='';cpFilter();setTimeout(()=>i.focus(),30);}
-function cpClose(){document.getElementById('cp-backdrop').classList.remove('open');}
-document.addEventListener('keydown',e=>{
-  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();document.getElementById('cp-backdrop').classList.contains('open')?cpClose():cpOpen();}
-  if(e.key==='Escape'&&document.getElementById('cp-backdrop').classList.contains('open'))cpClose();
-});
-function cpScore(hay,q){hay=hay.toLowerCase();if(!q)return 1;if(hay.includes(q))return 100-hay.indexOf(q);let hi=0;for(const ch of q){hi=hay.indexOf(ch,hi);if(hi<0)return 0;hi++;}return 10;}
-function cpFilter(){
-  const q=document.getElementById('cp-input').value.trim().toLowerCase();
-  const acts=[
-    {t:'action',ico:'📺',name:'Open Mission Control (TV mode)',run:()=>{cpClose();openMissionControl();}},
-    {t:'action',ico:'➕',name:'New project',run:()=>{cpClose();setTab('intake');}},
-    {t:'action',ico:'📊',name:'Open Insights',run:()=>{cpClose();setTab('insights');}},
-  ].map(a=>({...a,score:cpScore(a.name,q)}));
-  const tabs=CP_TABS.map(([id,name,ico])=>({t:'tab',ico,name:'Go to · '+name,run:()=>{cpClose();setTab(id);},score:cpScore(name,q)}));
-  const projs=(typeof projects!=='undefined'?projects:[]).filter(p=>p.status!=='complete').map(p=>({
-    t:'proj',ico:'📁',name:p.name,meta:[p.so_number,p.pm].filter(Boolean).join(' · '),
-    run:()=>{cpClose();gsGo(p.id);},
-    score:Math.max(cpScore(p.name,q),cpScore(p.so_number||'',q),cpScore(p.client||'',q),cpScore(p.pm||'',q))
-  }));
-  cpItems=[...acts,...tabs,...projs].filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,14);
-  cpSel=0;cpRender();
-}
-function cpRender(){
-  const groups={action:'Actions',tab:'Navigate',proj:'Projects'};let last='';
-  document.getElementById('cp-results').innerHTML=cpItems.map((it,i)=>{
-    const g=it.t!==last?`<div class="cp-group">${groups[it.t]}</div>`:'';last=it.t;
-    return g+`<div class="cp-item${i===cpSel?' sel':''}" onmouseenter="cpSel=${i};cpRender()" onclick="cpItems[${i}].run()">
-      <span class="cp-ico">${it.ico}</span><span>${(it.name||'').replace(/</g,'&lt;')}</span>${it.meta?`<span class="cp-meta">${it.meta.replace(/</g,'&lt;')}</span>`:''}</div>`;
-  }).join('')||'<div class="cp-group" style="padding:16px">No matches</div>';
-  document.querySelector('.cp-item.sel')?.scrollIntoView({block:'nearest'});
-}
-function cpKeys(e){
-  if(e.key==='ArrowDown'){e.preventDefault();cpSel=Math.min(cpSel+1,cpItems.length-1);cpRender();}
-  else if(e.key==='ArrowUp'){e.preventDefault();cpSel=Math.max(cpSel-1,0);cpRender();}
-  else if(e.key==='Enter'&&cpItems[cpSel]){e.preventDefault();cpItems[cpSel].run();}
-}
-
 // ── LIVE SYNC (multiplayer) ────────────────────────────────
 let _lastLogSeen=null,_liveBusy=false;
 async function livePoll(){
