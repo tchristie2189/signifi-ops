@@ -1995,20 +1995,21 @@ async function setSupplierTag(pid,name){
   renderProcurementCC();
 }
 
-let pccActionFilter='';
-function pccSetActionFilter(a){pccActionFilter=pccActionFilter===a?'':a;renderProcurementCC();}
+let pccRootCauseFilter='';
+function pccSetRootCauseFilter(c){pccRootCauseFilter=pccRootCauseFilter===c?'':c;renderProcurementCC();}
 
 function renderProcurementCC(){
   const el=document.getElementById('tab-procurement');if(!el)return;
   const active=procurementActiveProjects();
   const withRisk=active.map(p=>({p,risk:getProcRisk(p),action:getRecommendedAction(p),days:getDaysUntilProduction(p),blocking:getBlockingDept(p)}));
-  const critical=withRisk.filter(r=>r.risk.level==='red');
-  const atRisk=withRisk.filter(r=>r.risk.level==='amber');
+  const critical=withRisk.filter(r=>r.risk.level==='red').sort((a,b)=>(a.days??999)-(b.days??999));
+  const atRisk=withRisk.filter(r=>r.risk.level==='amber').sort((a,b)=>(a.days??999)-(b.days??999));
   const readyForProduction=projects.filter(p=>p.status!=='complete'&&getProcStage(p)==='done'&&getDaysUntilProduction(p)!==null&&getDaysUntilProduction(p)>=0&&!msDone(getProcMs(p).prodStart));
   const avgDelay=getAvgProcurementDelay();
   const healthPct=active.length?Math.round(100*(active.length-critical.length-atRisk.length)/active.length):100;
+  const tags=getRootCauseTags();
 
-  // ── Section 1: Operations Summary ──
+  // ── Operations Summary ──
   const s1=`<div class="metrics-row" style="grid-template-columns:repeat(6,1fr)">
     <div class="metric"><div class="metric-label">Open procurement items</div><div class="metric-val">${active.length}</div><div class="metric-sub">projects</div></div>
     <div class="metric"><div class="metric-label">Waiting on procurement</div><div class="metric-val">${active.length}</div><div class="metric-sub">not yet at arrival</div></div>
@@ -2018,37 +2019,78 @@ function renderProcurementCC(){
     <div class="metric"><div class="metric-label">Procurement health</div><div class="metric-val ${healthPct<70?'red':healthPct<90?'amber':'green'}">${healthPct}%</div><div class="metric-sub">not at risk</div></div>
   </div>`;
 
-  // ── Section 2: Critical Risk Queue ──
-  const queue=withRisk.filter(r=>r.risk.level==='red'||r.risk.level==='amber')
-    .filter(r=>!pccActionFilter||r.action===pccActionFilter)
-    .sort((a,b)=>(a.days??999)-(b.days??999));
-  const tags=getRootCauseTags();
-  const queueRows=queue.map(r=>{
-    const{p}=r;
+  // ── Today's Priorities — if Procurement only did three things ──
+  const top3=[...critical,...atRisk].slice(0,3);
+  const priorityLine=r=>{
+    const statusText={'mo-release':'Waiting on MO Release','parts-order':'Waiting on PO Release','parts-arrive':'Waiting on Arrival'}[getProcStage(r.p)]||'—';
+    const dayText=r.days===null?'no production date set':r.days<0?`production overdue by ${Math.abs(r.days)}d`:r.days===0?'production starts today':`production in ${r.days}d`;
+    return{statusText,dayText};
+  };
+  const s1b=top3.length?`<div class="section" style="margin-bottom:14px">
+    <div class="section-head"><div class="section-title">🎯 Today's Priorities</div><div class="section-meta">If Procurement only chased these three, the week gets healthier</div></div>
+    <div style="padding:6px 14px 14px">
+      ${top3.map((r,i)=>{const{statusText,dayText}=priorityLine(r);return`
+        <div onclick="goToProjPage('${r.p.id}')" style="display:flex;align-items:center;gap:14px;padding:10px 4px;cursor:pointer;border-bottom:${i<top3.length-1?'1px solid var(--gray-100)':'none'}">
+          <div style="font-size:20px;font-weight:800;color:var(--gray-300);width:24px;flex-shrink:0">${i+1}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:700">${r.p.name} <span style="font-weight:500;color:var(--gray-500);font-size:11px">— ${statusText} · ${dayText}</span></div>
+            <div style="font-size:11px;color:var(--gray-500);margin-top:1px">Owner: ${r.p.pm||'Unassigned'}</div>
+          </div>
+          <div style="font-size:11px;font-weight:700;padding:4px 10px;border-radius:14px;background:${r.risk.level==='red'?'var(--red-light)':'var(--warning-bg)'};color:${r.risk.level==='red'?'var(--red)':'var(--warning)'};flex-shrink:0">${r.action||'Review'}</div>
+        </div>`;}).join('')}
+    </div>
+  </div>`:`<div class="section" style="margin-bottom:14px"><div style="padding:14px;text-align:center;color:var(--gray-500);font-size:12px">🎉 No fires or risks — nothing urgent for Procurement right now</div></div>`;
+
+  // ── War room: 🔥 Fires and ⚠ Risks ──
+  const rcSelect=(p)=>{
     const rc=tags[p.id]||'';
-    return`<tr onclick="goToProjPage('${p.id}')" style="cursor:pointer">
-      <td style="font-weight:600">${p.name}</td>
-      <td>${p.client||'—'}</td>
-      <td>${p.pm||'—'}</td>
-      <td>${p.sales||'—'}</td>
-      <td class="date-cell">${getProcMs(p).prodStart?.date?fmt(getProcMs(p).prodStart.date):'—'}</td>
-      <td>${{'mo-release':'Waiting on MO Release','parts-order':'Waiting on PO Release','parts-arrive':'Waiting on Arrival'}[getProcStage(p)]||'—'}</td>
-      <td style="font-weight:700;color:${r.days!==null&&r.days<0?'var(--red)':'inherit'}">${r.days===null?'—':r.days+'d'}</td>
-      <td><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:${r.risk.level==='red'?'var(--red-light)':'var(--warning-bg)'};color:${r.risk.level==='red'?'var(--red)':'var(--warning)'}">${r.risk.label}</span></td>
-      <td style="font-size:11px;color:var(--gray-500)">${r.blocking||'—'}</td>
-      <td style="font-weight:600;font-size:11px">${r.action||'—'}</td>
-      <td onclick="event.stopPropagation()"><select onchange="setRootCause('${p.id}',this.value)" style="font-family:var(--font);font-size:10.5px;padding:2px 4px;border:1px solid var(--gray-200);border-radius:4px;background:${rc?'white':'#fffbeb'}">
-        <option value="">${rc?'Change…':'Tag root cause…'}</option>
-        ${ROOT_CAUSE_CATEGORIES.map(c=>`<option value="${c}"${rc===c?' selected':''}>${c}</option>`).join('')}
-      </select></td>
-    </tr>`;
-  }).join('');
-  const s2=`<div class="section" style="margin-bottom:14px">
-    <div class="section-head"><div class="section-title">🔥 Critical Risk Queue</div><div class="section-meta">${queue.length} project${queue.length===1?'':'s'} at risk from procurement${pccActionFilter?` · filtered: ${pccActionFilter} (click again in Recommendations to clear)`:''}</div></div>
-    <div class="dept-table-wrap">${queue.length?`<table class="dept-table"><thead><tr><th>Project</th><th>Client</th><th>PM</th><th>Sales</th><th>Prod start</th><th>Procurement status</th><th>Days until prod</th><th>Risk</th><th>Blocking</th><th>Recommended</th><th>Root cause</th></tr></thead><tbody>${queueRows}</tbody></table>`:'<div class="empty-state">Nothing critical right now 🎉</div>'}</div>
+    return`<select onclick="event.stopPropagation()" onchange="setRootCause('${p.id}',this.value)" style="font-family:var(--font);font-size:10px;padding:2px 5px;border:1px solid var(--gray-200);border-radius:4px;background:${rc?'white':'#fffbeb'}">
+      <option value="">${rc?'Change…':'Tag root cause…'}</option>
+      ${ROOT_CAUSE_CATEGORIES.map(c=>`<option value="${c}"${rc===c?' selected':''}>${c}</option>`).join('')}
+    </select>`;
+  };
+  const fireCard=r=>{
+    const{p}=r;
+    const statusText={'mo-release':'Waiting on MO Release','parts-order':'Waiting on PO Release','parts-arrive':'Waiting on Arrival'}[getProcStage(p)]||'—';
+    const dayText=r.days===null?'No production date set':r.days<0?`Production overdue by ${Math.abs(r.days)}d`:r.days===0?'Production starts today':`Production starts in ${r.days}d`;
+    return`<div style="background:var(--red-light);border:1px solid var(--red-mid);border-radius:10px;padding:12px 14px;margin-bottom:8px">
+      <div onclick="goToProjPage('${p.id}')" style="cursor:pointer">
+        <div style="font-size:14px;font-weight:800">${p.name}</div>
+        <div style="font-size:12px;color:var(--red);font-weight:600;margin-top:2px">${dayText}</div>
+        <div style="font-size:11.5px;color:var(--gray-700);margin-top:3px">${statusText}${r.blocking?` · Blocked by ${r.blocking}`:''}</div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">Owner: ${p.pm||'Unassigned'}</div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px">
+        <span style="font-size:11.5px;font-weight:700;color:white;background:var(--red);padding:4px 10px;border-radius:14px">Action: ${r.action||'Review'}</span>
+        ${rcSelect(p)}
+      </div>
+    </div>`;
+  };
+  const riskRow=r=>{
+    const{p}=r;
+    const statusText={'mo-release':'MO not released','parts-order':'PO not released','parts-arrive':'Waiting on arrival'}[getProcStage(p)]||'—';
+    const dayText=r.days===null?'no date':r.days===0?'today':`${r.days}d`;
+    return`<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--warning-bg);border-radius:8px;margin-bottom:6px">
+      <div onclick="goToProjPage('${p.id}')" style="flex:1;min-width:0;cursor:pointer;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="font-size:12.5px;font-weight:700">${p.name}</span>
+        <span style="font-size:11px;color:var(--warning)">${statusText}</span>
+        <span style="font-size:11px;color:var(--gray-500)">· Production in ${dayText} · ${p.pm||'—'}</span>
+      </div>
+      ${rcSelect(p)}
+    </div>`;
+  };
+  const warRoom=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+    <div class="section" style="margin-bottom:0">
+      <div class="section-head"><div class="section-title">🔥 Fires — ${critical.length}</div><div class="section-meta">Already hurting you</div></div>
+      <div style="padding:10px 12px">${critical.length?critical.map(fireCard).join(''):'<div class="empty-state">No fires right now 🎉</div>'}</div>
+    </div>
+    <div class="section" style="margin-bottom:0">
+      <div class="section-head"><div class="section-title">⚠ Risks — ${atRisk.length}</div><div class="section-meta">Will become fires without action</div></div>
+      <div style="padding:10px 12px">${atRisk.length?atRisk.map(riskRow).join(''):'<div class="empty-state">Nothing brewing 🎉</div>'}</div>
+    </div>
   </div>`;
 
-  // ── Section 3: Upcoming Production Impact (next 14 days) ──
+  // ── Upcoming Production Impact (next 14 days) ──
   const upcoming=projects.filter(p=>{
     if(p.status==='complete')return false;
     const d=getDaysUntilProduction(p);
@@ -2070,27 +2112,31 @@ function renderProcurementCC(){
     </div>
   </div>`;
 
-  // ── Section 4: Root Cause Analysis ──
+  // ── Root Cause Analysis → click a category to drill into Supplier Performance below ──
   const rcCounts={};
   ROOT_CAUSE_CATEGORIES.forEach(c=>rcCounts[c]=0);
   Object.values(tags).forEach(c=>{if(rcCounts[c]!==undefined)rcCounts[c]++;});
   const rcTotal=Object.values(rcCounts).reduce((a,b)=>a+b,0);
   const s4=`<div class="section" style="margin-bottom:14px">
-    <div class="section-head"><div class="section-title">🔎 Root Cause Analysis</div><div class="section-meta">${rcTotal?`${rcTotal} project${rcTotal===1?'':'s'} tagged`:'No projects tagged yet — tag root causes in the Critical Risk Queue above'}</div></div>
+    <div class="section-head"><div class="section-title">🔎 Root Cause Analysis</div><div class="section-meta">${rcTotal?`${rcTotal} project${rcTotal===1?'':'s'} tagged · click a category to see which suppliers`:'No projects tagged yet — tag root causes on the Fires/Risks cards above'}</div></div>
     <div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
-      ${ROOT_CAUSE_CATEGORIES.map(c=>`<div style="background:var(--gray-50);border-radius:8px;padding:10px 12px">
-        <div style="font-size:18px;font-weight:700">${rcCounts[c]}</div>
-        <div style="font-size:10.5px;color:var(--gray-500)">${c}</div>
+      ${ROOT_CAUSE_CATEGORIES.map(c=>`<div onclick="pccSetRootCauseFilter('${c}')" style="cursor:pointer;background:${pccRootCauseFilter===c?'var(--black)':'var(--gray-50)'};border-radius:8px;padding:10px 12px">
+        <div style="font-size:18px;font-weight:700;color:${pccRootCauseFilter===c?'white':'inherit'}">${rcCounts[c]}</div>
+        <div style="font-size:10.5px;color:${pccRootCauseFilter===c?'rgba(255,255,255,0.8)':'var(--gray-500)'}">${c}</div>
       </div>`).join('')}
     </div>
   </div>`;
 
-  // ── Section 5: Supplier Performance ──
+  // ── Supplier Performance — filtered by Root Cause selection if one's active ──
   const supTags=getSupplierTags();
-  const supNames=[...new Set(Object.values(supTags))].sort();
+  let supNames=[...new Set(Object.values(supTags))].sort();
+  if(pccRootCauseFilter){
+    const taggedPids=new Set(Object.keys(tags).filter(pid=>tags[pid]===pccRootCauseFilter));
+    supNames=supNames.filter(name=>Object.keys(supTags).some(pid=>supTags[pid]===name&&taggedPids.has(pid)));
+  }
   const keys=['mo-release','po-release','arrival'];
   const supRows=supNames.map(name=>{
-    const pids=Object.keys(supTags).filter(pid=>supTags[pid]===name);
+    const pids=Object.keys(supTags).filter(pid=>supTags[pid]===name&&(!pccRootCauseFilter||tags[pid]===pccRootCauseFilter));
     const msIds=milestones.filter(m=>pids.includes(m.project_id)&&keys.includes(m.key)).map(m=>m.id);
     const hist=[];
     msIds.forEach(mid=>(milestoneHistory[mid]||[]).forEach(h=>{if(h.old_date&&h.new_date&&h.new_date>h.old_date)hist.push(h);}));
@@ -2099,24 +2145,24 @@ function renderProcurementCC(){
     return`<tr><td style="font-weight:600">${name}</td><td>${pids.length}</td><td>${hist.length}</td><td>${avg!==null?avg+'d':'—'}</td><td>${impacted}</td></tr>`;
   }).join('');
   const s5=`<div class="section" style="margin-bottom:14px">
-    <div class="section-head"><div class="section-title">🏭 Supplier Performance</div><div class="section-meta">${supNames.length?`${supNames.length} supplier${supNames.length===1?'':'s'} tagged`:'No suppliers tagged yet'}</div></div>
+    <div class="section-head"><div class="section-title">🏭 Supplier Performance${pccRootCauseFilter?` — ${pccRootCauseFilter}`:''}</div><div class="section-meta">${pccRootCauseFilter?`Filtered by root cause · click the category again above to clear`:supNames.length?`${supNames.length} supplier${supNames.length===1?'':'s'} tagged`:'No suppliers tagged yet'}</div></div>
     ${supNames.length?`<div class="dept-table-wrap"><table class="dept-table"><thead><tr><th>Supplier</th><th>Projects supplied</th><th>Late deliveries</th><th>Avg delay</th><th>Projects impacted</th></tr></thead><tbody>${supRows}</tbody></table></div>`
       :`<div style="padding:12px 14px">
-          <div class="empty-state" style="margin-bottom:10px">No supplier data yet — tag a project below to start tracking.</div>
-          <div style="display:flex;gap:8px;align-items:center;max-width:420px">
+          <div class="empty-state" style="margin-bottom:10px">${pccRootCauseFilter?'No suppliers tagged for this root cause yet.':'No supplier data yet — tag a project below to start tracking.'}</div>
+          ${pccRootCauseFilter?'':`<div style="display:flex;gap:8px;align-items:center;max-width:420px">
             <select id="pcc-sup-proj" style="flex:1;font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius)">
               <option value="">Choose a project…</option>
               ${active.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}
             </select>
             <input id="pcc-sup-name" placeholder="Supplier name" style="flex:1;font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius)">
             <button onclick="setSupplierTag(document.getElementById('pcc-sup-proj').value,document.getElementById('pcc-sup-name').value)" style="font-size:12px;font-weight:600;padding:6px 14px;border:none;border-radius:var(--radius);background:var(--black);color:white;cursor:pointer;font-family:var(--font)">Tag</button>
-          </div>
+          </div>`}
         </div>`}
   </div>`;
 
-  // ── Section 6: Operational Impact (visual chain, informational only) ──
+  // ── Operational Impact (visual chain, informational only) ──
   const chainCounts=PIPELINE_STAGES.map(s=>({...s,count:projects.filter(p=>p.status!=='complete'&&getProjectStage(p)===s.id).length}));
-  const s6=`<div class="section" style="margin-bottom:14px">
+  const s6=`<div class="section">
     <div class="section-head"><div class="section-title">🔗 Operational Impact</div><div class="section-meta">Where active projects sit right now — informational only, nothing here moves a date</div></div>
     <div style="padding:16px 14px;display:flex;align-items:center;gap:6px;overflow-x:auto">
       ${chainCounts.map((s,i)=>`${i>0?'<span style="color:var(--gray-300);font-size:16px;flex-shrink:0">→</span>':''}
@@ -2128,24 +2174,12 @@ function renderProcurementCC(){
     </div>
   </div>`;
 
-  // ── Section 7: Recommendations (aggregated from Section 2) ──
-  const actionCounts={};
-  withRisk.forEach(r=>{if(r.action)actionCounts[r.action]=(actionCounts[r.action]||0)+1;});
-  const s7=`<div class="section">
-    <div class="section-head"><div class="section-title">💡 Recommendations</div><div class="section-meta">Click to filter the Critical Risk Queue above</div></div>
-    <div style="padding:12px 14px;display:flex;flex-wrap:wrap;gap:8px">
-      ${Object.keys(actionCounts).length?Object.entries(actionCounts).sort((a,b)=>b[1]-a[1]).map(([action,n])=>`
-        <button onclick="pccSetActionFilter('${action}')" style="font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;border-radius:20px;border:1px solid ${pccActionFilter===action?'var(--black)':'var(--gray-200)'};background:${pccActionFilter===action?'var(--black)':'white'};color:${pccActionFilter===action?'white':'var(--gray-700)'};cursor:pointer">${action} <span style="opacity:0.6">(${n})</span></button>
-      `).join(''):'<div class="empty-state">No open recommendations</div>'}
-    </div>
-  </div>`;
-
   el.innerHTML=`
     <div style="margin-bottom:14px">
       <div style="font-size:21px;font-weight:700">🔧 Procurement Command Center</div>
-      <div style="font-size:12px;color:var(--gray-500);margin-top:3px">What will cause the biggest operational problems, and what to chase today</div>
+      <div style="font-size:12px;color:var(--gray-500);margin-top:3px">What's on fire, what's next, who owns it, what to do today</div>
     </div>
-    ${s1}<div style="margin-bottom:14px"></div>${s2}${s3}${s4}${s5}${s6}${s7}`;
+    ${s1}<div style="margin-bottom:14px"></div>${s1b}${warRoom}${s3}${s4}${s5}${s6}`;
 }
 
 // ── COMMAND PALETTE ────────────────────────────────────────
