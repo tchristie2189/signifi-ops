@@ -369,8 +369,8 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
           <div class="nav-group-label">Departments</div>
           <button class="nav-item" id="ni-prodqueue" onclick="setTab('prodqueue')"><span class="nav-item-dot" style="background:#7c3aed"></span>Production</button>
           <button class="nav-item" id="ni-qaqueue" onclick="setTab('qaqueue')"><span class="nav-item-dot" style="background:#d97706"></span>Quality / QA</button>
-          <button class="nav-item" id="ni-shipqueue" onclick="setTab('shipqueue')"><span class="nav-item-dot" style="background:#059669"></span>Shipping</button>
-          <button class="nav-item" id="ni-installqueue" onclick="setTab('installqueue')"><span class="nav-item-dot" style="background:#db2777"></span>Installation</button>
+          <button class="nav-item" id="ni-shipping" onclick="setTab('shipping')"><span class="nav-item-dot" style="background:#059669"></span>Shipping</button>
+          <button class="nav-item" id="ni-installation" onclick="setTab('installation')"><span class="nav-item-dot" style="background:#db2777"></span>Installation</button>
           <button class="nav-item" id="ni-procurement" onclick="setTab('procurement')"><span class="nav-item-dot" style="background:#6b6b6b"></span>🔧 Procurement Command Center</button>
           <button class="nav-item" id="ni-checkin" onclick="setTab('checkin')">🚦 Dept check-in</button>
           <div class="nav-sep"></div>
@@ -425,8 +425,8 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
     <div id="tab-week" style="display:none"></div>
     <div id="tab-prodqueue" style="display:none"></div>
     <div id="tab-qaqueue" style="display:none"></div>
-    <div id="tab-shipqueue" style="display:none"></div>
-    <div id="tab-installqueue" style="display:none"></div>
+    <div id="tab-shipping" style="display:none"></div>
+    <div id="tab-installation" style="display:none"></div>
     <div id="tab-procurement" style="display:none"></div>
     <div id="tab-vinyl" style="display:none"></div>
     <div id="tab-planogram" style="display:none"></div>
@@ -728,7 +728,7 @@ function setTab(tab){
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   if(ni&&document.getElementById('nav-more')?.contains(ni))openNavMore();
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','pipeline','overview','projpage','week','prodqueue','qaqueue','shipqueue','installqueue','procurement','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity'];
+  const ALL=['glance','pipeline','overview','projpage','week','prodqueue','qaqueue','shipping','installation','procurement','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
@@ -743,7 +743,7 @@ function toggleNavMore(){
   else{el.style.display='none';const arrow=document.querySelector('#nav-more-toggle .nav-more-arrow');if(arrow)arrow.textContent='▸';}
 }
 function renderTab(){
-  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,prodqueue:renderProductionQueue,qaqueue:renderQaQueue,shipqueue:renderShipQueue,installqueue:renderInstallQueue,procurement:renderProcurementCC,vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity};
+  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,prodqueue:renderProductionQueue,qaqueue:renderQaQueue,shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),procurement:renderProcurementCC,vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity};
   if(m[currentTab])m[currentTab]();
 }
 
@@ -1567,54 +1567,6 @@ const QUEUE_BOARDS={
       return null;
     },
   },
-  shipping:{
-    tabId:'shipqueue',title:'🚚 Shipping Queue',
-    subtitle:"moving through shipping · drag a card forward to close its milestone · click a card to open the project",
-    zones:[
-      {key:'hold',label:'On Hold',icon:'⏸',color:'#6b6b6b'},
-      {key:'ready',label:'Ready to Ship',icon:'📦',color:'#b45309'},
-      {key:'shipped',label:'Shipped',icon:'🚚',color:'#0891b2'},
-      {key:'delivered',label:'Delivered',icon:'✅',color:'#16a34a'},
-    ],
-    flow:['ready','shipped','delivered'],
-    // Falls back to the shared stage engine if a project has no quality-end
-    // milestone at all, same graceful-degrade pattern as the QA board.
-    zoneOf(p){
-      if(p.status==='on-hold')return'hold';
-      const pMs=milestones.filter(m=>m.project_id===p.id);
-      const has=k=>pMs.some(m=>m.key===k);
-      const stage=getProjectStage(p);
-      const qaDone=has('quality-end')?msCrossedOrDone(pMs,'quality-end'):(stage==='shipping'||stage==='delivered');
-      if(!qaDone)return null; // not out of QA yet — not this board's concern
-      if(has('shipping')&&msCrossedOrDone(pMs,'shipping')){
-        if(has('delivery')&&msCrossedOrDone(pMs,'delivery'))return'delivered';
-        return'shipped';
-      }
-      return'ready';
-    },
-    advanceKey(p,zoneKey){return{ready:'shipping',shipped:'delivery'}[zoneKey];},
-  },
-  installation:{
-    tabId:'installqueue',title:'🔧 Installation Queue',
-    subtitle:"waiting on or completing install · drag a card forward to close its milestone · click a card to open the project",
-    zones:[
-      {key:'hold',label:'On Hold',icon:'⏸',color:'#6b6b6b'},
-      {key:'ready',label:'Ready to Install',icon:'🚛',color:'#b45309'},
-      {key:'installed',label:'Installed',icon:'✅',color:'#16a34a'},
-    ],
-    flow:['ready','installed'],
-    zoneOf(p){
-      if(p.status==='on-hold')return'hold';
-      const pMs=milestones.filter(m=>m.project_id===p.id);
-      const has=k=>pMs.some(m=>m.key===k);
-      const stage=getProjectStage(p);
-      const deliveryDone=has('delivery')?msCrossedOrDone(pMs,'delivery'):stage==='delivered';
-      if(!deliveryDone)return null; // hasn't arrived on site yet — not this board's concern
-      if(has('installation')&&msCrossedOrDone(pMs,'installation'))return'installed';
-      return'ready';
-    },
-    advanceKey(p,zoneKey){return{ready:'installation'}[zoneKey];},
-  },
 };
 
 let queueFamilyFilter={};
@@ -1888,8 +1840,6 @@ function renderQueueBoard(boardKey){
 }
 function renderProductionQueue(){renderQueueBoard('production');}
 function renderQaQueue(){renderQueueBoard('qa');}
-function renderShipQueue(){renderQueueBoard('shipping');}
-function renderInstallQueue(){renderQueueBoard('installation');}
 
 // ── PROCUREMENT COMMAND CENTER ────────────────────────────────
 // Every number here is computed from real project/milestone/history data.
@@ -2196,8 +2146,8 @@ const CP_COMMANDS=[
   {label:'Capacity & Planning',icon:'📊',run:()=>setTab('capacity')},
   {label:'Production Queue',icon:'🧱',run:()=>setTab('prodqueue')},
   {label:'Quality / QA Queue',icon:'🔬',run:()=>setTab('qaqueue')},
-  {label:'Shipping',icon:'🚚',run:()=>setTab('shipqueue')},
-  {label:'Installation',icon:'🔧',run:()=>setTab('installqueue')},
+  {label:'Shipping',icon:'🚚',run:()=>setTab('shipping')},
+  {label:'Installation',icon:'🔧',run:()=>setTab('installation')},
   {label:'Dept check-in',icon:'🚦',run:()=>setTab('checkin')},
   {label:'Vinyl schedule',icon:'📀',run:()=>setTab('vinyl')},
   {label:'Planogram',icon:'🗂',run:()=>setTab('planogram')},
@@ -6662,7 +6612,7 @@ async function saveAdHoc(dept){
   }
   const{error}=await sb.from('adhoc_schedule').insert(row);
   if(error){alert('Error saving: '+error.message);return;}
-  closeModal();showToast('Added and saved ✓');await loadAll();dept==='shipping'?renderShipQueue():renderInstallQueue();
+  closeModal();showToast('Added and saved ✓');await loadAll();renderDeptView(dept);
 }
 function openEditAdHoc(dept,idx){
   const r=adHocRows[dept][idx];
@@ -6735,7 +6685,7 @@ async function saveEditAdHoc(dept,idx){
     shipDate:updates.ship_date,deliveryDate:updates.delivery_date,
     trainingDate:updates.training_date,installDate:updates.install_date,
   });
-  closeModal();showToast('Saved ✓');dept==='shipping'?renderShipQueue():renderInstallQueue();
+  closeModal();showToast('Saved ✓');renderDeptView(dept);
 }
 
 async function removeAdHoc(dept,idx){
@@ -6744,7 +6694,7 @@ async function removeAdHoc(dept,idx){
     await sb.from('adhoc_schedule').delete().eq('id',item.id);
   }
   adHocRows[dept].splice(idx,1);
-  dept==='shipping'?renderShipQueue():renderInstallQueue();showToast('Removed');
+  renderDeptView(dept);showToast('Removed');
 }
 
 // ── SETTINGS ──────────────────────────────────────────────
