@@ -497,6 +497,8 @@ function getSOConfigSummary(proj,soTag=''){
     odoo_url:d?.odoo_url??proj?.odoo_url??'',
     install_ticket_url:d?.install_ticket_url??proj?.install_ticket_url??'',
     ui_task_url:d?.ui_task_url??proj?.ui_task_url??'',
+    address:d?.address??proj?.address??'',
+    naming_convention:d?.naming_convention??proj?.naming_convention??'',
   };
 }
 
@@ -6171,11 +6173,13 @@ function renderInstallForm(){
 
 function renderUIForm(){
   const p=getDocProj();
+  const soDet=getEffectiveSODetail(p,selectedDocSO);
+  const formFactor=soDet?.form_factor||[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'';
   return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()" onfocusout="saveDocFormState(true)">
     <div class="doc-section-lbl">Project identifiers</div>
     ${fld('uf-cp','Channel Partner (CP)','e.g. TD Synnex, Direct','')}
     ${fld('uf-client','End Client (CX)','e.g. LinkedIn','','text',p.client||'')}
-    ${fld('uf-kiosk','Kiosk type / product','e.g. V8 SparkXL & 18in Locker','full','text',[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'')}
+    ${fld('uf-kiosk','Kiosk type / product','e.g. V8 SparkXL & 18in Locker','full','text',formFactor)}
     ${fld('uf-elevator','Vending unit elevator','e.g. Enhanced Quendra','')}
     ${fld('uf-screen','Screen size','e.g. 43"','')}
     <div class="doc-section-lbl">Configuration</div>
@@ -6203,17 +6207,22 @@ function renderUIForm(){
 
 function renderQAForm(){
   const p=getDocProj();
+  const soDet=getEffectiveSODetail(p,selectedDocSO);
   const shipDate=getDocDate('shipping');
   const vinylDate=getDocDate('vinyl');
+  const soNum=selectedDocSO||((p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean).length===1?(p.so_number||'').trim():p.so_number||'');
+  const address=soDet?.address??p.address??'';
+  const naming=soDet?.naming_convention??p.naming_convention??'';
+  const formFactor=soDet?.form_factor||[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'';
   return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()" onfocusout="saveDocFormState(true)">
     <div class="doc-section-lbl">Dates (auto-filled)</div>
     ${fld('qf-ship','Shipping date','','','text',shipDate)}
     ${fld('qf-vinyl','Vinyl date','','','text',vinylDate)}
     <div class="doc-section-lbl">Project details</div>
-    ${fld('qf-so','Sales Order (SO)','','','text',p.so_number||'')}
-    ${fld('qf-address','Installation address','','full','text',p.address||'')}
-    ${fld('qf-naming','Naming convention & locations','e.g. ALLIZ-BOURN-LON-SPXL','full','text',p.naming_convention||'')}
-    ${fld('qf-kiosk','Kiosk type / product','e.g. SparkXL','','text',[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'')}
+    ${fld('qf-so','Sales Order (SO)','','','text',soNum)}
+    ${fld('qf-address','Installation address','','full','text',address)}
+    ${fld('qf-naming','Naming convention & locations','e.g. ALLIZ-BOURN-LON-SPXL','full','text',naming)}
+    ${fld('qf-kiosk','Kiosk type / product','e.g. SparkXL','','text',formFactor)}
     ${fld('qf-lang','Language','e.g. English and German','')}
     ${fld('qf-hosting','Hosting','e.g. Default European Server','')}
     ${fld('qf-connectivity','Internet connectivity','e.g. LAN (primary), Wifi (backup)','full')}
@@ -6396,15 +6405,20 @@ Attachments: ${g('uf-attachments')}
 ${g('uf-branding')?`Branding Documents: ${g('uf-branding')}`:''}
 ${g('uf-special')?`\nNotes:\n${g('uf-special')}`:''}`;
   } else {
+    const qaP=proj||getDocProj();
+    const qaSoDet=getEffectiveSODetail(qaP,selectedDocSO);
+    const qaSoNum=selectedDocSO||((qaP.so_number||'').split(',').map(s=>s.trim()).filter(Boolean).length===1?(qaP.so_number||'').trim():safeGet('qf-so')||qaP.so_number||'');
+    const qaAddress=qaSoDet?.address??safeGet('qf-address')??qaP.address??'';
+    const qaNaming=qaSoDet?.naming_convention??g('qf-naming')??qaP.naming_convention??'';
     text=`QA TASK
 ${'─'.repeat(50)}
-Sales Order (SO): ${proj?.so_number||safeGet('qf-so')||''}
-Installation Address: ${proj?.address||safeGet('qf-address')||''}
+Sales Order (SO): ${qaSoNum}
+Installation Address: ${qaAddress}
 Shipping Date: ${g('qf-ship')}
 Vinyl Date: ${g('qf-vinyl')}
 
 Naming Convention and Locations:
-${g('qf-naming')}
+${qaNaming}
 
 Workflow:
 ${g('qf-workflows')}
