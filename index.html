@@ -920,8 +920,10 @@ const PIPELINE_STAGES=[
   {id:'parts-arrive',label:'Parts Arrived',    color:'#0891b2', icon:'📦', key:'arrival',      doneKey:'arrival'},
   {id:'production',  label:'In Production',    color:'#7c3aed', icon:'🏭', key:'production-start', endKey:'production-end', doneKey:'production-end'},
   {id:'qa',          label:'Quality / QA',     color:'#d97706', icon:'🔍', key:'quality-start',endKey:'quality-end',  doneKey:'quality-end'},
-  {id:'shipping',    label:'Shipping',          color:'#059669', icon:'🚚', key:'shipping',     doneKey:'shipping'},
-  {id:'delivered',   label:'Delivered',         color:'#16a34a', icon:'✅', key:'delivery',     doneKey:'delivery'},
+  {id:'shipping',    label:'Shipping',         color:'#059669', icon:'🚚', key:'shipping',     doneKey:'shipping'},
+  {id:'delivered',   label:'Delivered',        color:'#16a34a', icon:'📦', key:'delivery',     doneKey:'delivery'},
+  {id:'installation',label:'Installation',     color:'#db2777', icon:'🔧', key:'installation', doneKey:'installation'},
+  {id:'complete',    label:'Complete',         color:'#1a7a4a', icon:'✅', key:'installation', doneKey:'installation'},
 ];
 
 function getProjectStage(proj){
@@ -930,19 +932,29 @@ function getProjectStage(proj){
   const isDoneMs=key=>{const m=pMs.find(x=>x.key===key);return m?isMilestoneDone(m):false;};
   const t=today();
   const crossed=key=>{const d=getDate(key);return d&&new Date(d+'T00:00:00')<=t;};
+  const projectStatus=String(proj.status||'').trim().toLowerCase();
+  const projectComplete=['complete','completed','installed','closed'].includes(projectStatus);
 
-  // Walk stages from last to first — project is in the LAST stage whose start date has been crossed
-  // but whose done milestone is NOT yet marked done
+  // Installation is the true end of the workflow. A completed installation (or
+  // explicit completed project status) always wins over older shipping/delivery data.
+  if(projectComplete||isDoneMs('installation'))return'complete';
+  if(crossed('installation'))return'installation';
   if(isDoneMs('delivery')||crossed('delivery'))return'delivered';
   if(isDoneMs('shipping')||crossed('shipping'))return'shipping';
-  if(isDoneMs('quality-end')||crossed('quality-end'))return'delivered'; // past QA end → heading to shipping
+  if(isDoneMs('quality-end')||crossed('quality-end'))return'shipping';
   if(crossed('quality-start'))return'qa';
   if(isDoneMs('production-end')||crossed('production-end'))return'qa';
   if(crossed('production-start'))return'production';
   if(crossed('arrival')||isDoneMs('arrival'))return'parts-arrive';
   if(crossed('po-release'))return'parts-order';
   if(crossed('mo-release'))return'mo-release';
-  return'mo-release'; // default — not started yet
+  return'mo-release';
+}
+
+function getProjectCompletion(proj){
+  if(getProjectStage(proj)!=='complete')return null;
+  const install=milestones.find(m=>m.project_id===proj.id&&m.key==='installation');
+  return{date:install?.date||null};
 }
 
 // Dependencies, honestly derived: whatever stage a project is CURRENTLY in is,
@@ -952,7 +964,7 @@ function getProjectStage(proj){
 function getProjectBlocker(proj){
   const stage=getProjectStage(proj);
   const idx=PIPELINE_STAGES.findIndex(s=>s.id===stage);
-  if(idx===-1||idx===PIPELINE_STAGES.length-1)return null; // delivered — nothing downstream waiting
+  if(idx===-1||stage==='complete'||idx===PIPELINE_STAGES.length-1)return null; // complete — nothing downstream waiting
   const curStage=PIPELINE_STAGES[idx],nextStage=PIPELINE_STAGES[idx+1];
   const doneMs=curStage.doneKey?milestones.find(m=>m.project_id===proj.id&&m.key===curStage.doneKey):null;
   let estimate='No date set yet',overdue=false;
@@ -2801,7 +2813,7 @@ function renderOverview(){
           </details>
         </div>
       </div>
-      ${(()=>{const b=getProjectBlocker(proj);if(!b)return'';return`<div style="padding:8px 14px;background:${b.overdue?'var(--red-light)':'var(--gray-50)'};border-bottom:1px solid var(--gray-100);font-size:11.5px;color:${b.overdue?'var(--red)':'var(--gray-600)'}">🔗 ${b.blockedStage.label} is blocked by ${b.blockingStage.label} · ${b.estimate}</div>`;})()}
+      ${(()=>{const c=getProjectCompletion(proj);if(c)return`<div style="padding:8px 14px;background:var(--success-bg);border-bottom:1px solid #cfe8da;font-size:11.5px;color:var(--success);font-weight:600">✓ Project complete — Installed${c.date?' '+fmt(c.date):''}</div>`;const b=getProjectBlocker(proj);if(!b)return'';return`<div style="padding:8px 14px;background:${b.overdue?'var(--red-light)':'var(--gray-50)'};border-bottom:1px solid var(--gray-100);font-size:11.5px;color:${b.overdue?'var(--red)':'var(--gray-600)'}">🔗 ${b.blockedStage.label} is blocked by ${b.blockingStage.label} · ${b.estimate}</div>`;})()}
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
     </div>`:'<div class="empty-state">No projects yet.</div>'}`;
 }
