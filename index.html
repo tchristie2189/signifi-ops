@@ -493,10 +493,10 @@ function getSOConfigSummary(proj,soTag=''){
   return {
     so:soTag||((proj?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean).length===1?(proj.so_number||'').trim():''),
     form_factor:d?.form_factor??proj?.form_factor??proj?.product_type??'',
-    qa_task_url:d?.qa_task_url??proj?.qa_task_url??'',
-    odoo_url:d?.odoo_url??proj?.odoo_url??'',
-    install_ticket_url:d?.install_ticket_url??proj?.install_ticket_url??'',
-    ui_task_url:d?.ui_task_url??proj?.ui_task_url??'',
+    qa_task_url:d?.qa_task_url||proj?.qa_task_url||'',
+    odoo_url:d?.odoo_url||proj?.odoo_url||'',
+    install_ticket_url:d?.install_ticket_url||proj?.install_ticket_url||'',
+    ui_task_url:d?.ui_task_url||proj?.ui_task_url||'',
     address:d?.address??proj?.address??'',
     naming_convention:d?.naming_convention??proj?.naming_convention??'',
   };
@@ -3118,7 +3118,7 @@ function renderDeptView(dept){
     if(dept==='production'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td>';}
     else if(dept==='quality'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'vinyl'))+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'uat'))+'</td>';}
     else if(dept==='shipping'){
-      const sTicketUrl=p.install_ticket_url||'';
+      const sTicketUrl=getSOConfigSummary(p,'').install_ticket_url||'';
       const sTicketCell=sTicketUrl?'<a href="'+sTicketUrl+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
       extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'delivery'))+'</td>';
       extraAfterStatus='<td class="date-cell">'+sTicketCell+'</td>';
@@ -3184,8 +3184,8 @@ function renderDeptView(dept){
       let extra='';
       if(dept==='production'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td>';}
       else if(dept==='quality'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'vinyl'))+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'uat'))+'</td>';}
-      else if(dept==='shipping'){const sTicketUrl=p.install_ticket_url||'';const sTicketCell=sTicketUrl?'<a href="'+sTicketUrl+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'delivery'))+'</td>';extraAfterStatus='<td class="date-cell">'+sTicketCell+'</td>';}
-      else if(dept==='installation'){const trainMs=soMs.find(m=>m.key==='training');const instMs=soMs.find(m=>m.key==='installation');const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)">`:'—';const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)">`:'—';const confirmed=p.install_date_confirmed?`<span style="font-size:11px;color:var(--success);font-weight:600">✓ ${fmt(p.install_date_confirmed)}</span>`:'<span style="font-size:10px;color:var(--gray-400)">Pending</span>';const ticketUrl=p.install_ticket_url||'';const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>`:'-';extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';}
+      else if(dept==='shipping'){const sTicketUrl=getSOConfigSummary(p,so).install_ticket_url||'';const sTicketCell=sTicketUrl?'<a href="'+sTicketUrl+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'delivery'))+'</td>';extraAfterStatus='<td class="date-cell">'+sTicketCell+'</td>';}
+      else if(dept==='installation'){const trainMs=soMs.find(m=>m.key==='training');const instMs=soMs.find(m=>m.key==='installation');const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)">`:'—';const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)">`:'—';const confirmed=p.install_date_confirmed?`<span style="font-size:11px;color:var(--success);font-weight:600">✓ ${fmt(p.install_date_confirmed)}</span>`:'<span style="font-size:10px;color:var(--gray-400)">Pending</span>';const ticketUrl=getSOConfigSummary(p,so).install_ticket_url||'';const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>`:'-';extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';}
       const soStatusCell=dept==='shipping'?'<td>'+shipStatusDropdown(p.id,so,getShippingStatus(p,so))+'</td>':'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>';
       const html='<tr><td style="font-weight:500">'+p.name+' <span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:700">'+so+'</span><button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--red);font-weight:600">'+so+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+soStatusCell+extraAfterStatus+'</tr>';
       return{_d:sd||'',html};
@@ -5619,10 +5619,10 @@ function openSOConfigModal(projId,so){
   if(!proj)return;
   const saved=soDetails.find(d=>d.project_id===projId&&d.so_tag===so);
   const formFactor=saved?.form_factor??proj.form_factor??'';
-  const qaUrl=saved?.qa_task_url??proj.qa_task_url??'';
-  const odooUrl=saved?.odoo_url??proj.odoo_url??'';
-  const installUrl=saved?.install_ticket_url??proj.install_ticket_url??'';
-  const uiUrl=saved?.ui_task_url??proj.ui_task_url??'';
+  const qaUrl=saved?.qa_task_url||proj.qa_task_url||'';
+  const odooUrl=saved?.odoo_url||proj.odoo_url||'';
+  const installUrl=saved?.install_ticket_url||proj.install_ticket_url||'';
+  const uiUrl=saved?.ui_task_url||proj.ui_task_url||'';
   const types=getProductTypes();
   const selectedTypes=formFactor.split(',').map(s=>s.trim()).filter(Boolean);
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:480px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
@@ -5711,14 +5711,36 @@ async function savePPSection(key,value){
   showPPSaved();
 }
 
-async function savePPLink(label,url){
+async function syncQuickLinkToHub(label,url){
   const HUB_FIELD_MAP={'Odoo Task':'odoo_url','Jira / UI Task':'ui_task_url','QA Task':'qa_task_url','Product Template':'product_template_url','Badge Reader':'badge_reader_url','Employee List':'employee_list_url','Facility Site Survey':'facility_survey_url','IT Site Survey':'it_survey_url','Vision Training':'vision_training_url','Vinyl Render Odoo':'vinyl_odoo_url','Installation Ticket':'install_ticket_url','Kickoff deck':'kickoff_deck_url'};
   const hubField=HUB_FIELD_MAP[label];
-  if(hubField){
-    await sb.from('projects').update({[hubField]:url,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',ppProjId);
-    const proj=projects.find(p=>p.id===ppProjId);if(proj)proj[hubField]=url;
-    await logActivity('updated link',label,label,ppProjId,null,url);
+  if(!hubField||!ppProjId)return;
+  const cleanUrl=(url||'').trim();
+  await sb.from('projects').update({[hubField]:cleanUrl,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',ppProjId);
+  const proj=projects.find(p=>p.id===ppProjId);
+  if(proj)proj[hubField]=cleanUrl;
+  const singleSO=singleProjectSO(proj);
+  if(singleSO&&SHARED_CONFIG_FIELDS.includes(hubField)){
+    const existingSO=soDetails.find(d=>d.project_id===ppProjId&&d.so_tag===singleSO);
+    if(existingSO){
+      await sb.from('so_details').update({[hubField]:cleanUrl,updated_at:new Date().toISOString()}).eq('id',existingSO.id);
+      existingSO[hubField]=cleanUrl;
+    } else {
+      const{data}=await sb.from('so_details').insert({project_id:ppProjId,so_tag:singleSO,address:proj?.address||'',naming_convention:proj?.naming_convention||'',form_factor:proj?.form_factor||'',qa_task_url:hubField==='qa_task_url'?cleanUrl:(proj?.qa_task_url||''),odoo_url:hubField==='odoo_url'?cleanUrl:(proj?.odoo_url||''),install_ticket_url:hubField==='install_ticket_url'?cleanUrl:(proj?.install_ticket_url||''),ui_task_url:hubField==='ui_task_url'?cleanUrl:(proj?.ui_task_url||'')}).select().single();
+      if(data)soDetails.push(data);
+    }
   }
+  await logActivity('updated link',label,label,ppProjId,null,cleanUrl);
+}
+async function refreshLinkDependentViews(){
+  if(currentTab==='projpage')renderProjPage();
+  else if(currentTab==='shipping')renderDeptView('shipping');
+  else if(currentTab==='installation')renderDeptView('installation');
+  else if(currentTab==='gendocs')renderGenDocs();
+  else if(currentTab==='overview')renderOverview();
+}
+async function savePPLink(label,url){
+  await syncQuickLinkToHub(label,url);
   // Find existing row — check by label first, then by custom category placeholder (renamed links)
   const DEFAULT_CUSTOM=['Custom link 1','Custom link 2','Custom link 3','Custom link 4','Custom link 5'];
   let existing=ppData.links.find(l=>l.label===label);
@@ -5736,12 +5758,15 @@ async function savePPLink(label,url){
     if(data)ppData.links.push(data);
   }
   showPPSaved();
+  await refreshLinkDependentViews();
 }
 async function updatePPLink(label,idx,url){
   const entries=(ppData.links||[]).filter(l=>l.label===label);
   if(entries[idx]){await sb.from('project_links').update({url}).eq('id',entries[idx].id);entries[idx].url=url;}
   else{const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:'',sort_order:idx}).select().single();if(data)ppData.links.push(data);}
+  await syncQuickLinkToHub(label,url);
   showPPSaved();
+  await refreshLinkDependentViews();
 }
 async function addPPLink(label){
   const{data,error}=await sb.from('project_links').insert({project_id:ppProjId,label,url:'',category:'',sort_order:ppData.links.filter(l=>l.label===label).length}).select().single();
