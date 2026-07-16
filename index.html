@@ -791,7 +791,19 @@ async function loadAll(){
     sb.from('procurement_po_projects').select('*'),
     sb.from('procurement_readiness').select('*'),
   ]);
-  projects=pr.data||[];milestones=ms.data||[];activityLog=lg.data||[];
+  projects=pr.data||[];activityLog=lg.data||[];
+  // Guard: never let a failed/empty milestones fetch wipe what's already loaded.
+  // Previously `milestones=ms.data||[]` unconditionally overwrote the array, so
+  // any transient error on this one query (RLS hiccup, rate limit, network blip)
+  // silently blanked the milestone tracker everywhere (Glance/Overview/Project page)
+  // right after a save, looking exactly like the milestones had been deleted.
+  if(ms.error){
+    console.error('milestones load error — keeping previous data',ms.error);
+    showToast('⚠ Milestones failed to refresh: '+ms.error.message);
+  } else if(ms.data){
+    milestones=ms.data;
+  }
+  // else: no error and no data (shouldn't normally happen) — keep previous data rather than blanking
   // Procurement tables (empty until the migration is run — panel hides gracefully)
   procPoData=ppo.data||[];procLinkData=ppl.data||[];
   procReadyData={};(prd.data||[]).forEach(r=>{procReadyData[r.project_id]=r;});
@@ -5474,8 +5486,6 @@ function renderProjPageBody(){
         <button class="pp-add-btn" onclick="addPMTaskRow('${ppProjId}','pmt-body-${ppProjId}')">+ Add task</button>
       </div>
 
-      ${renderProcPanel(ppProjId)}
-
       <div class="pp-card">
         <div class="pp-card-head">
           <span class="pp-card-title">Milestone tracker</span>
@@ -5539,6 +5549,11 @@ function renderProjPageBody(){
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- ROW 2b: Procurement (full-width, underneath PM Tasks / Milestone tracker) -->
+    <div style="margin-bottom:12px">
+      ${renderProcPanel(ppProjId)}
     </div>
 
     <!-- ROW 3: Project Team compact full-width -->
