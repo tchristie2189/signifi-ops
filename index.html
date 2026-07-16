@@ -4308,7 +4308,18 @@ async function saveIntake(){
     {id:'i-inst',key:'installation',label:'Installation'},
     {id:'i-care',key:'other',label:'Customer care start'},
   ];
-  const ins=msFields.map(f=>{const v=document.getElementById(f.id)?.value;return v?{project_id:proj.id,key:f.key,label:f.label,date:v,changed_by:currentUserName}:null;}).filter(Boolean);
+  // FIX: ALWAYS generate the complete milestone skeleton — dated where provided,
+  // undated (null) otherwise — so every milestone exists in the tracker from day one
+  // for Standard, Fast track, AND no-template/blank projects alike.
+  // IMAC and Software-only templates keep their intentionally trimmed sets.
+  const TEMPLATE_FIELD_SETS={
+    'imac':['i-po','i-train','i-ship','i-del','i-inst'],
+    'software-only':['i-po','i-ui-s','i-ui-e','i-qs','i-qe','i-fqa','i-uat','i-del','i-inst']
+  };
+  const _allowedIds=TEMPLATE_FIELD_SETS[selectedTemplate]||null;
+  const ins=msFields
+    .filter(f=>!_allowedIds||_allowedIds.includes(f.id))
+    .map(f=>({project_id:proj.id,key:f.key,label:f.label,date:document.getElementById(f.id)?.value||null,changed_by:currentUserName}));
 
   // Auto-split milestones by SO if multiple SOs entered
   const soList=so.split(',').map(s=>s.trim()).filter(Boolean);
@@ -4498,7 +4509,9 @@ function openEditProj(id){
           <input id="ep-vinyl-odoo" value="${proj.vinyl_odoo_url||''}" placeholder="https://signifisolutions.odoo.com/..." style="font-family:var(--mono);font-size:12px">
         </div>
       </div>
-      <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">Milestone dates</div>
+      <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100);display:flex;justify-content:space-between;align-items:center">Milestone dates
+        <button type="button" onclick="backfillMilestones('${id}')" style="font-size:10px;padding:3px 10px;border:1px solid var(--gray-300);border-radius:12px;background:var(--white);cursor:pointer;font-family:var(--font);text-transform:none;letter-spacing:0;font-weight:500" title="Creates any milestones this project is missing (undated) so they can be scheduled — fixes projects created before the full-skeleton fix">➕ Generate missing milestones</button>
+      </div>
       ${msRows}
     </div>
     <div class="modal-actions"><button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="deleteProj('${id}')">Delete</button><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditProj('${id}')">Save</button></div>
@@ -8704,5 +8717,41 @@ onProjPageSearch=function(val){
 };
 </script>
 
+<script>
+// ── BACKFILL MISSING MILESTONES (repair tool for projects created before the fix) ──
+const FULL_MS_SET=[
+  ['po-release','PO Release'],['mo-release','MO Release'],
+  ['arrival','Parts ordering start'],['arrival','Parts arrival'],['arrival','Inventory pick'],
+  ['production-start','Production start'],['production-end','Production end'],
+  ['other','Planogram sign-off'],['other','Planogram start'],['other','Planogram end'],
+  ['other','UI start'],['other','UI end'],
+  ['quality-start','Quality start'],['quality-end','Quality end'],['final-qc','Final QC'],
+  ['vinyl','Vinyl / branding'],['uat','UAT'],
+  ['shipping','Pack & ship'],['delivery','Delivery'],
+  ['training','Training'],['installation','Installation'],
+  ['other','Customer care start'],
+];
+async function backfillMilestones(projId){
+  const proj=projects.find(p=>p.id===projId);if(!proj)return;
+  const projMs=milestones.filter(m=>m.project_id===projId);
+  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const hasSoTags=projMs.some(m=>m.so_tag);
+  const targets=(hasSoTags&&soList.length>1)?soList:[null];
+  const ins=[];
+  targets.forEach(tag=>{
+    const existing=new Set(projMs.filter(m=>!tag||m.so_tag===tag).map(m=>(m.label||'').toLowerCase().trim()));
+    FULL_MS_SET.forEach(([key,label])=>{
+      if(!existing.has(label.toLowerCase()))ins.push(Object.assign({project_id:projId,key,label,date:null,changed_by:currentUserName},tag?{so_tag:tag}:{}));
+    });
+  });
+  if(!ins.length){showToast('All milestones already exist ✓');return;}
+  if(!confirm('Generate '+ins.length+' missing milestone'+(ins.length!==1?'s':'')+' (undated) for "'+proj.name+'"?'))return;
+  const{error}=await sb.from('milestones').insert(ins);
+  if(error){alert('Error: '+error.message);return;}
+  await logActivity('generated missing milestones',proj.name||'',proj.so_number||'',projId,null,String(ins.length));
+  showToast(ins.length+' missing milestones generated ✓');
+  closeModal();await loadAll();
+}
+</script>
 </body>
 </html>
