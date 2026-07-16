@@ -484,14 +484,14 @@ function truncateSOTitle(so){return so||'';}
 // selected SO when one is supplied.
 function getEffectiveSODetail(proj,soTag=''){
   if(!proj)return null;
-  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const effectiveSO=soTag||(soList.length===1?soList[0]:'');
   return effectiveSO?soDetails.find(d=>d.project_id===proj.id&&d.so_tag===effectiveSO)||null:null;
 }
 function getSOConfigSummary(proj,soTag=''){
   const d=getEffectiveSODetail(proj,soTag);
   return {
-    so:soTag||((proj?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean).length===1?(proj.so_number||'').trim():''),
+    so:soTag||((proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean).length===1?(proj.so_number||'').trim():''),
     form_factor:d?.form_factor??proj?.form_factor??proj?.product_type??'',
     qa_task_url:d?.qa_task_url||proj?.qa_task_url||'',
     odoo_url:d?.odoo_url||proj?.odoo_url||'',
@@ -771,8 +771,10 @@ function renderTab(){
 }
 
 // ── DATA ───────────────────────────────────────────────────
+// SO lists are split tolerantly (comma / space / semicolon) hub-wide — so_number data uses mixed separators
+let procPoData=[],procLinkData=[],procReadyData={};
 async function loadAll(){
-  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext]=await Promise.all([
+  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext,ppo,ppl,prd]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
     sb.from('milestones').select('*').order('date'),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
@@ -785,8 +787,14 @@ async function loadAll(){
     sb.from('milestone_deviations').select('*'),
     sb.from('so_details').select('*'),
     sb.from('extension_requests').select('*').order('created_at',{ascending:false}),
+    sb.from('procurement_po').select('*'),
+    sb.from('procurement_po_projects').select('*'),
+    sb.from('procurement_readiness').select('*'),
   ]);
   projects=pr.data||[];milestones=ms.data||[];activityLog=lg.data||[];
+  // Procurement tables (empty until the migration is run — panel hides gracefully)
+  procPoData=ppo.data||[];procLinkData=ppl.data||[];
+  procReadyData={};(prd.data||[]).forEach(r=>{procReadyData[r.project_id]=r;});
   checkinStatus={};(ci.data||[]).forEach(c=>{checkinStatus[c.milestone_id]=c;});
   milestoneDone={};(md.data||[]).forEach(d=>{milestoneDone[d.milestone_id]=d;});
   soDetails=sod.data||[];
@@ -844,7 +852,7 @@ async function loadAll(){
   const newVinylRows=projects.filter(p=>!vinylProjectIds.has(p.id)).flatMap((p,i)=>{
     const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl');
     const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping');
-    const soList=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const soList=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
     // One row per SO if multiple, otherwise one row with full SO string
     const entries=soList.length>1?soList:[p.so_number||''];
     return entries.map((so,j)=>({id:null,project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),so,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+j+1,is_standalone:false}));
@@ -1077,7 +1085,7 @@ function renderPipeline(){
       const healthColor=health==='red'?'#ef4444':health==='amber'?'#f59e0b':'#22c55e';
       const healthBg=health==='red'?'#fef2f2':health==='amber'?'#fffbeb':'#f0fdf4';
       const borderColor=health==='red'?'#fca5a5':health==='amber'?'#fde68a':'#bbf7d0';
-      const soList=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+      const soList=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
       const soDisplay=soList.length>2?soList.slice(0,2).join(', ')+` +${soList.length-2}`:p.so_number||'—';
       const upcoming=pMs.filter(m=>m.date&&daysDiff(m.date)>=0).sort((a,b)=>a.date.localeCompare(b.date))[0];
       const deptCis=pMs.map(m=>checkinStatus[m.id]).filter(Boolean);
@@ -1773,7 +1781,7 @@ function queueCard(p,boardKey){
         <button onclick="event.stopPropagation();setProjectImage('${p.id}','${boardKey}')" title="Change photo" style="position:absolute;top:4px;right:4px;width:18px;height:18px;border-radius:50%;border:none;background:rgba(0,0,0,0.55);color:white;font-size:9px;cursor:pointer;line-height:1">✎</button>
       </div>`
     :`<button onclick="event.stopPropagation();setProjectImage('${p.id}','${boardKey}')" style="width:100%;font-size:9.5px;color:var(--gray-400);background:white;border:1px dashed var(--gray-200);border-radius:6px;padding:4px;margin:-1px 0 6px;cursor:pointer;font-family:var(--font)">+ Add photo</button>`;
-  const soList=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soList=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const soDisplay=soList.length>2?soList.slice(0,2).join(', ')+` +${soList.length-2}`:(p.so_number||'—');
   const receipt=getProductionReceipts()[p.id];
   const receiptLabel=boardKey==='qa'?'Received by QA':'Received';
@@ -2422,7 +2430,7 @@ function renderGlance(){
             ${isComplete?'<span style="font-size:10px;padding:1px 7px;border-radius:10px;background:var(--gray-100);color:var(--gray-500);font-weight:600">Complete</span>':''}
             ${(()=>{
               const kids=getChildren(p.id);
-              const soCount=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean).length;
+              const soCount=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean).length;
               const hasSoSplit=milestones.some(m=>m.project_id===p.id&&m.so_tag);
               if(kids.length>0)return`<span style="font-size:9px;padding:1px 7px;border-radius:10px;background:#fce7f3;color:#be185d;font-weight:700">🏛 ${kids.length} children — migrate in Settings</span>`;
               if(hasSoSplit&&soCount>1)return`<span style="font-size:9px;padding:1px 7px;border-radius:10px;background:#fff0f0;color:#e22f4a;font-weight:700">📋 ${soCount} SOs</span>`;
@@ -2490,7 +2498,7 @@ function getReadinessData(){
 
   const missingNaming=[];
   active.forEach(p=>{
-    const sos=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const sos=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
     if(!sos.length)return;
     if(sos.length===1){
       const d=soDetails.find(x=>x.project_id===p.id&&x.so_tag===sos[0]);
@@ -2503,7 +2511,7 @@ function getReadinessData(){
     'Naming is checked per Sales Order. Multi-SO projects require naming for each SO.');
 
   const duplicateMap={};
-  active.forEach(p=>(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(so=>{(duplicateMap[so]??=[]).push(p);}));
+  active.forEach(p=>(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean).forEach(so=>{(duplicateMap[so]??=[]).push(p);}));
   const duplicates=[];
   Object.entries(duplicateMap).filter(([,ps])=>ps.length>1).forEach(([so,ps])=>ps.forEach(p=>duplicates.push(projectItem(p,so))));
   add('duplicate-so','Duplicate Sales Orders','critical','sales',duplicates,
@@ -2670,7 +2678,7 @@ async function rqaSetSO(pid,val){
 
 // ── SHARED PROJECT / SO CONFIG SYNC ─────────────────────────
 const SHARED_CONFIG_FIELDS=['address','naming_convention','form_factor','qa_task_url','odoo_url','install_ticket_url','ui_task_url'];
-function projectSOList(proj){return (proj?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);}
+function projectSOList(proj){return (proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);}
 function singleProjectSO(proj){const list=projectSOList(proj);return list.length===1?list[0]:'';}
 function effectiveProjectConfig(proj){
   const so=singleProjectSO(proj);
@@ -2714,7 +2722,7 @@ function renderOverview(){
   const overviewNamingSafe=overviewNaming.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
   // Check if milestones are already split by SO
-  const soList=(proj?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soList=(proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const hasSoTags=projMs.some(m=>m.so_tag);
   const canSplit=soList.length>1&&!hasSoTags;
 
@@ -2886,7 +2894,7 @@ function openAddMsForProj(projId){
   const proj=projects.find(p=>p.id===projId);
   const projMs=milestones.filter(m=>m.project_id===projId);
   const hasSoTags=projMs.some(m=>m.so_tag);
-  const soList=(proj?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soList=(proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   // For SO-split projects show a dropdown so the milestone lands in the right group
   const soField=hasSoTags&&soList.length>1
     ?`<div class="field"><label>SO</label><select id="em-so">${soList.map(so=>`<option value="${so}">${so}</option>`).join('')}</select></div>`
@@ -3163,7 +3171,7 @@ function renderDeptView(dept){
   };
 
   const projRows=filteredProjects.flatMap(p=>{
-    const soList=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const soList=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
     const pMs=milestones.filter(m=>m.project_id===p.id);
     const hasSoTags=pMs.some(m=>m.so_tag);
     // If single SO or no SO tags — one row as normal
@@ -3418,7 +3426,7 @@ async function syncVinylFromProjects(){
     const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'&&m.date&&m.date>=today_str);
     const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping');
     if(!vm)continue;
-    const soList=(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const soList=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
     const entries=soList.length>1?soList:[p.so_number||''];
     for(const so of entries){
       // Only check project-linked rows (never standalone/ad hoc)
@@ -3817,7 +3825,7 @@ function renderCheckinOverview(){
         // Falls back to compact list only if there's no so_tag (pre-split projects)
         const soTag=m._adhoc?(m._raw?.so||''):m.so_tag||'';
         const rawSO=soTag||(proj?proj.so_number:'');
-        const soList=rawSO.split(',').map(s=>s.trim()).filter(Boolean);
+        const soList=rawSO.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
         const compactSO=soTag?soTag:(soList.length>2?soList.slice(0,2).join(', ')+' <span style="color:var(--gray-400)">+'+(soList.length-2)+'</span>':rawSO);
         const soHtml=rawSO?'<span style="font-family:var(--mono);font-size:10px;color:var(--red)">'+compactSO+'</span>':'';
 
@@ -3884,7 +3892,7 @@ function renderCheckinOverview(){
       const ageMins=ci.stoplight_at?Math.round((Date.now()-new Date(ci.stoplight_at).getTime())/60000):0;
       const ageStr=ageMins<60?ageMins+'m':ageMins<1440?Math.round(ageMins/60)+'h':Math.round(ageMins/1440)+'d';
       const rawSO=proj?.so_number||'';
-      const soList=rawSO.split(',').map(s=>s.trim()).filter(Boolean);
+      const soList=rawSO.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
       const compactSO=soList.length>2?soList.slice(0,2).join(', ')+'…':rawSO;
       return'<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:8px 0;border-top:1px solid #7f1d1d;font-size:12px;color:#fecaca">'+
         '<div><strong>'+(proj?proj.name:m.label)+'</strong>'+(compactSO?' <span style="font-family:var(--mono);font-size:10px;opacity:0.7">'+compactSO+'</span>':'')+' — '+m.label+
@@ -4322,7 +4330,7 @@ async function saveIntake(){
     .map(f=>({project_id:proj.id,key:f.key,label:f.label,date:document.getElementById(f.id)?.value||null,changed_by:currentUserName}));
 
   // Auto-split milestones by SO if multiple SOs entered
-  const soList=so.split(',').map(s=>s.trim()).filter(Boolean);
+  const soList=so.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
 
   // The database creates starter PO / MO / Parts milestones when a project is inserted.
   // Remove those trigger-created rows before saving the complete intake timeline;
@@ -4390,7 +4398,7 @@ function openEditProj(id){
   const overviewConfig=effectiveProjectConfig(proj);
   const projMs=milestones.filter(m=>m.project_id===id);
   const hasSoTags=projMs.some(m=>m.so_tag);
-  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   let msRows='';
   if(hasSoTags&&soList.length>1){
     // Group milestones under SO headers so they're not one giant repeated flat list
@@ -4569,7 +4577,7 @@ async function saveEditProj(id){
   // AUTO-ADD MILESTONES FOR NEWLY ADDED SOs
   // If this project is already SO-split and the SO field gained new SOs, clone milestones for them
   const newSoNumber=document.getElementById('ep-so').value.trim();
-  const newSoList=newSoNumber.split(',').map(s=>s.trim()).filter(Boolean);
+  const newSoList=newSoNumber.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const existingTags=[...new Set(milestones.filter(m=>m.project_id===id&&m.so_tag).map(m=>m.so_tag))];
   const brandNewSOs=newSoList.filter(so=>!existingTags.includes(so));
   if(existingTags.length>0&&brandNewSOs.length>0){
@@ -4605,7 +4613,7 @@ async function saveEditProj(id){
 async function splitMilestonesBySO(projId){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
-  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   if(soList.length<2){showToast('Project needs multiple SOs to split');return;}
   if(!confirm('Split milestones into '+soList.length+' groups ('+soList.join(', ')+')? This will create a copy of all milestones for each SO.'))return;
   const existingMs=milestones.filter(m=>m.project_id===projId);
@@ -4627,7 +4635,7 @@ async function splitMilestonesBySO(projId){
 async function pushSODatesToAll(projId,fromSO){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
-  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const otherSOs=soList.filter(s=>s!==fromSO);
   if(!otherSOs.length)return;
   if(!confirm('Push all dates from SO '+fromSO+' to '+otherSOs.join(', ')+'?\n\nThis overwrites their dates.'))return;
@@ -4706,7 +4714,7 @@ async function saveEditMs(id,oldLabel,oldDate){
 
   // If this milestone has a so_tag and date changed, offer to push to all SOs
   if(ms?.so_tag&&newDate&&oldDate!==newDate&&proj){
-    const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
     const otherSOs=soList.filter(s=>s!==ms.so_tag);
     if(otherSOs.length){
       closeModal();
@@ -4744,7 +4752,7 @@ async function saveEditMs(id,oldLabel,oldDate){
 async function pushSODateToOthers(projId,fromSO,msKey,newDate,msLabel){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
-  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const otherSOs=soList.filter(s=>s!==fromSO);
   let updated=0;
   for(const so of otherSOs){
@@ -4967,7 +4975,7 @@ function toggleAllSOView(){
   if(window._allSOSourceProjId!==ppProjId){window._allSOSourceOverride=null;window._allSOSourceProjId=ppProjId;}
 
   // Support both SO-split (so_tag on milestones) and campaign children (separate projects per SO)
-  const soListFromField=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soListFromField=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const children=getChildren(ppProjId); // campaign children
 
   // Determine mode: so_tag split or campaign children
@@ -5073,7 +5081,7 @@ function toggleAllSOView(){
 async function pushMsKeyToAllSOs(key,date,projId,label){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
-  const soListFromField=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soListFromField=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const tagsPresent=[...new Set(milestones.filter(m=>m.project_id===projId&&m.so_tag).map(m=>m.so_tag))];
   const soList=[...new Set([...soListFromField,...tagsPresent])];
   const children=getChildren(projId);
@@ -5105,7 +5113,7 @@ async function pushMsKeyToAllSOs(key,date,projId,label){
 
 async function pushAllMilestoneKeysToAllSOs(projId,explicitSourceSO){
   const proj=projects.find(p=>p.id===projId);
-  const soListFromField=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soListFromField=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const tagsPresent=[...new Set(milestones.filter(m=>m.project_id===projId&&m.so_tag).map(m=>m.so_tag))];
   const soList=[...new Set([...soListFromField,...tagsPresent])];
   const firstSO=explicitSourceSO||soList.find(so=>milestones.some(m=>m.project_id===projId&&m.so_tag===so))||soList[0];
@@ -5128,7 +5136,7 @@ async function pushAllMilestoneKeysToAllSOs(projId,explicitSourceSO){
 async function addMissingSOMilestones(projId,missingSOsStr){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
-  const missingSOs=missingSOsStr.split(',').filter(Boolean);
+  const missingSOs=missingSOsStr.split(/[\s,;]+/).filter(Boolean);
   if(!missingSOs.length)return;
   // Use the SO with the most complete milestone set as the template
   const allTags=[...new Set(milestones.filter(m=>m.project_id===projId&&m.so_tag).map(m=>m.so_tag))];
@@ -5153,7 +5161,7 @@ async function addMissingSOMilestones(projId,missingSOsStr){
 function switchProjPageBySO(so){
   // For SO-split projects: scroll to that SO's group in the milestone tracker
   // Only navigate away if it's a campaign child project with its own page
-  const child=projects.find(p=>p.id!==ppProjId&&p.parent_project_id===ppProjId&&p.so_number&&p.so_number.split(',').map(s=>s.trim()).includes(so));
+  const child=projects.find(p=>p.id!==ppProjId&&p.parent_project_id===ppProjId&&p.so_number&&p.so_number.split(/[\s,;]+/).map(s=>s.trim()).includes(so));
   if(child){switchProjPage(child.id);return;}
   // Same project — find the SO header span in the milestone table and scroll to it
   const spans=[...document.querySelectorAll('span')];
@@ -5246,7 +5254,7 @@ function renderProjPageBody(){
   // Milestones from hub — group by SO if split
   const ppProj=projects.find(p=>p.id===ppProjId);
   const ppHasSoTags=pMs.some(m=>m.so_tag);
-  const ppSoList=(ppProj?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const ppSoList=(ppProj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
 
   const buildPPMsRow=(m)=>{
     const isDone=isMilestoneEffectivelyDone(m);
@@ -5354,7 +5362,7 @@ function renderProjPageBody(){
           ${isChild(proj)?`<button onclick="switchProjPage('${proj.parent_project_id}')" style="font-size:10px;padding:2px 10px;border-radius:10px;border:1px solid #e879f9;background:rgba(232,121,249,0.15);color:#e879f9;cursor:pointer;font-family:var(--font)">🏛 Back to master</button>`:''}
         </div>
         <div class="pp-meta">
-          <span>📋 SO: ${(proj.so_number||'').split(',').map(s=>{const so=s.trim();return so?'<strong style="cursor:pointer;text-decoration:underline;color:#93c5fd" onclick="switchProjPageBySO(\''+so+'\')" title="Go to '+so+'">'+so+'</strong>':''}).join(', ')||'—'}</span>
+          <span>📋 SO: ${(proj.so_number||'').split(/[\s,;]+/).map(s=>{const so=s.trim();return so?'<strong style="cursor:pointer;text-decoration:underline;color:#93c5fd" onclick="switchProjPageBySO(\''+so+'\')" title="Go to '+so+'">'+so+'</strong>':''}).join(', ')||'—'}</span>
           <span>👤 PM: <strong>${proj.pm||'—'}</strong></span>
           <span>🏢 ${proj.client||'—'}</span>
           ${proj.product_type?`<span>📦 ${proj.product_type}</span>`:''}
@@ -5465,6 +5473,8 @@ function renderProjPageBody(){
         </div>
         <button class="pp-add-btn" onclick="addPMTaskRow('${ppProjId}','pmt-body-${ppProjId}')">+ Add task</button>
       </div>
+
+      ${renderProcPanel(ppProjId)}
 
       <div class="pp-card">
         <div class="pp-card-head">
@@ -6143,7 +6153,7 @@ function renderGenDocs(){
         ${(()=>{
           if(!selectedDocProjId)return'';
           const dp=projects.find(p=>p.id===selectedDocProjId);
-          const dSoList=(dp?.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+          const dSoList=(dp?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
           const dHasSoTags=milestones.some(m=>m.project_id===selectedDocProjId&&m.so_tag);
           if(dSoList.length<=1&&!dHasSoTags)return'';
           return'<div class="proj-select-row" style="margin-top:6px"><label>SO</label>'
@@ -6340,7 +6350,7 @@ function renderQAForm(){
   const soDet=getEffectiveSODetail(p,selectedDocSO);
   const shipDate=getDocDate('shipping');
   const vinylDate=getDocDate('vinyl');
-  const soNum=selectedDocSO||((p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean).length===1?(p.so_number||'').trim():p.so_number||'');
+  const soNum=selectedDocSO||((p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean).length===1?(p.so_number||'').trim():p.so_number||'');
   const address=soDet?.address??p.address??'';
   const naming=soDet?.naming_convention??p.naming_convention??'';
   const formFactor=soDet?.form_factor||[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'';
@@ -6537,7 +6547,7 @@ ${g('uf-special')?`\nNotes:\n${g('uf-special')}`:''}`;
   } else {
     const qaP=proj||getDocProj();
     const qaSoDet=getEffectiveSODetail(qaP,selectedDocSO);
-    const qaSoNum=selectedDocSO||((qaP.so_number||'').split(',').map(s=>s.trim()).filter(Boolean).length===1?(qaP.so_number||'').trim():safeGet('qf-so')||qaP.so_number||'');
+    const qaSoNum=selectedDocSO||((qaP.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean).length===1?(qaP.so_number||'').trim():safeGet('qf-so')||qaP.so_number||'');
     const qaAddress=qaSoDet?.address??safeGet('qf-address')??qaP.address??'';
     const qaNaming=qaSoDet?.naming_convention??g('qf-naming')??qaP.naming_convention??'';
     text=`QA TASK
@@ -7293,7 +7303,7 @@ async function addFinalQCToAllProjects(){
     const hasSoTags=projMs.some(m=>m.so_tag);
     if(hasSoTags){
       // SO-split — handle per SO
-      const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+      const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
       const tagsSeen=[...new Set(projMs.map(m=>m.so_tag).filter(Boolean))];
       const allSOs=[...new Set([...soList,...tagsSeen])];
       for(const so of allSOs){
@@ -7672,7 +7682,7 @@ async function renamePPLink(oldLabel,newLabel){
 }
 function openLinksPopout(soOverride=''){
   const proj=projects.find(p=>p.id===ppProjId)||{};
-  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const activeSO=soOverride||(soList.length===1?soList[0]:'');
   const soConfig=getSOConfigSummary(proj,activeSO);
   const ALL_LINKS=[
@@ -8734,7 +8744,7 @@ const FULL_MS_SET=[
 async function backfillMilestones(projId){
   const proj=projects.find(p=>p.id===projId);if(!proj)return;
   const projMs=milestones.filter(m=>m.project_id===projId);
-  const soList=(proj.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const hasSoTags=projMs.some(m=>m.so_tag);
   const targets=(hasSoTags&&soList.length>1)?soList:[null];
   const ins=[];
@@ -8753,5 +8763,63 @@ async function backfillMilestones(projId){
   closeModal();await loadAll();
 }
 </script>
+<script>
+// ═══ PROCUREMENT PANEL (hub side) — reads the shared procurement tables ═══
+function hubProcPosFor(p){
+  const sos=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const ids=new Set((procLinkData||[]).filter(l=>l.project_id===p.id||(l.so_number&&sos.includes(l.so_number))).map(l=>l.po_id));
+  return (procPoData||[]).filter(x=>ids.has(x.id)&&x.status!=='cancelled');
+}
+function hubProcStatus(p){
+  const list=hubProcPosFor(p);
+  if(!list.length)return{label:'No POs yet',bg:'var(--gray-100)',fg:'var(--gray-500)'};
+  const open=list.filter(x=>x.status!=='received');
+  const late=open.filter(x=>x.eta&&daysDiff(x.eta)<0);
+  if(late.length)return{label:'🚨 Vendor late ('+late.length+')',bg:'var(--red-light)',fg:'var(--red)'};
+  if(!open.length)return{label:'✅ Ready for Inventory',bg:'var(--success-bg)',fg:'var(--success)'};
+  if(list.some(x=>x.status==='partial'))return{label:'Partial received',bg:'var(--warning-bg)',fg:'var(--warning)'};
+  if(list.every(x=>x.odoo_status==='rfq'))return{label:'RFQ — cost pending',bg:'#f3e8ff',fg:'#7c3aed'};
+  return{label:'Waiting vendor',bg:'var(--blue-bg)',fg:'var(--blue)'};
+}
+function renderProcPanel(pid){
+  const p=projects.find(x=>x.id===pid);if(!p)return'';
+  if(typeof procPoData==='undefined'||procPoData===null)return'';
+  const e=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const list=hubProcPosFor(p).sort((a,b)=>(a.eta||'9999').localeCompare(b.eta||'9999'));
+  const st=hubProcStatus(p);
+  const recv=list.filter(x=>x.status==='received').length;
+  const rd=(procReadyData||{})[pid];
+  const stopHtml=rd?.stoplight?`<span style="font-size:11px;font-weight:600;padding:4px 10px;border-radius:14px;${rd.stoplight==='green'?'background:var(--success-bg);color:var(--success)':rd.stoplight==='yellow'?'background:var(--warning-bg);color:var(--warning)':'background:var(--red-light);color:var(--red)'}">${rd.stoplight==='green'?'🟢 Can meet date':rd.stoplight==='yellow'?'🟡 At risk':'🔴 Cannot meet date'}</span>${rd.reason?`<span style="font-size:10.5px;color:var(--gray-500)"> — ${e(rd.reason)} <span style="color:var(--gray-300)">(${e(rd.updated_by||'')})</span></span>`:''}`:'<span style="font-size:10.5px;color:var(--gray-400)">No readiness check-in yet</span>';
+  const prio=p.priority==='critical'?'<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:var(--red-light);color:var(--red)">🔴 CRITICAL</span>':p.priority==='high'?'<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:var(--warning-bg);color:var(--warning)">🟡 HIGH</span>':'';
+  const rows=list.slice(0,12).map(po=>{
+    const late=po.status!=='received'&&po.eta&&daysDiff(po.eta)<0;
+    const pill=po.odoo_status==='rfq'?'<span style="font-size:9px;font-weight:700;padding:2px 8px;border-radius:8px;background:#f3e8ff;color:#7c3aed">RFQ</span>':po.status==='received'?'<span style="font-size:9px;font-weight:700;padding:2px 8px;border-radius:8px;background:var(--success-bg);color:var(--success)">Received</span>':po.status==='partial'?'<span style="font-size:9px;font-weight:700;padding:2px 8px;border-radius:8px;background:var(--warning-bg);color:var(--warning)">Partial</span>':'<span style="font-size:9px;font-weight:700;padding:2px 8px;border-radius:8px;background:var(--blue-bg);color:var(--blue)">Open</span>';
+    return`<tr>
+      <td style="font-family:var(--mono);font-size:11px">${e(po.po_number||'—')}</td>
+      <td style="font-size:11.5px;font-weight:500">${e(po.vendor||'—')}</td>
+      <td>${pill}</td>
+      <td style="font-family:var(--mono);font-size:10.5px;${late?'color:var(--red);font-weight:700':''}">${po.status==='received'?'✓ '+fmt(po.received_at):fmt(po.eta)}${late?' · '+Math.abs(daysDiff(po.eta))+'d late':''}</td>
+      <td>${po.tracking?`<a href="${e(po.tracking.startsWith('http')?po.tracking:'https://'+po.tracking)}" target="_blank" style="font-size:10px;color:var(--blue)">Track ↗</a>`:''}</td>
+    </tr>`;
+  }).join('');
+  return`
+  <div class="pp-card">
+    <div class="pp-card-head">
+      <span class="pp-card-title">🛒 Procurement ${prio}</span>
+      <span style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:11px;font-weight:700;padding:4px 12px;border-radius:14px;background:${st.bg};color:${st.fg}">${st.label}</span>
+        ${list.length?`<span style="font-size:10px;color:var(--gray-500);font-family:var(--mono)">${recv}/${list.length} received</span>`:''}
+      </span>
+    </div>
+    <div style="padding:9px 14px;border-bottom:1px solid var(--gray-50);display:flex;gap:8px;align-items:center;flex-wrap:wrap">${stopHtml}</div>
+    ${list.length?`<div style="overflow-x:auto"><table class="pp-table" style="min-width:460px">
+      <thead><tr><th style="text-align:left">PO #</th><th style="text-align:left">Vendor</th><th>Status</th><th>ETA</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+      ${list.length>12?`<div style="font-size:10px;color:var(--gray-500);padding:6px 14px">+ ${list.length-12} more in the Check-in portal</div>`:''}`
+      :`<div style="padding:1.1rem;text-align:center;font-size:11.5px;color:var(--gray-500)">No purchase orders yet — Procurement adds them in the Check-in portal (proc2026)</div>`}
+  </div>`;
+}
+</script>
+
 </body>
 </html>
