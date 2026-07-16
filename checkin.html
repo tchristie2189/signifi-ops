@@ -6,6 +6,7 @@
 <title>Signifi — Daily Check-in</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{--red:#C8102E;--red-light:#fdf0f2;--black:#0f0f0f;--gray-700:#3d3d3d;--gray-500:#6b6b6b;--gray-300:#c4c4c4;--gray-100:#f2f2f2;--gray-50:#f8f8f8;--white:#fff;--success:#1a7a4a;--success-bg:#eaf5ef;--warning:#8a5a00;--warning-bg:#fff8e6;--blue:#2563eb;--blue-bg:#eff6ff;--font:'DM Sans',sans-serif;--mono:'DM Mono',monospace;--radius:8px;--radius-lg:12px;}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
@@ -166,6 +167,535 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
   </div>
 </div>
 
+<!-- ═══════════ PROCUREMENT WORKSPACE — takes over check-in for proc2026 ═══════════ -->
+<style>
+body.proc-mode .page{max-width:1160px;}
+.proc-layout{display:grid;grid-template-columns:330px 1fr;gap:16px;align-items:start;}
+@media(max-width:880px){.proc-layout{grid-template-columns:1fr;}}
+.proc-queue{background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);overflow:hidden;position:sticky;top:12px;max-height:calc(100vh - 24px);display:flex;flex-direction:column;}
+@media(max-width:880px){.proc-queue{position:static;max-height:340px;}}
+.proc-qhead{padding:12px 14px;border-bottom:1px solid var(--gray-100);}
+.proc-qtitle{font-size:13px;font-weight:700;display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.proc-qtitle .cnt{font-family:var(--mono);font-size:11px;color:var(--gray-500);font-weight:400;}
+.proc-tabs{display:flex;gap:4px;margin-top:8px;}
+.proc-qtab{flex:1;font-size:10px;font-weight:600;padding:5px 4px;border-radius:6px;border:1px solid var(--gray-100);background:var(--gray-50);cursor:pointer;text-align:center;color:var(--gray-500);font-family:var(--font);}
+.proc-qtab.on{background:var(--black);color:#fff;border-color:var(--black);}
+.proc-qlist{overflow-y:auto;flex:1;padding:6px;}
+.proc-qitem{padding:10px;border-radius:var(--radius);cursor:pointer;border:1px solid transparent;margin-bottom:3px;}
+.proc-qitem:hover{background:var(--gray-50);}
+.proc-qitem.sel{background:var(--red-light);border-color:#f4c2cb;}
+.proc-qname{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.proc-qso{font-family:var(--mono);font-size:10px;color:var(--gray-500);margin-top:2px;}
+.proc-qbottom{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center;}
+.proc-chip{font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px;letter-spacing:.02em;}
+.pc-ok{background:var(--gray-100);color:var(--gray-700);}
+.pc-soon{background:var(--warning-bg);color:var(--warning);}
+.pc-crit{background:var(--red-light);color:var(--red);}
+.proc-card{background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);margin-bottom:16px;overflow:hidden;}
+.proc-chead{padding:12px 16px;border-bottom:1px solid var(--gray-100);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+.proc-ctitle{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--gray-700);}
+.proc-top{padding:16px 18px 6px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;}
+.proc-name{font-size:21px;font-weight:600;line-height:1.2;}
+.proc-soline{font-family:var(--mono);font-size:12px;color:var(--red);margin-top:3px;}
+.proc-statuspill{font-size:12px;font-weight:700;padding:6px 14px;border-radius:20px;white-space:nowrap;}
+.proc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));border-top:1px solid var(--gray-50);margin-top:12px;}
+.proc-cell{padding:12px 18px;border-right:1px solid var(--gray-50);}
+.proc-cell:last-child{border-right:none;}
+.proc-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-500);margin-bottom:4px;}
+.proc-val{font-size:14px;font-weight:600;}
+.proc-val small{font-size:10px;color:var(--gray-500);font-weight:400;}
+.proc-days{font-family:var(--mono);font-size:22px;font-weight:500;line-height:1;}
+.proc-prio{font-size:12px;font-weight:600;padding:4px 8px;border-radius:6px;border:1px solid var(--gray-300);cursor:pointer;background:var(--white);font-family:var(--font);}
+.proc-stop{display:flex;gap:8px;align-items:center;padding:12px 18px;border-top:1px solid var(--gray-50);flex-wrap:wrap;}
+.proc-stopq{font-size:12px;font-weight:600;color:var(--gray-700);margin-right:4px;}
+.proc-stopbtn{font-size:12px;font-weight:600;padding:7px 16px;border-radius:20px;border:2px solid var(--gray-100);background:var(--white);cursor:pointer;font-family:var(--font);opacity:.55;}
+.proc-stopbtn.on{opacity:1;}
+.psg.on{border-color:var(--success);background:var(--success-bg);color:var(--success);}
+.psy.on{border-color:#d97706;background:var(--warning-bg);color:var(--warning);}
+.psr.on{border-color:var(--red);background:var(--red-light);color:var(--red);}
+.proc-stopnote{font-size:11px;color:var(--gray-500);flex-basis:100%;}
+.proc-table{width:100%;border-collapse:collapse;}
+.proc-table th{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--gray-500);text-align:left;padding:8px 12px;border-bottom:1px solid var(--gray-100);background:var(--gray-50);white-space:nowrap;}
+.proc-table td{font-size:12px;padding:9px 12px;border-bottom:1px solid var(--gray-50);vertical-align:middle;}
+.proc-ponum{font-family:var(--mono);font-weight:500;}
+.proc-pos{font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;white-space:nowrap;}
+.pp-open{background:var(--blue-bg);color:var(--blue);}
+.pp-partial{background:var(--warning-bg);color:var(--warning);}
+.pp-received{background:var(--success-bg);color:var(--success);}
+.pp-cancelled{background:var(--gray-100);color:var(--gray-500);text-decoration:line-through;}
+.pp-rfq{background:#f3e8ff;color:#7c3aed;}
+.proc-late{color:var(--red);font-weight:700;}
+.proc-ibtn{background:none;border:none;cursor:pointer;font-size:14px;padding:2px 6px;color:var(--gray-500);}
+.proc-ibtn:hover{color:var(--black);}
+.proc-recv{font-size:10px;font-weight:700;padding:4px 10px;border-radius:12px;border:1px solid var(--success);background:var(--white);color:var(--success);cursor:pointer;font-family:var(--font);white-space:nowrap;}
+.proc-recv:hover{background:var(--success-bg);}
+.proc-empty{text-align:center;color:var(--gray-500);font-size:12.5px;padding:2.2rem 1rem;}
+.proc-variance{margin:0 16px 12px;background:var(--warning-bg);border:1px solid #f2dfb3;border-radius:var(--radius);padding:9px 12px;font-size:11.5px;color:var(--warning);}
+.proc-mback{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px;}
+.proc-modal{background:var(--white);border-radius:var(--radius-lg);width:540px;max-width:100%;max-height:90vh;overflow-y:auto;}
+.proc-mhead{padding:14px 18px;border-bottom:1px solid var(--gray-100);display:flex;justify-content:space-between;align-items:center;}
+.proc-mtitle{font-size:14px;font-weight:700;}
+.proc-mclose{background:none;border:none;font-size:18px;cursor:pointer;color:var(--gray-500);}
+.proc-mbody{padding:16px 18px;}
+.proc-fgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.proc-fgrid .full{grid-column:1/-1;}
+.proc-socheck{font-family:var(--mono);font-size:11px;padding:5px 10px;border:1px solid var(--gray-300);border-radius:16px;cursor:pointer;user-select:none;display:inline-block;margin:0 6px 6px 0;}
+.proc-socheck.on{background:var(--black);color:#fff;border-color:var(--black);}
+.proc-btn{font-family:var(--font);font-size:13px;font-weight:600;padding:9px 18px;border-radius:var(--radius);border:none;cursor:pointer;}
+.proc-btn-p{background:var(--red);color:#fff;}
+.proc-btn-g{background:var(--white);border:1px solid var(--gray-300);color:var(--gray-700);}
+.proc-refresh{font-size:10px;color:var(--gray-500);font-family:var(--mono);}
+@media(max-width:700px){.proc-powrap{overflow-x:auto;}.proc-table{min-width:760px;}.proc-fgrid{grid-template-columns:1fr;}}
+</style>
+<div id="proc-modal-root"></div>
+<script>
+// ═══ PROCUREMENT MODULE — active only for the proc2026 passcode ═══
+let procPos=[],procLinks=[],procReadiness={},procMsDoneMap={},procSelectedId=null,procQF='all',procTimer=null;
+function procEsc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function procFmtFull(s){if(!s)return'—';return new Date(s+'T00:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});}
+function procSoListOf(p){return(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);}
+function procCloseModal(){document.getElementById('proc-modal-root').innerHTML='';}
+async function procLog(action,entityName,projectId,oldVal,newVal){
+  try{await sb.from('activity_log').insert({user_name:currentUserName||'Procurement',action,entity_type:'procurement',entity_name:entityName||'',project_id:projectId||null,old_value:oldVal?String(oldVal):null,new_value:newVal?String(newVal):null});}catch(e){}
+}
+// ── entry: called from doCheckinLogin instead of the normal check-in flow ──
+async function procEnter(){
+  document.body.classList.add('proc-mode');
+  const acb=document.getElementById('all-clear-btn');if(acb)acb.parentElement.style.display='none';
+  const wt=document.getElementById('week-tabs-row');if(wt)wt.style.display='none';
+  const sb1=document.getElementById('summary-bar');if(sb1)sb1.style.display='none';
+  const as1=document.getElementById('attention-summary');if(as1)as1.style.display='none';
+  document.getElementById('ci-content').innerHTML='<div class="proc-empty">Loading procurement workspace…</div>';
+  try{await procLoad();}catch(e){return;}
+  document.getElementById('ci-content').innerHTML=`
+    <div class="proc-layout">
+      <div class="proc-queue">
+        <div class="proc-qhead">
+          <div class="proc-qtitle">Procurement queue <span class="cnt" id="proc-qcount"></span>
+            <button class="proc-btn proc-btn-g" style="font-size:10.5px;padding:4px 10px" onclick="procOpenImport()">📥 Import Odoo</button></div>
+          <div style="margin-top:8px"><input id="proc-qsearch" placeholder="Search project, SO, PM…" oninput="procRenderQueue()" style="font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>
+          <div class="proc-tabs">
+            <button class="proc-qtab on" id="pqt-all" onclick="procSetQF('all')">All active</button>
+            <button class="proc-qtab" id="pqt-mo" onclick="procSetQF('mo')">MO released</button>
+            <button class="proc-qtab" id="pqt-attn" onclick="procSetQF('attn')">⚠ Attention</button>
+          </div>
+        </div>
+        <div class="proc-qlist" id="proc-qlist"></div>
+      </div>
+      <div id="proc-main"></div>
+    </div>`;
+  if(!procSelectedId){const q=procQueue();procSelectedId=q[0]?.p.id||null;}
+  procRenderQueue();procRenderMain();
+  clearInterval(procTimer);
+  procTimer=setInterval(async()=>{try{await procLoad();procRenderQueue();procRenderMain(true);}catch(e){}},60000);
+}
+async function procLoad(){
+  const[pr,ms,md,po,pl,rd]=await Promise.all([
+    sb.from('projects').select('*').neq('status','complete'),
+    sb.from('milestones').select('*'),
+    sb.from('milestone_done').select('*'),
+    sb.from('procurement_po').select('*').order('created_at',{ascending:false}),
+    sb.from('procurement_po_projects').select('*'),
+    sb.from('procurement_readiness').select('*'),
+  ]);
+  if(po.error&&/does not exist|relation/i.test(po.error.message||'')){
+    document.getElementById('ci-content').innerHTML='<div class="proc-card"><div class="proc-empty">⚠️ Procurement tables not found.<br>Run <b>procurement-migration.sql</b> in the Supabase SQL editor first, then refresh.</div></div>';
+    throw new Error('migration not run');
+  }
+  projects=pr.data||[];
+  const pids=new Set(projects.map(p=>p.id));
+  milestones=(ms.data||[]).filter(m=>pids.has(m.project_id));
+  procMsDoneMap={};(md.data||[]).forEach(d=>procMsDoneMap[d.milestone_id]=d);
+  procPos=po.data||[];procLinks=pl.data||[];
+  procReadiness={};(rd.data||[]).forEach(r=>procReadiness[r.project_id]=r);
+}
+// ── derived logic ──
+function procMsOf(pid,key){return milestones.filter(m=>m.project_id===pid&&m.key===key&&m.date).sort((a,b)=>a.date.localeCompare(b.date));}
+function procMoReleased(p){
+  const mo=milestones.filter(m=>m.project_id===p.id&&m.key==='mo-release');
+  return mo.some(m=>procMsDoneMap[m.id]||(m.date&&daysDiff(m.date)<=0));
+}
+function procPosFor(p){
+  const sos=procSoListOf(p);
+  const ids=new Set(procLinks.filter(l=>l.project_id===p.id||(l.so_number&&sos.includes(l.so_number))).map(l=>l.po_id));
+  return procPos.filter(x=>ids.has(x.id)&&x.status!=='cancelled');
+}
+function procStatus(p){
+  const list=procPosFor(p);
+  if(!list.length)return procMoReleased(p)?{key:'needs-po',label:'🔥 Needs POs',bg:'var(--red-light)',fg:'var(--red)'}:{key:'not-started',label:'Not started',bg:'var(--gray-100)',fg:'var(--gray-500)'};
+  const open=list.filter(x=>x.status!=='received');
+  const late=open.filter(x=>x.eta&&daysDiff(x.eta)<0);
+  if(late.length)return{key:'late',label:'🚨 Vendor late ('+late.length+')',bg:'var(--red-light)',fg:'var(--red)'};
+  if(!open.length)return{key:'ready',label:'✅ Ready for Inventory',bg:'var(--success-bg)',fg:'var(--success)'};
+  if(list.some(x=>x.status==='partial'))return{key:'partial',label:'Partial received',bg:'var(--warning-bg)',fg:'var(--warning)'};
+  if(list.every(x=>x.odoo_status==='rfq'))return{key:'rfq',label:'RFQ — cost pending',bg:'#f3e8ff',fg:'#7c3aed'};
+  return{key:'waiting',label:'Waiting vendor',bg:'var(--blue-bg)',fg:'var(--blue)'};
+}
+function procHealth(p){
+  const list=procPosFor(p);if(!list.length)return null;
+  const recv=list.filter(x=>x.status==='received').length;
+  const late=list.filter(x=>x.status!=='received'&&x.eta&&daysDiff(x.eta)<0).length;
+  return Math.max(0,Math.round(recv/list.length*100)-late*10);
+}
+function procProdStart(p){return procMsOf(p.id,'production-start')[0]?.date||null;}
+function procShipDate(p){return procMsOf(p.id,'shipping')[0]?.date||null;}
+// ── queue ──
+function procQueue(){
+  const q=(document.getElementById('proc-qsearch')?.value||'').toLowerCase();
+  return projects.map(p=>({p,st:procStatus(p),ps:procProdStart(p)}))
+    .filter(x=>{
+      if(procQF==='mo'&&!procMoReleased(x.p))return false;
+      if(procQF==='attn'&&!['needs-po','late'].includes(x.st.key)&&procReadiness[x.p.id]?.stoplight!=='red')return false;
+      if(q&&!((x.p.name||'').toLowerCase().includes(q)||(x.p.so_number||'').toLowerCase().includes(q)||(x.p.pm||'').toLowerCase().includes(q)))return false;
+      return true;
+    })
+    .sort((a,b)=>{
+      const pr={critical:0,high:1,normal:2};
+      const pd=(pr[a.p.priority]??2)-(pr[b.p.priority]??2);if(pd)return pd;
+      const da=a.ps?daysDiff(a.ps):9999,db=b.ps?daysDiff(b.ps):9999;return da-db;
+    });
+}
+function procSetQF(f){procQF=f;['all','mo','attn'].forEach(k=>document.getElementById('pqt-'+k).classList.toggle('on',k===f));procRenderQueue();}
+function procRenderQueue(){
+  const list=procQueue();
+  document.getElementById('proc-qcount').textContent=list.length;
+  document.getElementById('proc-qlist').innerHTML=list.map(x=>{
+    const d=x.ps?daysDiff(x.ps):null;
+    const dChip=d===null?'':`<span class="proc-chip ${d<0?'pc-crit':d<=5?'pc-soon':'pc-ok'}">${d<0?Math.abs(d)+'d overdue':d===0?'Prod TODAY':'Prod in '+d+'d'}</span>`;
+    const prio=x.p.priority==='critical'?'<span class="proc-chip pc-crit">CRITICAL</span>':x.p.priority==='high'?'<span class="proc-chip pc-soon">HIGH</span>':'';
+    return`<div class="proc-qitem${x.p.id===procSelectedId?' sel':''}" onclick="procSelectedId='${x.p.id}';procRenderQueue();procRenderMain()">
+      <div class="proc-qname">${procEsc(x.p.name)}</div>
+      <div class="proc-qso">${procEsc(x.p.so_number||'')}${x.p.pm?' · '+procEsc(x.p.pm):''}</div>
+      <div class="proc-qbottom">${prio}${dChip}<span class="proc-chip" style="background:${x.st.bg};color:${x.st.fg}">${x.st.label}</span></div>
+    </div>`;
+  }).join('')||'<div class="proc-empty">No projects match.</div>';
+}
+// ── main panel ──
+function procRenderMain(keepScroll){
+  const el=document.getElementById('proc-main');if(!el)return;
+  const p=projects.find(x=>x.id===procSelectedId);
+  if(!p){el.innerHTML='<div class="proc-card"><div class="proc-empty">Select a project from the queue.</div></div>';return;}
+  const scrollY=keepScroll?window.scrollY:null;
+  const st=procStatus(p),health=procHealth(p),ps=procProdStart(p),sd=procShipDate(p),d=ps?daysDiff(ps):null;
+  const rd=procReadiness[p.id]||{};
+  const list=procPosFor(p).sort((a,b)=>(a.eta||'9999').localeCompare(b.eta||'9999'));
+  const dHtml=d===null?'<span class="proc-val">—</span>':
+    d<0?`<div class="proc-days" style="color:var(--red)">🚨 ${Math.abs(d)}d</div><small style="font-size:10px;color:var(--red);font-weight:700">PRODUCTION OVERDUE</small>`:
+    d<=5?`<div class="proc-days" style="color:var(--warning)">⚠ ${d}d</div><small style="font-size:10px;color:var(--warning)">until production</small>`:
+    `<div class="proc-days" style="color:var(--success)">${d}d</div><small style="font-size:10px;color:var(--gray-500)">until production</small>`;
+  const arrMs=procMsOf(p.id,'arrival').slice(-1)[0];
+  const latestEta=list.filter(x=>x.status!=='received'&&x.eta).map(x=>x.eta).sort().slice(-1)[0];
+  let variance='';
+  if(arrMs&&latestEta&&latestEta>arrMs.date){
+    variance=`<div class="proc-variance">⚠️ Latest vendor ETA <b>${fmt(latestEta)}</b> is after the hub's parts-arrival milestone <b>${fmt(arrMs.date)}</b> — flag to the PM or set your stoplight below.</div>`;
+  }
+  const rows=list.map(po=>{
+    const soTags=procLinks.filter(l=>l.po_id===po.id).map(l=>l.so_number).filter(Boolean).join(', ');
+    const late=po.status!=='received'&&po.eta&&daysDiff(po.eta)<0;
+    const statusPill=po.odoo_status==='rfq'?'<span class="proc-pos pp-rfq">RFQ · cost pending</span>':`<span class="proc-pos pp-${po.status}">${{open:'Open',partial:'Partial',received:'Received',cancelled:'Cancelled'}[po.status]||po.status}</span>`;
+    return`<tr>
+      <td class="proc-ponum">${procEsc(po.po_number||'—')}</td>
+      <td style="font-weight:600">${procEsc(po.vendor||'—')}${po.category?`<div style="font-size:9px;color:var(--gray-500)">${procEsc(po.category)}</div>`:''}</td>
+      <td style="font-family:var(--mono);font-size:10px">${procEsc(soTags||'—')}</td>
+      <td>${statusPill}</td>
+      <td class="${late?'proc-late':''}" style="font-family:var(--mono);font-size:11px">${po.status==='received'?'✓ '+fmt(po.received_at):fmt(po.eta)}${late?`<div style="font-size:9px">${Math.abs(daysDiff(po.eta))}d late</div>`:''}</td>
+      <td>${po.tracking?`<a href="${procEsc(po.tracking.startsWith('http')?po.tracking:'https://'+po.tracking)}" target="_blank" style="font-size:11px;color:var(--blue)">Track ↗</a>`:'<span style="color:var(--gray-300)">—</span>'}</td>
+      <td style="font-size:11px;color:var(--gray-500);max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${procEsc(po.remarks||'')}">${procEsc(po.remarks||'')}</td>
+      <td style="white-space:nowrap;text-align:right">
+        ${po.status!=='received'?`<button class="proc-recv" onclick="procMarkReceived('${po.id}')">✓ Received</button>`:''}
+        <button class="proc-ibtn" onclick="procOpenPoModal('${po.id}')" title="Edit">✎</button>
+        <button class="proc-ibtn" onclick="procDeletePo('${po.id}')" title="Delete">✕</button>
+      </td></tr>`;
+  }).join('');
+  el.innerHTML=`
+  <div class="proc-card">
+    <div class="proc-top">
+      <div><div class="proc-name">${procEsc(p.name)}</div><div class="proc-soline">SO: ${procEsc(p.so_number||'—')}</div></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select class="proc-prio" onchange="procSetPriority('${p.id}',this.value)" title="Priority">
+          <option value="normal"${(p.priority||'normal')==='normal'?' selected':''}>🟢 Normal</option>
+          <option value="high"${p.priority==='high'?' selected':''}>🟡 High</option>
+          <option value="critical"${p.priority==='critical'?' selected':''}>🔴 Critical</option>
+        </select>
+        <span class="proc-statuspill" style="background:${st.bg};color:${st.fg}">${st.label}</span>
+      </div>
+    </div>
+    <div class="proc-grid">
+      <div class="proc-cell"><div class="proc-lbl">Customer</div><div class="proc-val">${procEsc(p.client||'—')}</div></div>
+      <div class="proc-cell"><div class="proc-lbl">Project Manager</div><div class="proc-val">${procEsc(p.pm||'—')}</div></div>
+      <div class="proc-cell"><div class="proc-lbl">Production start</div><div class="proc-val">${procFmtFull(ps)}</div></div>
+      <div class="proc-cell"><div class="proc-lbl">Ship date</div><div class="proc-val">${procFmtFull(sd)}</div></div>
+      <div class="proc-cell"><div class="proc-lbl">Countdown</div>${dHtml}</div>
+      <div class="proc-cell"><div class="proc-lbl">Procurement health</div><div class="proc-val">${health===null?'<small>no POs yet</small>':health+'%'}<small> · ${procPosFor(p).filter(x=>x.status==='received').length}/${procPosFor(p).length} POs received</small></div></div>
+    </div>
+    <div class="proc-stop">
+      <span class="proc-stopq">Can procurement meet the production date?</span>
+      <button class="proc-stopbtn psg${rd.stoplight==='green'?' on':''}" onclick="procSetStoplight('${p.id}','green')">🟢 Yes</button>
+      <button class="proc-stopbtn psy${rd.stoplight==='yellow'?' on':''}" onclick="procSetStoplight('${p.id}','yellow')">🟡 At risk</button>
+      <button class="proc-stopbtn psr${rd.stoplight==='red'?' on':''}" onclick="procSetStoplight('${p.id}','red')">🔴 No</button>
+      ${rd.stoplight&&rd.stoplight!=='green'&&rd.reason?`<span class="proc-stopnote">Reason: ${procEsc(rd.reason)} <span style="color:var(--gray-300)">· ${procEsc(rd.updated_by||'')}</span></span>`:''}
+    </div>
+  </div>
+  <div class="proc-card">
+    <div class="proc-chead">
+      <span class="proc-ctitle">Purchase orders <span style="font-family:var(--mono);font-weight:400;color:var(--gray-500)">${list.length}</span></span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span class="proc-refresh">auto-refreshes · 60s</span>
+        <button class="proc-btn proc-btn-p" style="font-size:12px;padding:7px 14px" onclick="procOpenPoModal()">＋ Add PO</button>
+      </div>
+    </div>
+    ${variance}
+    ${list.length?`<div class="proc-powrap"><table class="proc-table">
+      <tr><th>PO #</th><th>Vendor</th><th>SOs</th><th>Status</th><th>ETA</th><th>Tracking</th><th>Remarks</th><th></th></tr>${rows}</table></div>`
+      :`<div class="proc-empty">No purchase orders yet.<br><span style="font-size:11px">Click <b>＋ Add PO</b> or <b>📥 Import Odoo</b> — this replaces the Excel columns.</span></div>`}
+  </div>`;
+  if(scrollY!==null)window.scrollTo(0,scrollY);
+}
+// ── actions ──
+async function procSetPriority(pid,val){
+  const{error}=await sb.from('projects').update({priority:val}).eq('id',pid);
+  if(error){alert('Error: '+error.message);return;}
+  const p=projects.find(x=>x.id===pid);const old=p?.priority;if(p)p.priority=val;
+  await procLog('set priority',p?.name,pid,old,val);
+  showToast('Priority: '+val+' ✓');procRenderQueue();procRenderMain(true);
+}
+async function procSetStoplight(pid,color){
+  let reason=procReadiness[pid]?.reason||'';
+  if(color!=='green'){
+    reason=prompt(color==='red'?'Reason we CANNOT meet the date (required):':'What\'s the risk? (required)',reason)||'';
+    if(!reason.trim()){showToast('Reason required for 🟡/🔴');return;}
+  } else reason='';
+  const row={project_id:pid,stoplight:color,reason,updated_by:currentUserName,updated_at:new Date().toISOString()};
+  const{error}=await sb.from('procurement_readiness').upsert(row);
+  if(error){alert('Error: '+error.message);return;}
+  procReadiness[pid]=row;
+  const p=projects.find(x=>x.id===pid);
+  await procLog('procurement stoplight '+color,p?.name,pid,null,reason||color);
+  showToast('Stoplight saved ✓');procRenderMain(true);
+}
+function procOpenPoModal(poId){
+  const p=projects.find(x=>x.id===procSelectedId);if(!p)return;
+  const po=poId?procPos.find(x=>x.id===poId):null;
+  const linked=poId?procLinks.filter(l=>l.po_id===poId).map(l=>l.so_number):procSoListOf(p);
+  const sos=procSoListOf(p);
+  document.getElementById('proc-modal-root').innerHTML=`
+  <div class="proc-mback" onclick="if(event.target===this)procCloseModal()"><div class="proc-modal">
+    <div class="proc-mhead"><span class="proc-mtitle">${po?'Edit purchase order':'Add purchase order'}</span><button class="proc-mclose" onclick="procCloseModal()">✕</button></div>
+    <div class="proc-mbody">
+      <div class="proc-fgrid">
+        <div class="field"><label>PO number</label><input id="ppo-num" value="${procEsc(po?.po_number||'')}" placeholder="e.g. P05512" style="font-family:var(--mono)"></div>
+        <div class="field"><label>Vendor</label><input id="ppo-vendor" value="${procEsc(po?.vendor||'')}" placeholder="e.g. Arrow"></div>
+        <div class="field"><label>Odoo status</label><select id="ppo-odoo">
+          <option value="purchase-order"${(po?.odoo_status||'purchase-order')==='purchase-order'?' selected':''}>Purchase Order</option>
+          <option value="rfq"${po?.odoo_status==='rfq'?' selected':''}>RFQ — cost pending</option></select></div>
+        <div class="field"><label>Status</label><select id="ppo-status">
+          <option value="open"${(po?.status||'open')==='open'?' selected':''}>Open</option>
+          <option value="partial"${po?.status==='partial'?' selected':''}>Partial received</option>
+          <option value="received"${po?.status==='received'?' selected':''}>Received</option>
+          <option value="cancelled"${po?.status==='cancelled'?' selected':''}>Cancelled</option></select></div>
+        <div class="field"><label>ETA</label><input type="date" id="ppo-eta" value="${po?.eta||''}"></div>
+        <div class="field"><label>Category</label><input id="ppo-cat" value="${procEsc(po?.category||'')}" placeholder="e.g. Electronics"></div>
+        <div class="field full"><label>Tracking link / number</label><input id="ppo-track" value="${procEsc(po?.tracking||'')}" placeholder="https://…" style="font-family:var(--mono);font-size:12px"></div>
+        <div class="field full"><label>Covers SOs</label><div id="ppo-sos">
+          ${sos.map(so=>`<span class="proc-socheck${linked.includes(so)?' on':''}" data-so="${procEsc(so)}" onclick="this.classList.toggle('on')">${procEsc(so)}</span>`).join('')||'<span style="font-size:11px;color:var(--gray-500)">No SOs on project</span>'}
+        </div></div>
+        <div class="field full"><label>Remarks</label><textarea id="ppo-remarks" style="min-height:52px">${procEsc(po?.remarks||'')}</textarea></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+        <button class="proc-btn proc-btn-g" onclick="procCloseModal()">Cancel</button>
+        <button class="proc-btn proc-btn-p" onclick="procSavePo('${poId||''}')">${po?'Save changes':'Add PO'}</button>
+      </div>
+    </div>
+  </div></div>`;
+}
+async function procSavePo(poId){
+  const p=projects.find(x=>x.id===procSelectedId);if(!p)return;
+  const rec={
+    po_number:document.getElementById('ppo-num').value.trim()||null,
+    vendor:document.getElementById('ppo-vendor').value.trim()||null,
+    odoo_status:document.getElementById('ppo-odoo').value,
+    status:document.getElementById('ppo-status').value,
+    eta:document.getElementById('ppo-eta').value||null,
+    category:document.getElementById('ppo-cat').value.trim()||null,
+    tracking:document.getElementById('ppo-track').value.trim()||null,
+    remarks:document.getElementById('ppo-remarks').value.trim()||null,
+    updated_at:new Date().toISOString(),
+  };
+  if(rec.status==='received')rec.received_at=new Date().toISOString().split('T')[0];
+  if(!rec.vendor&&!rec.po_number){alert('Enter at least a vendor or PO number.');return;}
+  const checkedSOs=[...document.querySelectorAll('#ppo-sos .proc-socheck.on')].map(e=>e.dataset.so);
+  let id=poId;
+  if(poId){
+    const{error}=await sb.from('procurement_po').update(rec).eq('id',poId);
+    if(error){alert('Error: '+error.message);return;}
+    await sb.from('procurement_po_projects').delete().eq('po_id',poId);
+  } else {
+    rec.created_by=currentUserName;
+    const{data,error}=await sb.from('procurement_po').insert(rec).select().single();
+    if(error){alert('Error: '+error.message);return;}
+    id=data.id;
+  }
+  const links=(checkedSOs.length?checkedSOs:[null]).map(so=>({po_id:id,so_number:so,project_id:p.id,matched:true}));
+  const{error:le}=await sb.from('procurement_po_projects').insert(links);
+  if(le){alert('PO saved but SO links failed: '+le.message);return;}
+  await procLog(poId?'updated PO':'added PO',(rec.vendor||'')+' '+(rec.po_number||''),p.id,null,rec.status);
+  procCloseModal();showToast(poId?'PO updated ✓':'PO added ✓');
+  await procLoad();procRenderQueue();procRenderMain(true);
+}
+async function procMarkReceived(poId){
+  const{error}=await sb.from('procurement_po').update({status:'received',received_at:new Date().toISOString().split('T')[0],updated_at:new Date().toISOString()}).eq('id',poId);
+  if(error){alert('Error: '+error.message);return;}
+  const po=procPos.find(x=>x.id===poId);const p=projects.find(x=>x.id===procSelectedId);
+  await procLog('PO received',(po?.vendor||'')+' '+(po?.po_number||''),p?.id,po?.status,'received');
+  showToast('✓ Marked received');
+  await procLoad();procRenderQueue();procRenderMain(true);
+}
+async function procDeletePo(poId){
+  if(!confirm('Delete this PO record? (Does not touch Odoo.)'))return;
+  const po=procPos.find(x=>x.id===poId);const p=projects.find(x=>x.id===procSelectedId);
+  const{error}=await sb.from('procurement_po').delete().eq('id',poId);
+  if(error){alert('Error: '+error.message);return;}
+  await procLog('deleted PO',(po?.vendor||'')+' '+(po?.po_number||''),p?.id,po?.po_number,null);
+  showToast('PO deleted');
+  await procLoad();procRenderQueue();procRenderMain(true);
+}
+// ── ODOO DROP-IMPORTER ──
+function odooToIso(v){
+  if(v==null||v==='')return null;
+  if(v instanceof Date&&!isNaN(v))return v.getFullYear()+'-'+String(v.getMonth()+1).padStart(2,'0')+'-'+String(v.getDate()).padStart(2,'0');
+  const s=String(v).trim();
+  const m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);if(m)return m[1]+'-'+m[2]+'-'+m[3];
+  const d=new Date(s);return isNaN(d)?null:d.toISOString().split('T')[0];
+}
+function odooParseRows(rows){
+  const keys=Object.keys(rows[0]||{});
+  const col=(...names)=>keys.find(k=>names.some(n=>k.toLowerCase().replace(/[^a-z]/g,'').includes(n)));
+  const C={po:col('orderreference','ponumber'),rso:col('relatedsalesorder'),vendor:col('vendor'),buyer:col('buyer'),deadline:col('orderdeadline'),src:col('sourcedocument'),total:col('total'),status:col('status'),shipped:col('isshipped'),eta:col('expectedarrival','expectedeta','eta')};
+  if(!C.po)return{error:'Could not find an "Order Reference" column — is this the Odoo PO export?'};
+  const out=[],skippedNoSo=[],seen=new Set();
+  rows.forEach(r=>{
+    const po=String(r[C.po]??'').trim();
+    if(!po||seen.has(po))return;seen.add(po);
+    const sos=new Set();
+    const rso=C.rso?String(r[C.rso]??'').trim():'';
+    if(rso&&rso.toLowerCase()!=='nan')rso.split(',').map(s=>s.trim()).filter(Boolean).forEach(s=>sos.add(s));
+    const src=C.src?String(r[C.src]??''):'';
+    (src.match(/S\d{4,6}/g)||[]).forEach(s=>sos.add(s));
+    if(!sos.size){skippedNoSo.push(po);return;}
+    const rawStatus=String(r[C.status]??'').toLowerCase();
+    const shipped=C.shipped?[true,'true','1','yes'].includes(typeof r[C.shipped]==='boolean'?r[C.shipped]:String(r[C.shipped]??'').toLowerCase()):false;
+    let status='open';
+    if(rawStatus.includes('cancel'))status='cancelled';else if(shipped)status='received';
+    out.push({po_number:po,vendor:C.vendor?String(r[C.vendor]??'').trim()||null:null,buyer:C.buyer?String(r[C.buyer]??'').trim()||null:null,odoo_status:rawStatus==='rfq'?'rfq':'purchase-order',status,order_date:C.deadline?odooToIso(r[C.deadline]):null,eta:C.eta?odooToIso(r[C.eta]):null,total:C.total&&r[C.total]!=null&&r[C.total]!==''?Number(r[C.total])||null:null,sos:[...sos]});
+  });
+  return{rows:out,skippedNoSo,hasEta:!!C.eta};
+}
+let _procImp=null;
+function procOpenImport(){
+  _procImp=null;
+  document.getElementById('proc-modal-root').innerHTML=`
+  <div class="proc-mback" onclick="if(event.target===this)procCloseModal()"><div class="proc-modal" style="width:560px">
+    <div class="proc-mhead"><span class="proc-mtitle">📥 Import Odoo PO export</span><button class="proc-mclose" onclick="procCloseModal()">✕</button></div>
+    <div class="proc-mbody">
+      <div style="border:2px dashed var(--gray-300);border-radius:var(--radius-lg);padding:2.2rem 1rem;text-align:center;cursor:pointer;font-size:13px;color:var(--gray-500)"
+        onclick="document.getElementById('proc-impfile').click()"
+        ondragover="event.preventDefault();this.style.borderColor='var(--blue)'"
+        ondragleave="this.style.borderColor='var(--gray-300)'"
+        ondrop="event.preventDefault();this.style.borderColor='var(--gray-300)';procImpFile(event.dataTransfer.files[0])">
+        Drop the Odoo <b>Purchase Order export</b> (.xlsx) here<br>or click to browse
+        <div style="font-size:10px;margin-top:8px;color:var(--gray-300)">Same file your team already downloads — no format changes needed</div>
+      </div>
+      <input type="file" id="proc-impfile" accept=".xlsx,.xls,.csv" style="display:none" onchange="procImpFile(this.files[0])">
+      <div id="proc-imppreview"></div>
+    </div>
+  </div></div>`;
+}
+function procImpFile(file){
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const wb=XLSX.read(e.target.result,{cellDates:true});
+      const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:null});
+      const res=odooParseRows(rows);
+      if(res.error){document.getElementById('proc-imppreview').innerHTML=`<div class="err" style="display:block;margin-top:12px">${procEsc(res.error)}</div>`;return;}
+      _procImp=res;procImpPreview();
+    }catch(err){document.getElementById('proc-imppreview').innerHTML=`<div class="err" style="display:block;margin-top:12px">Could not read file: ${procEsc(err.message)}</div>`;}
+  };
+  reader.readAsArrayBuffer(file);
+}
+function procImpLookup(){
+  const map={};
+  projects.forEach(p=>procSoListOf(p).forEach(so=>{map[so.toUpperCase()]=p.id;}));
+  return map;
+}
+function procImpPreview(){
+  const res=_procImp;
+  const byNum={};procPos.forEach(p=>{if(p.po_number)byNum[p.po_number]=p;});
+  const lookup=procImpLookup();
+  let news=0,updates=0;const unmatched=new Set();
+  res.rows.forEach(r=>{
+    byNum[r.po_number]?updates++:news++;
+    r.sos.forEach(so=>{if(!lookup[so.toUpperCase()])unmatched.add(so);});
+  });
+  document.getElementById('proc-imppreview').innerHTML=`
+    <div style="margin-top:14px;font-size:12.5px;line-height:1.9">
+      <b>${res.rows.length}</b> POs with sales orders found →
+      <span style="color:var(--success)"><b>${news}</b> new</span> ·
+      <span style="color:var(--blue)"><b>${updates}</b> updates</span><br>
+      <b>${res.skippedNoSo.length}</b> POs skipped (no SO — general stock purchases)<br>
+      Expected Arrival column: ${res.hasEta?'<span style="color:var(--success)">✓ detected — ETAs will import</span>':'<span style="color:var(--warning)">⚠ not found — ETAs untouched (add the column in Odoo export)</span>'}<br>
+      ${unmatched.size?`<span style="color:var(--warning)">⚠ <b>${unmatched.size}</b> SOs don't match any active project</span> — imported anyway &amp; flagged, so nothing disappears:<div style="font-family:var(--mono);font-size:10px;color:var(--gray-500);margin-top:4px">${[...unmatched].slice(0,18).join(', ')}${unmatched.size>18?' …':''}</div>`:'<span style="color:var(--success)">✓ every SO matches an active project</span>'}
+    </div>
+    <div style="font-size:10.5px;color:var(--gray-500);margin-top:8px">Manual fields (remarks, tracking, category) are never overwritten. POs you've marked received stay received.</div>
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+      <button class="proc-btn proc-btn-g" onclick="procCloseModal()">Cancel</button>
+      <button class="proc-btn proc-btn-p" id="proc-impgo" onclick="procImpCommit()">Import ${res.rows.length} POs</button>
+    </div>`;
+}
+async function procImpCommit(){
+  const res=_procImp;if(!res)return;
+  const btn=document.getElementById('proc-impgo');btn.disabled=true;btn.textContent='Importing…';
+  const byNum={};procPos.forEach(p=>{if(p.po_number)byNum[p.po_number]=p;});
+  const lookup=procImpLookup();
+  const nowIso=new Date().toISOString();const todayIso=nowIso.split('T')[0];
+  const inserts=[],updates=[];
+  res.rows.forEach(r=>{
+    const ex=byNum[r.po_number];
+    let status=r.status;
+    if(ex&&ex.status==='received'&&status==='open')status='received';
+    const rec={po_number:r.po_number,vendor:r.vendor,buyer:r.buyer,odoo_status:r.odoo_status,status,order_date:r.order_date,total:r.total,updated_at:nowIso};
+    if(r.eta!==null||!ex)rec.eta=r.eta;
+    if(status==='received'&&(!ex||ex.status!=='received'))rec.received_at=ex?.received_at||todayIso;
+    if(ex){rec.id=ex.id;updates.push(rec);}
+    else{rec.created_by=(currentUserName||'Import')+' · Odoo import';inserts.push(rec);}
+  });
+  const chunk=(a,n)=>{const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n));return o;};
+  try{
+    for(const c of chunk(updates,200)){const{error}=await sb.from('procurement_po').upsert(c);if(error)throw error;}
+    const insertedByNum={};
+    for(const c of chunk(inserts,200)){
+      const{data,error}=await sb.from('procurement_po').insert(c).select('id,po_number');if(error)throw error;
+      (data||[]).forEach(d=>insertedByNum[d.po_number]=d.id);
+    }
+    const haveLink=new Set(procLinks.map(l=>l.po_id+'|'+(l.so_number||'')));
+    const linkRows=[];
+    res.rows.forEach(r=>{
+      const poId=byNum[r.po_number]?.id||insertedByNum[r.po_number];if(!poId)return;
+      r.sos.forEach(so=>{
+        if(haveLink.has(poId+'|'+so))return;
+        const pid=lookup[so.toUpperCase()]||null;
+        linkRows.push({po_id:poId,so_number:so,project_id:pid,matched:!!pid});
+      });
+    });
+    for(const c of chunk(linkRows,400)){const{error}=await sb.from('procurement_po_projects').insert(c);if(error)throw error;}
+    await procLog('imported Odoo export',inserts.length+' new / '+updates.length+' updated POs',null,null,String(res.rows.length));
+    procCloseModal();showToast(`📥 Imported: ${inserts.length} new · ${updates.length} updated · ${linkRows.length} SO links ✓`);
+    await procLoad();procRenderQueue();procRenderMain(true);
+  }catch(err){alert('Import stopped: '+err.message+'\n\nAlready-committed rows are saved; re-dropping the same file is safe (it updates, never duplicates).');btn.disabled=false;btn.textContent='Retry import';}
+}
+</script>
+
 <script>
 const SUPABASE_URL='https://oykgpkolliqjeznblayv.supabase.co';
 const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95a2dwa29sbGlxamV6bmJsYXl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNTI3ODgsImV4cCI6MjA5NTYyODc4OH0.kkOBhxyaqLG7PLPNI0SwPNwQSWmbpFjDoP2VQp33_X4';
@@ -243,6 +773,7 @@ function doCheckinLogin(){
   document.getElementById('ci-header').innerHTML=`
     <div style="font-size:18px;font-weight:600;margin-bottom:2px">Good ${getGreeting()}, ${name} 👋</div>
     <div style="font-size:12px;color:var(--gray-500)">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})} · ${dept.name}</div>`;
+  if(pass==='proc2026'){procEnter();return;}  // Procurement gets its own workspace
   showWeekTabs();
   loadCheckinData();
 }
