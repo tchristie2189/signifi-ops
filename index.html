@@ -4312,18 +4312,38 @@ async function saveIntake(){
 
   // Auto-split milestones by SO if multiple SOs entered
   const soList=so.split(',').map(s=>s.trim()).filter(Boolean);
+
+  // The database creates starter PO / MO / Parts milestones when a project is inserted.
+  // Remove those trigger-created rows before saving the complete intake timeline;
+  // otherwise the duplicate keys cause the entire milestone batch to fail silently.
+  if(ins.length){
+    const{error:clearMsError}=await sb.from('milestones').delete().eq('project_id',proj.id);
+    if(clearMsError){
+      alert('Project created, but the starter milestones could not be replaced: '+clearMsError.message);
+      return;
+    }
+  }
+
   if(soList.length>1&&ins.length){
-    // Create one set of milestones per SO, each tagged with so_tag
+    // Create one complete set of milestones per SO, each tagged with so_tag
     const splitIns=[];
     for(const soTag of soList){
       for(const m of ins){
         splitIns.push({...m,so_tag:soTag});
       }
     }
-    await sb.from('milestones').insert(splitIns);
+    const{error:msError}=await sb.from('milestones').insert(splitIns);
+    if(msError){
+      alert('Project created, but milestones could not be saved: '+msError.message);
+      return;
+    }
     showToast('"'+name+'" added with milestones split across '+soList.length+' SOs ✓');
-  } else {
-    if(ins.length)await sb.from('milestones').insert(ins);
+  } else if(ins.length){
+    const{error:msError}=await sb.from('milestones').insert(ins);
+    if(msError){
+      alert('Project created, but milestones could not be saved: '+msError.message);
+      return;
+    }
   }
 
   await logActivity('created project',name,so,proj.id,null,client);
@@ -7514,10 +7534,10 @@ function fireConfetti(){
 // ── TEMPLATES ──────────────────────────────────────────────
 const TEMPLATES=[
   {id:'standard-unit',name:'Standard unit build',desc:'Typical Signifi unit — 10 week cycle from MO release to installation',
-    offsets:{'po-release':0,'arrival':14,'production-start':21,'production-end':42,'quality-start':42,'quality-end':49,'final-qc':50,'vinyl':51,'uat':52,'shipping':53,'delivery':57,'installation':64},
+    offsets:{'parts-ordering-start':0,'mo-release':0,'po-release':0,'arrival':14,'inventory-pick':18,'production-start':21,'production-end':42,'quality-start':42,'quality-end':49,'final-qc':50,'vinyl':51,'uat':52,'shipping':53,'delivery':57,'installation':64},
     stages:['Readiness','Production','QA','UAT','Ship','Install']},
   {id:'fast-track',name:'Fast track (6 weeks)',desc:'Compressed timeline for urgent orders — parallel workstreams',
-    offsets:{'po-release':0,'arrival':7,'production-start':10,'production-end':25,'quality-start':25,'quality-end':30,'final-qc':31,'vinyl':32,'uat':33,'shipping':34,'delivery':37,'installation':43},
+    offsets:{'parts-ordering-start':0,'mo-release':0,'po-release':0,'arrival':7,'inventory-pick':8,'production-start':10,'production-end':25,'quality-start':25,'quality-end':30,'final-qc':31,'vinyl':32,'uat':33,'shipping':34,'delivery':37,'installation':43},
     stages:['Readiness','Production','QA','Ship','Install']},
   {id:'imac',name:'IMAC (Move / Add / Change)',desc:'Relocation project — uninstall at source, ship to new site, reinstall. Shows on Shipping & Deployment.',
     offsets:{'po-release':0,'uninstallation':7,'shipping':14,'delivery':18,'installation':21},
@@ -7534,7 +7554,7 @@ let selectedTemplate=null;
 
 function renderTemplates(){
   const el=document.getElementById('tab-templates');
-  const TYPE_LABEL={'po-release':'MO / PO Release','arrival':'Parts arrival','production-start':'Production start','production-end':'Production end','quality-start':'Quality start','quality-end':'Quality end','final-qc':'Final QC','vinyl':'Vinyl / branding','uat':'UAT','ui-start':'UI start','ui-end':'UI end','shipping':'Pick-up / Pack & ship','delivery':'Delivery','uninstallation':'Uninstallation date','installation':'Installation'};
+  const TYPE_LABEL={'parts-ordering-start':'Parts ordering start','mo-release':'MO Release','po-release':'PO Release','arrival':'Parts arrival','inventory-pick':'Inventory pick','production-start':'Production start','production-end':'Production end','quality-start':'Quality start','quality-end':'Quality end','final-qc':'Final QC','vinyl':'Vinyl / branding','uat':'UAT','ui-start':'UI start','ui-end':'UI end','shipping':'Pick-up / Pack & ship','delivery':'Delivery','uninstallation':'Uninstallation date','installation':'Installation'};
   const cards=TEMPLATES.map(t=>`
     <div class="template-card${selectedTemplate===t.id?' template-active':''}" onclick="selectTemplate('${t.id}')">
       <div class="template-card-name">${t.name}</div>
@@ -7568,7 +7588,7 @@ function applyTemplateToIntake(){
   const t=TEMPLATES.find(x=>x.id===selectedTemplate);if(!t)return;
   const poEl=document.getElementById('i-po');if(!poEl||!poEl.value){alert('Please enter the MO/PO release date first.');return;}
   const base=new Date(poEl.value+'T00:00:00');
-  const KEY_MAP={'po-release':'i-po','mo-release':'i-mo','arrival':'i-parts-end','production-start':'i-ps','production-end':'i-pe','quality-start':'i-qs','quality-end':'i-qe','final-qc':'i-fqa','vinyl':'i-vinyl','uat':'i-uat','ui-start':'i-ui-s','ui-end':'i-ui-e','shipping':'i-ship','delivery':'i-del','uninstallation':'i-train','installation':'i-inst'};
+  const KEY_MAP={'parts-ordering-start':'i-parts-start','po-release':'i-po','mo-release':'i-mo','arrival':'i-parts-end','inventory-pick':'i-inv','production-start':'i-ps','production-end':'i-pe','quality-start':'i-qs','quality-end':'i-qe','final-qc':'i-fqa','vinyl':'i-vinyl','uat':'i-uat','ui-start':'i-ui-s','ui-end':'i-ui-e','shipping':'i-ship','delivery':'i-del','uninstallation':'i-train','installation':'i-inst'};
   Object.entries(t.offsets).forEach(([key,days])=>{
     const inputId=KEY_MAP[key];if(!inputId)return;
     const el=document.getElementById(inputId);if(!el||el.id==='i-po')return;
