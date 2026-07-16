@@ -185,7 +185,7 @@ body.proc-mode .page{max-width:1160px;}
 .proc-qitem:hover{background:var(--gray-50);}
 .proc-qitem.sel{background:var(--red-light);border-color:#f4c2cb;}
 .proc-qname{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.proc-qso{font-family:var(--mono);font-size:10px;color:var(--gray-500);margin-top:2px;}
+.proc-qso{font-family:var(--mono);font-size:10px;color:var(--gray-500);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .proc-qbottom{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center;}
 .proc-chip{font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px;letter-spacing:.02em;}
 .pc-ok{background:var(--gray-100);color:var(--gray-700);}
@@ -268,6 +268,12 @@ async function procEnter(){
   document.getElementById('ci-content').innerHTML='<div class="proc-empty">Loading procurement workspace…</div>';
   try{await procLoad();}catch(e){return;}
   document.getElementById('ci-content').innerHTML=`
+    <div style="display:flex;gap:6px;margin-bottom:14px">
+      <button class="proc-qtab on" id="pvt-day" style="flex:none;font-size:12px;padding:8px 18px" onclick="procSetView('day')">📋 My Day</button>
+      <button class="proc-qtab" id="pvt-all" style="flex:none;font-size:12px;padding:8px 18px" onclick="procSetView('all')">🗂 All projects <span id="pvt-all-cnt"></span></button>
+    </div>
+    <div id="proc-view-day"></div>
+    <div id="proc-view-all" style="display:none">
     <div class="proc-layout">
       <div class="proc-queue">
         <div class="proc-qhead">
@@ -283,11 +289,13 @@ async function procEnter(){
         <div class="proc-qlist" id="proc-qlist"></div>
       </div>
       <div id="proc-main"></div>
+    </div>
     </div>`;
   if(!procSelectedId){const q=procQueue();procSelectedId=q[0]?.p.id||null;}
-  procRenderQueue();procRenderMain();
+  procRenderQueue();procRenderMain();procRenderDay();
+  document.getElementById('pvt-all-cnt').textContent='('+projects.length+')';
   clearInterval(procTimer);
-  procTimer=setInterval(async()=>{try{await procLoad();procRenderQueue();procRenderMain(true);}catch(e){}},60000);
+  procTimer=setInterval(async()=>{try{await procLoad();procRenderQueue();procRenderMain(true);procRenderDay();}catch(e){}},60000);
 }
 async function procLoad(){
   const[pr,ms,md,po,pl,rd]=await Promise.all([
@@ -352,7 +360,15 @@ function procQueue(){
     .sort((a,b)=>{
       const pr={critical:0,high:1,normal:2};
       const pd=(pr[a.p.priority]??2)-(pr[b.p.priority]??2);if(pd)return pd;
-      const da=a.ps?daysDiff(a.ps):9999,db=b.ps?daysDiff(b.ps):9999;return da-db;
+      // Actionable first: upcoming production (soonest first), then recently
+      // overdue (most recent first), then no-date, then stale (>60d past) last.
+      const rank=x=>{const d=x.ps?daysDiff(x.ps):null;
+        if(d===null)return[2,0];
+        if(d>=0)return[0,d];
+        if(d>=-60)return[1,-d];
+        return[3,-d];};
+      const[ra,va]=rank(a),[rb,vb]=rank(b);
+      return ra-rb||va-vb;
     });
 }
 function procSetQF(f){procQF=f;['all','mo','attn'].forEach(k=>document.getElementById('pqt-'+k).classList.toggle('on',k===f));procRenderQueue();}
@@ -361,11 +377,11 @@ function procRenderQueue(){
   document.getElementById('proc-qcount').textContent=list.length;
   document.getElementById('proc-qlist').innerHTML=list.map(x=>{
     const d=x.ps?daysDiff(x.ps):null;
-    const dChip=d===null?'':`<span class="proc-chip ${d<0?'pc-crit':d<=5?'pc-soon':'pc-ok'}">${d<0?Math.abs(d)+'d overdue':d===0?'Prod TODAY':'Prod in '+d+'d'}</span>`;
+    const dChip=d===null?'':d<-60?`<span class="proc-chip pc-ok" title="Production date is long past — likely needs updating in the hub">stale date</span>`:`<span class="proc-chip ${d<0?'pc-crit':d<=5?'pc-soon':'pc-ok'}">${d<0?Math.abs(d)+'d overdue':d===0?'Prod TODAY':'Prod in '+d+'d'}</span>`;
     const prio=x.p.priority==='critical'?'<span class="proc-chip pc-crit">CRITICAL</span>':x.p.priority==='high'?'<span class="proc-chip pc-soon">HIGH</span>':'';
     return`<div class="proc-qitem${x.p.id===procSelectedId?' sel':''}" onclick="procSelectedId='${x.p.id}';procRenderQueue();procRenderMain()">
       <div class="proc-qname">${procEsc(x.p.name)}</div>
-      <div class="proc-qso">${procEsc(x.p.so_number||'')}${x.p.pm?' · '+procEsc(x.p.pm):''}</div>
+      <div class="proc-qso">${(()=>{const s=procSoListOf(x.p);return s.length>2?procEsc(s.slice(0,2).join(', '))+' +'+(s.length-2)+' SOs':procEsc(s.join(', '));})()}${x.p.pm?' · '+procEsc(x.p.pm):''}</div>
       <div class="proc-qbottom">${prio}${dChip}<span class="proc-chip" style="background:${x.st.bg};color:${x.st.fg}">${x.st.label}</span></div>
     </div>`;
   }).join('')||'<div class="proc-empty">No projects match.</div>';
@@ -380,6 +396,7 @@ function procRenderMain(keepScroll){
   const rd=procReadiness[p.id]||{};
   const list=procPosFor(p).sort((a,b)=>(a.eta||'9999').localeCompare(b.eta||'9999'));
   const dHtml=d===null?'<span class="proc-val">—</span>':
+    d<-60?`<div class="proc-days" style="color:var(--gray-500)">${Math.abs(d)}d ago</div><small style="font-size:10px;color:var(--gray-500)">stale date — update in hub</small>`:
     d<0?`<div class="proc-days" style="color:var(--red)">🚨 ${Math.abs(d)}d</div><small style="font-size:10px;color:var(--red);font-weight:700">PRODUCTION OVERDUE</small>`:
     d<=5?`<div class="proc-days" style="color:var(--warning)">⚠ ${d}d</div><small style="font-size:10px;color:var(--warning)">until production</small>`:
     `<div class="proc-days" style="color:var(--success)">${d}d</div><small style="font-size:10px;color:var(--gray-500)">until production</small>`;
@@ -410,7 +427,7 @@ function procRenderMain(keepScroll){
   el.innerHTML=`
   <div class="proc-card">
     <div class="proc-top">
-      <div><div class="proc-name">${procEsc(p.name)}</div><div class="proc-soline">SO: ${procEsc(p.so_number||'—')}</div></div>
+      <div><div class="proc-name">${procEsc(p.name)}</div><div class="proc-soline">${(()=>{const s=procSoListOf(p);if(!s.length)return'SO: —';if(s.length<=6)return'SO: '+procEsc(s.join(', '));return`SO: ${procEsc(s.slice(0,6).join(', '))} <span id="proc-so-more" style="display:none">${procEsc(s.slice(6).join(', '))} </span><button onclick="const m=document.getElementById('proc-so-more');const open=m.style.display!=='none';m.style.display=open?'none':'inline';this.textContent=open?'+${s.length-6} more ▾':'show less ▴'" style="font-family:var(--font);font-size:10px;font-weight:600;padding:2px 10px;border-radius:10px;border:1px solid var(--gray-300);background:var(--white);color:var(--gray-700);cursor:pointer">+${s.length-6} more ▾</button> <span style="color:var(--gray-500);font-size:10px">(${s.length} SOs)</span>`;})()}</div></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <select class="proc-prio" onchange="procSetPriority('${p.id}',this.value)" title="Priority">
           <option value="normal"${(p.priority||'normal')==='normal'?' selected':''}>🟢 Normal</option>
@@ -558,6 +575,96 @@ async function procDeletePo(poId){
   await procLog('deleted PO',(po?.vendor||'')+' '+(po?.po_number||''),p?.id,po?.po_number,null);
   showToast('PO deleted');
   await procLoad();procRenderQueue();procRenderMain(true);
+}
+// ── MY DAY (triage view — what do I do today?) ──
+let procView='day';
+function procSetView(v){
+  procView=v;
+  document.getElementById('pvt-day').classList.toggle('on',v==='day');
+  document.getElementById('pvt-all').classList.toggle('on',v==='all');
+  document.getElementById('proc-view-day').style.display=v==='day'?'':'none';
+  document.getElementById('proc-view-all').style.display=v==='all'?'':'none';
+}
+function procGo(pid){procSelectedId=pid;procSetView('all');procRenderQueue();procRenderMain();window.scrollTo(0,0);}
+function procRenderDay(){
+  const el=document.getElementById('proc-view-day');if(!el)return;
+  const fresh=p=>{const ps=procProdStart(p);const d=ps?daysDiff(ps):null;return d===null||d>=-60;};
+  const act=projects.filter(fresh);
+  // 1) ORDER NOW — MO released, zero POs
+  const orderNow=act.map(p=>({p,st:procStatus(p),d:procProdStart(p)?daysDiff(procProdStart(p)):null}))
+    .filter(x=>x.st.key==='needs-po')
+    .sort((a,b)=>(a.d??9999)-(b.d??9999));
+  // 2) CHASE VENDORS — open POs past ETA, grouped by vendor
+  const lateByVendor={};
+  (procPos||[]).forEach(po=>{
+    if(po.status==='received'||po.status==='cancelled'||!po.eta||daysDiff(po.eta)>=0)return;
+    const links=procLinks.filter(l=>l.po_id===po.id&&l.project_id);
+    const projs=[...new Set(links.map(l=>projects.find(p=>p.id===l.project_id)).filter(Boolean))];
+    if(!projs.length||!projs.some(fresh))return;
+    const v=po.vendor||'(no vendor)';
+    (lateByVendor[v]=lateByVendor[v]||[]).push({po,late:Math.abs(daysDiff(po.eta)),projs});
+  });
+  const vendors=Object.entries(lateByVendor).map(([v,list])=>({v,list,worst:Math.max(...list.map(x=>x.late))})).sort((a,b)=>b.worst-a.worst);
+  // 3) ARRIVING — open POs with ETA in next 7 days
+  const arriving=(procPos||[]).filter(po=>{
+    if(po.status==='received'||po.status==='cancelled'||!po.eta)return false;
+    const d=daysDiff(po.eta);return d>=0&&d<=7;
+  }).map(po=>({po,d:daysDiff(po.eta),projs:[...new Set(procLinks.filter(l=>l.po_id===po.id&&l.project_id).map(l=>projects.find(p=>p.id===l.project_id)).filter(Boolean))]}))
+    .sort((a,b)=>a.d-b.d);
+  // 4) READINESS NEEDED — production within 14d, no stoplight set
+  const readyNeeded=act.map(p=>({p,d:procProdStart(p)?daysDiff(procProdStart(p)):null}))
+    .filter(x=>x.d!==null&&x.d<=14&&!procReadiness[x.p.id]?.stoplight)
+    .sort((a,b)=>a.d-b.d);
+  const allClear=!orderNow.length&&!vendors.length&&!arriving.length&&!readyNeeded.length;
+  const dayCard=(icon,title,count,color,body,empty)=>`
+    <div class="proc-card" style="margin-bottom:0">
+      <div class="proc-chead" style="border-left:3px solid ${color}">
+        <span class="proc-ctitle" style="color:${color}">${icon} ${title}</span>
+        <span style="font-family:var(--mono);font-size:13px;font-weight:600;color:${count?color:'var(--gray-300)'}">${count}</span>
+      </div>
+      ${count?body:`<div class="proc-empty" style="padding:1.2rem">${empty}</div>`}
+    </div>`;
+  const row=(main,sub,right,onclick)=>`
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--gray-50);cursor:pointer" onclick="${onclick}" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background=''">
+      <div style="min-width:0"><div style="font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${main}</div>${sub?`<div style="font-size:10px;color:var(--gray-500);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sub}</div>`:''}</div>
+      <div style="flex-shrink:0;text-align:right">${right}</div>
+    </div>`;
+  const more=n=>n>0?`<div style="font-size:10px;color:var(--gray-500);padding:7px 14px">+ ${n} more in All projects</div>`:'';
+  const orderBody=orderNow.slice(0,6).map(x=>row(
+    procEsc(x.p.name),
+    (x.p.pm?'PM '+procEsc(x.p.pm)+' · ':'')+procSoListOf(x.p).length+' SO'+(procSoListOf(x.p).length!==1?'s':''),
+    x.d===null?'<span style="font-size:10px;color:var(--gray-500)">no prod date</span>':`<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:${x.d<=5?'var(--red)':x.d<=14?'var(--warning)':'var(--gray-700)'}">${x.d<0?Math.abs(x.d)+'d over':x.d+'d'}</span>`,
+    `procGo('${x.p.id}')`)).join('')+more(orderNow.length-6);
+  const vendorBody=vendors.slice(0,6).map(g=>{
+    const firstPid=g.list[0].projs[0]?.id;
+    const projNames=[...new Set(g.list.flatMap(x=>x.projs.map(p=>p.name)))];
+    return row(
+      procEsc(g.v),
+      g.list.length+' PO'+(g.list.length!==1?'s':'')+' late · '+procEsc(projNames.slice(0,2).join(', '))+(projNames.length>2?' +'+(projNames.length-2):''),
+      `<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--red)">${g.worst}d late</span>`,
+      firstPid?`procGo('${firstPid}')`:'');
+  }).join('')+more(vendors.length-6);
+  const arrivingBody=arriving.slice(0,7).map(x=>row(
+    procEsc(x.po.vendor||'—')+' <span style="font-family:var(--mono);font-weight:400;font-size:10.5px;color:var(--gray-500)">'+procEsc(x.po.po_number||'')+'</span>',
+    x.projs.length?procEsc(x.projs.map(p=>p.name).slice(0,2).join(', ')):'',
+    `<span style="font-family:var(--mono);font-size:11px;font-weight:600;color:${x.d===0?'var(--success)':'var(--gray-700)'}">${x.d===0?'TODAY':x.d===1?'Tomorrow':fmt(x.po.eta)}</span>`,
+    x.projs[0]?`procGo('${x.projs[0].id}')`:'')).join('')+more(arriving.length-7);
+  const readyBody=readyNeeded.slice(0,6).map(x=>row(
+    procEsc(x.p.name),
+    'Production '+fmt(procProdStart(x.p)),
+    `<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:${x.d<=5?'var(--red)':'var(--warning)'}">${x.d<0?Math.abs(x.d)+'d over':x.d+'d'}</span>`,
+    `procGo('${x.p.id}')`)).join('')+more(readyNeeded.length-6);
+  el.innerHTML=allClear?`
+    <div class="proc-card"><div class="proc-empty" style="padding:3rem 1rem;font-size:15px">
+      ✅ <b>All clear.</b><br><span style="font-size:12px">Nothing needs ordering, no vendors late, nothing arriving, readiness up to date.<br>Enjoy the quiet — or browse <b>All projects</b>.</span>
+    </div></div>`:`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      ${dayCard('🔥','Order now',orderNow.length,'var(--red)',orderBody,'Nothing waiting on POs ✓')}
+      ${dayCard('🚚','Chase these vendors',vendors.length,'#d97706',vendorBody,'No late vendors ✓')}
+      ${dayCard('📦','Arriving this week',arriving.length,'var(--blue)',arrivingBody,'Nothing due this week')}
+      ${dayCard('🟡','Readiness needed',readyNeeded.length,'var(--warning)',readyBody,'All near-term projects have a stoplight ✓')}
+    </div>
+    <style>@media(max-width:880px){#proc-view-day>div{grid-template-columns:1fr!important}}</style>`;
 }
 // ── ODOO DROP-IMPORTER ──
 function odooToIso(v){
