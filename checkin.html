@@ -250,7 +250,7 @@ body.proc-mode .page{max-width:1160px;}
 <div id="proc-modal-root"></div>
 <script>
 // ═══ PROCUREMENT MODULE — active only for the proc2026 passcode ═══
-let procPos=[],procLinks=[],procReadiness={},procMsDoneMap={},procSelectedId=null,procQF='all',procTimer=null;
+let procPos=[],procLinks=[],procReadiness={},procMsDoneMap={},procSelectedId=null,procQF='all',procTimer=null,procSoStatus={},procSoFilter='nopo';
 function procEsc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function procFmtFull(s){if(!s)return'—';return new Date(s+'T00:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});}
 function procSoListOf(p){return(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);}
@@ -270,9 +270,11 @@ async function procEnter(){
   document.getElementById('ci-content').innerHTML=`
     <div style="display:flex;gap:6px;margin-bottom:14px">
       <button class="proc-qtab on" id="pvt-day" style="flex:none;font-size:12px;padding:8px 18px" onclick="procSetView('day')">📋 My Day</button>
-      <button class="proc-qtab" id="pvt-all" style="flex:none;font-size:12px;padding:8px 18px" onclick="procSetView('all')">🗂 All projects <span id="pvt-all-cnt"></span></button>
+      <button class="proc-qtab" id="pvt-sos" style="flex:none;font-size:12px;padding:8px 18px" onclick="procSetView('sos')">🧾 Sales orders <span id="pvt-sos-cnt"></span></button>
+      <button class="proc-qtab" id="pvt-all" style="flex:none;font-size:12px;padding:8px 18px" onclick="procSetView('all')">🗂 Projects <span id="pvt-all-cnt"></span></button>
     </div>
     <div id="proc-view-day"></div>
+    <div id="proc-view-sos" style="display:none"></div>
     <div id="proc-view-all" style="display:none">
     <div class="proc-layout">
       <div class="proc-queue">
@@ -292,19 +294,20 @@ async function procEnter(){
     </div>
     </div>`;
   if(!procSelectedId){const q=procQueue();procSelectedId=q[0]?.p.id||null;}
-  procRenderQueue();procRenderMain();procRenderDay();
+  procRenderQueue();procRenderMain();procRenderDay();procRenderSOs();
   document.getElementById('pvt-all-cnt').textContent='('+projects.length+')';
   clearInterval(procTimer);
-  procTimer=setInterval(async()=>{try{await procLoad();procRenderQueue();procRenderMain(true);procRenderDay();}catch(e){}},60000);
+  procTimer=setInterval(async()=>{try{await procLoad();procRenderQueue();procRenderMain(true);procRenderDay();procRenderSOs();}catch(e){}},60000);
 }
 async function procLoad(){
-  const[pr,ms,md,po,pl,rd]=await Promise.all([
+  const[pr,ms,md,po,pl,rd,ss]=await Promise.all([
     sb.from('projects').select('*').neq('status','complete'),
     sb.from('milestones').select('*'),
     sb.from('milestone_done').select('*'),
     sb.from('procurement_po').select('*').order('created_at',{ascending:false}),
     sb.from('procurement_po_projects').select('*'),
     sb.from('procurement_readiness').select('*'),
+    sb.from('procurement_so_status').select('*'),
   ]);
   if(po.error&&/does not exist|relation/i.test(po.error.message||'')){
     document.getElementById('ci-content').innerHTML='<div class="proc-card"><div class="proc-empty">⚠️ Procurement tables not found.<br>Run <b>procurement-migration.sql</b> in the Supabase SQL editor first, then refresh.</div></div>';
@@ -316,6 +319,7 @@ async function procLoad(){
   procMsDoneMap={};(md.data||[]).forEach(d=>procMsDoneMap[d.milestone_id]=d);
   procPos=po.data||[];procLinks=pl.data||[];
   procReadiness={};(rd.data||[]).forEach(r=>procReadiness[r.project_id]=r);
+  procSoStatus={};((ss&&ss.data)||[]).forEach(s=>{procSoStatus[s.so_number]=s;});
 }
 // ── derived logic ──
 function procMsOf(pid,key){return milestones.filter(m=>m.project_id===pid&&m.key===key&&m.date).sort((a,b)=>a.date.localeCompare(b.date));}
@@ -328,9 +332,17 @@ function procPosFor(p){
   const ids=new Set(procLinks.filter(l=>l.project_id===p.id||(l.so_number&&sos.includes(l.so_number))).map(l=>l.po_id));
   return procPos.filter(x=>ids.has(x.id)&&x.status!=='cancelled');
 }
+function procUncoveredSOs(p){
+  const covered=new Set(procLinks.filter(l=>l.so_number).map(l=>l.so_number));
+  return procSoListOf(p).filter(so=>!covered.has(so)&&procSoStatus[so]?.status!=='no-po-needed');
+}
 function procStatus(p){
   const list=procPosFor(p);
-  if(!list.length)return procMoReleased(p)?{key:'needs-po',label:'🔥 Needs POs',bg:'var(--red-light)',fg:'var(--red)'}:{key:'not-started',label:'Not started',bg:'var(--gray-100)',fg:'var(--gray-500)'};
+  if(!list.length){
+    const sos=procSoListOf(p);
+    if(sos.length&&procUncoveredSOs(p).length===0)return{key:'inventory',label:'📦 From inventory — no PO needed',bg:'var(--success-bg)',fg:'var(--success)'};
+    return procMoReleased(p)?{key:'needs-po',label:'🔥 Needs POs',bg:'var(--red-light)',fg:'var(--red)'}:{key:'not-started',label:'Not started',bg:'var(--gray-100)',fg:'var(--gray-500)'};
+  }
   const open=list.filter(x=>x.status!=='received');
   const late=open.filter(x=>x.eta&&daysDiff(x.eta)<0);
   if(late.length)return{key:'late',label:'🚨 Vendor late ('+late.length+')',bg:'var(--red-light)',fg:'var(--red)'};
@@ -580,10 +592,10 @@ async function procDeletePo(poId){
 let procView='day';
 function procSetView(v){
   procView=v;
-  document.getElementById('pvt-day').classList.toggle('on',v==='day');
-  document.getElementById('pvt-all').classList.toggle('on',v==='all');
-  document.getElementById('proc-view-day').style.display=v==='day'?'':'none';
-  document.getElementById('proc-view-all').style.display=v==='all'?'':'none';
+  ['day','sos','all'].forEach(k=>{
+    document.getElementById('pvt-'+k).classList.toggle('on',v===k);
+    document.getElementById('proc-view-'+k).style.display=v===k?'':'none';
+  });
 }
 function procGo(pid){procSelectedId=pid;procSetView('all');procRenderQueue();procRenderMain();window.scrollTo(0,0);}
 function procRenderDay(){
@@ -654,18 +666,156 @@ function procRenderDay(){
     'Production '+fmt(procProdStart(x.p)),
     `<span style="font-family:var(--mono);font-size:12px;font-weight:700;color:${x.d<=5?'var(--red)':'var(--warning)'}">${x.d<0?Math.abs(x.d)+'d over':x.d+'d'}</span>`,
     `procGo('${x.p.id}')`)).join('')+more(readyNeeded.length-6);
-  el.innerHTML=allClear?`
+  const uncoveredTotal=act.reduce((s,p)=>s+procUncoveredSOs(p).length,0);
+  const banner=uncoveredTotal?`<div class="proc-card" style="margin-bottom:14px"><div style="padding:11px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+    <span style="font-size:13px">🧾 <b>${uncoveredTotal}</b> sales order${uncoveredTotal!==1?'s':''} with no PO assigned</span>
+    <button class="proc-btn proc-btn-p" style="font-size:11.5px;padding:6px 14px" onclick="procSoFilter='nopo';procRenderSOs();procSetView('sos')">Review →</button>
+  </div></div>`:'';
+  el.innerHTML=banner+(allClear?`
     <div class="proc-card"><div class="proc-empty" style="padding:3rem 1rem;font-size:15px">
       ✅ <b>All clear.</b><br><span style="font-size:12px">Nothing needs ordering, no vendors late, nothing arriving, readiness up to date.<br>Enjoy the quiet — or browse <b>All projects</b>.</span>
     </div></div>`:`
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div class="proc-day-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
       ${dayCard('🔥','Order now',orderNow.length,'var(--red)',orderBody,'Nothing waiting on POs ✓')}
       ${dayCard('🚚','Chase these vendors',vendors.length,'#d97706',vendorBody,'No late vendors ✓')}
       ${dayCard('📦','Arriving this week',arriving.length,'var(--blue)',arrivingBody,'Nothing due this week')}
       ${dayCard('🟡','Readiness needed',readyNeeded.length,'var(--warning)',readyBody,'All near-term projects have a stoplight ✓')}
     </div>
-    <style>@media(max-width:880px){#proc-view-day>div{grid-template-columns:1fr!important}}</style>`;
+    <style>@media(max-width:880px){#proc-view-day .proc-day-grid{grid-template-columns:1fr!important}}</style>`);
 }
+// ── 🧾 SALES ORDERS VIEW — one row per SO, assign POs, mark inventory ──
+function procAllSOs(){
+  const out=[];
+  projects.forEach(p=>{
+    const ps=procProdStart(p);const d=ps?daysDiff(ps):null;
+    procSoListOf(p).forEach(so=>{
+      const links=procLinks.filter(l=>l.so_number===so);
+      const poList=links.map(l=>procPos.find(x=>x.id===l.po_id)).filter(x=>x&&x.status!=='cancelled');
+      const st=procSoStatus[so];
+      out.push({so,p,d,pos:poList,noPo:st?.status==='no-po-needed',stRow:st});
+    });
+  });
+  return out;
+}
+function procRenderSOs(){
+  const el=document.getElementById('proc-view-sos');if(!el)return;
+  const all=procAllSOs();
+  const uncovered=all.filter(x=>!x.pos.length&&!x.noPo);
+  const cntEl=document.getElementById('pvt-sos-cnt');if(cntEl)cntEl.textContent=uncovered.length?'('+uncovered.length+'⚠)':'';
+  const q=(document.getElementById('proc-sos-search')?.value||'').toLowerCase();
+  let list=all.filter(x=>{
+    if(procSoFilter==='nopo'&&(x.pos.length||x.noPo))return false;
+    if(procSoFilter==='covered'&&!x.pos.length)return false;
+    if(procSoFilter==='inv'&&!x.noPo)return false;
+    if(q&&!(x.so.toLowerCase().includes(q)||(x.p.name||'').toLowerCase().includes(q)||(x.p.pm||'').toLowerCase().includes(q)||x.pos.some(po=>(po.po_number||'').toLowerCase().includes(q)||(po.vendor||'').toLowerCase().includes(q))))return false;
+    return true;
+  });
+  const rank=x=>{if(x.d===null)return[2,0];if(x.d>=0)return[0,x.d];if(x.d>=-60)return[1,-x.d];return[3,-x.d];};
+  list.sort((a,b)=>{const[ra,va]=rank(a),[rb,vb]=rank(b);return ra-rb||va-vb||(a.p.name||'').localeCompare(b.p.name||'')||a.so.localeCompare(b.so);});
+  const tab=(id,lbl,n)=>`<button class="proc-qtab${procSoFilter===id?' on':''}" style="flex:none;padding:6px 14px" onclick="procSoFilter='${id}';procRenderSOs()">${lbl}${n!==undefined?' <span style="font-family:var(--mono)">'+n+'</span>':''}</button>`;
+  const rows=list.slice(0,200).map(x=>{
+    const dChip=x.d===null?'<span class="proc-chip pc-ok">no prod date</span>':x.d<-60?'<span class="proc-chip pc-ok">stale</span>':`<span class="proc-chip ${x.d<0?'pc-crit':x.d<=5?'pc-soon':'pc-ok'}">${x.d<0?Math.abs(x.d)+'d over':x.d===0?'TODAY':x.d+'d'}</span>`;
+    const poCell=x.noPo
+      ?`<span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;background:var(--success-bg);color:var(--success)">📦 From inventory</span>${x.stRow?.updated_by?`<span style="font-size:9px;color:var(--gray-400)"> ${procEsc(x.stRow.updated_by)}</span>`:''}`
+      :x.pos.length
+        ?x.pos.slice(0,3).map(po=>{
+          const late=po.status!=='received'&&po.eta&&daysDiff(po.eta)<0;
+          return`<span style="font-size:9.5px;font-weight:600;padding:3px 8px;border-radius:9px;margin-right:4px;white-space:nowrap;${po.status==='received'?'background:var(--success-bg);color:var(--success)':late?'background:var(--red-light);color:var(--red)':'background:var(--blue-bg);color:var(--blue)'}" title="${procEsc(po.vendor||'')} ${procEsc(po.po_number||'')} · ETA ${fmt(po.eta)}">${procEsc(po.po_number||po.vendor||'PO')}${po.status==='received'?' ✓':late?' ⚠':''}</span>`;
+        }).join('')+(x.pos.length>3?`<span style="font-size:9px;color:var(--gray-500)">+${x.pos.length-3}</span>`:'')
+        :'<span style="font-size:10px;color:var(--red);font-weight:600">— none —</span>';
+    const actions=x.noPo
+      ?`<button class="proc-ibtn" style="font-size:10px" title="Undo — this SO needs a PO after all" onclick="procClearNoPo('${procEsc(x.so)}')">↩︎ undo</button>`
+      :`<button class="proc-btn proc-btn-g" style="font-size:10px;padding:4px 10px" onclick="procOpenAssign('${procEsc(x.so)}','${x.p.id}')">＋ Assign PO</button>
+        ${!x.pos.length?`<button class="proc-btn proc-btn-g" style="font-size:10px;padding:4px 10px" onclick="procMarkNoPo('${procEsc(x.so)}','${x.p.id}')">📦 No PO needed</button>`:''}`;
+    return`<tr>
+      <td style="font-family:var(--mono);font-size:11.5px;font-weight:600;color:var(--red);white-space:nowrap">${procEsc(x.so)}</td>
+      <td style="font-size:12px;min-width:140px"><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px">${procEsc(x.p.name)}</div><div style="font-size:9.5px;color:var(--gray-500)">${x.p.pm?procEsc(x.p.pm):''}</div></td>
+      <td>${dChip}</td>
+      <td style="min-width:160px">${poCell}</td>
+      <td style="white-space:nowrap;text-align:right">${actions}</td>
+    </tr>`;
+  }).join('');
+  el.innerHTML=`
+  <div class="proc-card">
+    <div class="proc-chead" style="flex-wrap:wrap">
+      <span class="proc-ctitle">Sales orders <span style="font-family:var(--mono);font-weight:400;color:var(--gray-500)">${list.length}${list.length>200?' (showing 200)':''}</span></span>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center">
+        ${tab('nopo','⚠ No PO',uncovered.length)}
+        ${tab('covered','✓ Has PO',all.filter(x=>x.pos.length).length)}
+        ${tab('inv','📦 No PO needed',all.filter(x=>x.noPo).length)}
+        ${tab('all','All',all.length)}
+      </div>
+    </div>
+    <div style="padding:10px 14px;border-bottom:1px solid var(--gray-50)">
+      <input id="proc-sos-search" placeholder="Search SO, project, PM, vendor, PO#…" value="${procEsc(document.getElementById('proc-sos-search')?.value||'')}" oninput="procRenderSOs()" style="font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%">
+    </div>
+    ${list.length?`<div style="overflow-x:auto"><table class="proc-table" style="min-width:700px">
+      <tr><th>SO</th><th>Project</th><th>Prod</th><th>Purchase orders</th><th></th></tr>${rows}</table></div>`
+      :`<div class="proc-empty">${procSoFilter==='nopo'?'Every SO is covered or marked “no PO needed” 🎉':'Nothing matches.'}</div>`}
+  </div>`;
+  const inp=document.getElementById('proc-sos-search');
+  if(q&&inp){inp.focus();inp.setSelectionRange(inp.value.length,inp.value.length);}
+}
+async function procMarkNoPo(so,pid){
+  const note=prompt('Mark '+so+' as fulfilled from inventory — no PO needed?\n\nOptional note:','');
+  if(note===null)return;
+  const row={so_number:so,project_id:pid,status:'no-po-needed',note:note.trim()||null,updated_by:currentUserName,updated_at:new Date().toISOString()};
+  const{error}=await sb.from('procurement_so_status').upsert(row);
+  if(error){alert('Error: '+error.message);return;}
+  procSoStatus[so]=row;
+  await procLog('SO no PO needed (inventory)',so,pid,null,note.trim()||'inventory');
+  showToast('📦 '+so+' — from inventory ✓');
+  procRenderSOs();procRenderQueue();procRenderMain(true);procRenderDay();
+}
+async function procClearNoPo(so){
+  const{error}=await sb.from('procurement_so_status').delete().eq('so_number',so);
+  if(error){alert('Error: '+error.message);return;}
+  const pid=procSoStatus[so]?.project_id;delete procSoStatus[so];
+  await procLog('SO no-PO status cleared',so,pid,null,null);
+  showToast(so+' back in the needs-PO list');
+  procRenderSOs();procRenderQueue();procRenderMain(true);procRenderDay();
+}
+let _assignCtx=null;
+function procOpenAssign(so,pid){
+  _assignCtx={so,pid};
+  document.getElementById('proc-modal-root').innerHTML=`
+  <div class="proc-mback" onclick="if(event.target===this)procCloseModal()"><div class="proc-modal" style="width:520px">
+    <div class="proc-mhead"><span class="proc-mtitle">Assign a PO to <span style="font-family:var(--mono);color:var(--red)">${procEsc(so)}</span></span><button class="proc-mclose" onclick="procCloseModal()">✕</button></div>
+    <div class="proc-mbody">
+      <input id="assign-search" placeholder="Search imported POs — number or vendor…" oninput="procAssignList()" style="font-family:var(--font);font-size:13px;padding:8px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%;margin-bottom:10px">
+      <div id="assign-list" style="max-height:340px;overflow-y:auto"></div>
+      <div style="font-size:10px;color:var(--gray-500);margin-top:10px">PO not imported yet? Use <b>＋ Add PO</b> on the project, or 📥 Import Odoo.</div>
+    </div>
+  </div></div>`;
+  procAssignList();
+  setTimeout(()=>document.getElementById('assign-search')?.focus(),30);
+}
+function procAssignList(){
+  const{so}=_assignCtx;
+  const q=(document.getElementById('assign-search')?.value||'').toLowerCase();
+  const already=new Set(procLinks.filter(l=>l.so_number===so).map(l=>l.po_id));
+  let list=procPos.filter(po=>po.status!=='cancelled'&&!already.has(po.id));
+  if(q)list=list.filter(po=>(po.po_number||'').toLowerCase().includes(q)||(po.vendor||'').toLowerCase().includes(q));
+  list=list.slice(0,40);
+  document.getElementById('assign-list').innerHTML=list.map(po=>{
+    const late=po.status!=='received'&&po.eta&&daysDiff(po.eta)<0;
+    return`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--gray-50);cursor:pointer" onclick="procDoAssign('${po.id}')" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background=''">
+      <div><span style="font-family:var(--mono);font-size:12px;font-weight:600">${procEsc(po.po_number||'—')}</span> <span style="font-size:12px;font-weight:500">${procEsc(po.vendor||'')}</span>
+        <div style="font-size:9.5px;color:var(--gray-500)">${po.status==='received'?'✓ received '+fmt(po.received_at):'ETA '+fmt(po.eta)+(late?' · '+Math.abs(daysDiff(po.eta))+'d late':'')}${po.buyer?' · '+procEsc(po.buyer):''}</div></div>
+      <span class="proc-btn proc-btn-g" style="font-size:10px;padding:4px 12px">Assign</span>
+    </div>`;
+  }).join('')||'<div class="proc-empty" style="padding:1.2rem">No matching POs — import from Odoo first.</div>';
+}
+async function procDoAssign(poId){
+  const{so,pid}=_assignCtx;
+  const{error}=await sb.from('procurement_po_projects').insert({po_id:poId,so_number:so,project_id:pid,matched:true});
+  if(error){alert('Error: '+error.message);return;}
+  const po=procPos.find(x=>x.id===poId);
+  await procLog('assigned PO to SO',(po?.vendor||'')+' '+(po?.po_number||'')+' → '+so,pid,null,so);
+  procCloseModal();showToast('✓ '+(po?.po_number||'PO')+' assigned to '+so);
+  await procLoad();procRenderSOs();procRenderQueue();procRenderMain(true);procRenderDay();
+}
+
 // ── ODOO DROP-IMPORTER ──
 function odooToIso(v){
   if(v==null||v==='')return null;
