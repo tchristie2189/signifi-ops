@@ -253,7 +253,7 @@ body.proc-mode .page{max-width:1160px;}
 let procPos=[],procLinks=[],procReadiness={},procMsDoneMap={},procSelectedId=null,procQF='all',procTimer=null,procSoStatus={},procSoFilter='nopo';
 function procEsc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function procFmtFull(s){if(!s)return'—';return new Date(s+'T00:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});}
-function procSoListOf(p){return(p.so_number||'').split(',').map(s=>s.trim()).filter(Boolean);}
+function procSoListOf(p){return(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);}
 function procCloseModal(){document.getElementById('proc-modal-root').innerHTML='';}
 async function procLog(action,entityName,projectId,oldVal,newVal){
   try{await sb.from('activity_log').insert({user_name:currentUserName||'Procurement',action,entity_type:'procurement',entity_name:entityName||'',project_id:projectId||null,old_value:oldVal?String(oldVal):null,new_value:newVal?String(newVal):null});}catch(e){}
@@ -334,7 +334,7 @@ function procPosFor(p){
 }
 function procUncoveredSOs(p){
   const covered=new Set(procLinks.filter(l=>l.so_number).map(l=>l.so_number));
-  return procSoListOf(p).filter(so=>!covered.has(so)&&procSoStatus[so]?.status!=='no-po-needed');
+  return procSoListOf(p).filter(so=>!covered.has(so)&&procSoStatus[so]?.status!=='no-po-needed'&&!procSoClosed(so,p));
 }
 function procStatus(p){
   const list=procPosFor(p);
@@ -498,9 +498,10 @@ async function procSetStoplight(pid,color){
   const{error}=await sb.from('procurement_readiness').upsert(row);
   if(error){alert('Error: '+error.message);return;}
   procReadiness[pid]=row;
+  await procMirrorStoplight(pid,color,reason);
   const p=projects.find(x=>x.id===pid);
   await procLog('procurement stoplight '+color,p?.name,pid,null,reason||color);
-  showToast('Stoplight saved ✓');procRenderMain(true);
+  showToast('Stoplight saved ✓ — synced to hub');procRenderMain(true);
 }
 function procOpenPoModal(poId){
   const p=projects.find(x=>x.id===procSelectedId);if(!p)return;
@@ -569,7 +570,7 @@ async function procSavePo(poId){
   if(le){alert('PO saved but SO links failed: '+le.message);return;}
   await procLog(poId?'updated PO':'added PO',(rec.vendor||'')+' '+(rec.po_number||''),p.id,null,rec.status);
   procCloseModal();showToast(poId?'PO updated ✓':'PO added ✓');
-  await procLoad();procRenderQueue();procRenderMain(true);
+  await procLoad();await procSyncMilestones();procRenderQueue();procRenderMain(true);
 }
 async function procMarkReceived(poId){
   const{error}=await sb.from('procurement_po').update({status:'received',received_at:new Date().toISOString().split('T')[0],updated_at:new Date().toISOString()}).eq('id',poId);
@@ -577,7 +578,7 @@ async function procMarkReceived(poId){
   const po=procPos.find(x=>x.id===poId);const p=projects.find(x=>x.id===procSelectedId);
   await procLog('PO received',(po?.vendor||'')+' '+(po?.po_number||''),p?.id,po?.status,'received');
   showToast('✓ Marked received');
-  await procLoad();procRenderQueue();procRenderMain(true);
+  await procLoad();await procSyncMilestones();procRenderQueue();procRenderMain(true);
 }
 async function procDeletePo(poId){
   if(!confirm('Delete this PO record? (Does not touch Odoo.)'))return;
@@ -586,7 +587,7 @@ async function procDeletePo(poId){
   if(error){alert('Error: '+error.message);return;}
   await procLog('deleted PO',(po?.vendor||'')+' '+(po?.po_number||''),p?.id,po?.po_number,null);
   showToast('PO deleted');
-  await procLoad();procRenderQueue();procRenderMain(true);
+  await procLoad();await procSyncMilestones();procRenderQueue();procRenderMain(true);
 }
 // ── MY DAY (triage view — what do I do today?) ──
 let procView='day';
@@ -684,6 +685,66 @@ function procRenderDay(){
     <style>@media(max-width:880px){#proc-view-day .proc-day-grid{grid-template-columns:1fr!important}}</style>`);
 }
 // ── 🧾 SALES ORDERS VIEW — one row per SO, assign POs, mark inventory ──
+// ── MILESTONE SYNC — PO reality drives the hub's procurement milestones ──
+// Forward-only, exactly like production check-ins: auto-marks 'PO Release' /
+// 'Parts ordering start' when POs exist, and 'Parts arrival' when everything
+// is received (or fulfilled from inventory). Never un-marks anything.
+async function procSyncMilestones(){
+  const soPos=so=>procLinks.filter(l=>l.so_number===so).map(l=>procPos.find(x=>x.id===l.po_id)).filter(x=>x&&x.status!=='cancelled');
+  const soNoPo=so=>procSoStatus[so]?.status==='no-po-needed';
+  const inserts=[];
+  projects.forEach(p=>{
+    const allSos=procSoListOf(p);if(!allSos.length)return;
+    const scopeOf=m=>m.so_tag?[m.so_tag]:allSos;
+    const orderedOK=sos=>sos.length>0&&(sos.some(so=>soPos(so).length>0)||sos.every(soNoPo));
+    const arrivedOK=sos=>sos.length>0&&sos.every(so=>{const ps=soPos(so);return ps.length?ps.every(x=>x.status==='received'):soNoPo(so);});
+    milestones.filter(m=>m.project_id===p.id&&!procMsDoneMap[m.id]).forEach(m=>{
+      const lbl=(m.label||'').toLowerCase();
+      const isOrderMs=m.key==='po-release'||(m.key==='arrival'&&lbl.includes('ordering'));
+      const isArriveMs=m.key==='arrival'&&lbl.includes('arrival');
+      if(!isOrderMs&&!isArriveMs)return;
+      const sos=scopeOf(m);
+      if((isOrderMs&&orderedOK(sos))||(isArriveMs&&arrivedOK(sos))){
+        inserts.push({milestone_id:m.id,project_id:p.id,marked_by:(currentUserName||'Procurement')+' · auto'});
+      }
+    });
+  });
+  if(!inserts.length)return;
+  try{
+    const{data,error}=await sb.from('milestone_done').insert(inserts).select();
+    if(error)return;
+    (data||inserts).forEach(d=>procMsDoneMap[d.milestone_id]=d);
+    await procLog('auto-marked milestones from PO data',inserts.length+' milestone'+(inserts.length!==1?'s':'')+' done',null,null,String(inserts.length));
+    showToast('🔗 '+inserts.length+' milestone'+(inserts.length!==1?'s':'')+' auto-marked done in the hub ✓');
+  }catch(e){}
+}
+// Mirror the procurement readiness stoplight onto the project's open
+// procurement milestone so hub health / escalation logic sees it.
+async function procMirrorStoplight(pid,color,reason){
+  try{
+    const target=milestones
+      .filter(m=>m.project_id===pid&&!procMsDoneMap[m.id]&&((m.key==='arrival'&&(m.label||'').toLowerCase().includes('arrival'))||m.key==='po-release'))
+      .sort((a,b)=>((a.key==='arrival')?0:1)-((b.key==='arrival')?0:1))[0];
+    if(!target)return;
+    const now=new Date().toISOString();
+    const payload={stoplight:color,notes:reason||null,stoplight_by:currentUserName,stoplight_at:now,dept:'Procurement',updated_at:now};
+    const{data:ex}=await sb.from('checkin_status').select('id').eq('milestone_id',target.id).limit(1);
+    if(ex&&ex.length)await sb.from('checkin_status').update(payload).eq('milestone_id',target.id);
+    else await sb.from('checkin_status').insert({milestone_id:target.id,project_id:pid,checked:false,...payload});
+  }catch(e){}
+}
+const PROC_CLOSED_KEYS=['production-end','quality-start','quality-end','final-qc','uat','vinyl','shipping','delivery','installation','training','uninstallation'];
+function procSoClosed(so,p){
+  // Procurement is over for this SO if production is done or anything after it is:
+  // a post-production milestone is marked done, or delivery/installation date has passed.
+  const ms=milestones.filter(m=>m.project_id===p.id&&(!m.so_tag||m.so_tag===so));
+  return ms.some(m=>{
+    if(!PROC_CLOSED_KEYS.includes(m.key))return false;
+    if(procMsDoneMap[m.id])return true;
+    if((m.key==='delivery'||m.key==='installation')&&m.date&&daysDiff(m.date)<0)return true;
+    return false;
+  });
+}
 function procAllSOs(){
   const out=[];
   projects.forEach(p=>{
@@ -692,7 +753,7 @@ function procAllSOs(){
       const links=procLinks.filter(l=>l.so_number===so);
       const poList=links.map(l=>procPos.find(x=>x.id===l.po_id)).filter(x=>x&&x.status!=='cancelled');
       const st=procSoStatus[so];
-      out.push({so,p,d,pos:poList,noPo:st?.status==='no-po-needed',stRow:st});
+      out.push({so,p,d,pos:poList,noPo:st?.status==='no-po-needed',stRow:st,closed:procSoClosed(so,p)});
     });
   });
   return out;
@@ -700,11 +761,12 @@ function procAllSOs(){
 function procRenderSOs(){
   const el=document.getElementById('proc-view-sos');if(!el)return;
   const all=procAllSOs();
-  const uncovered=all.filter(x=>!x.pos.length&&!x.noPo);
+  const uncovered=all.filter(x=>!x.pos.length&&!x.noPo&&!x.closed);
   const cntEl=document.getElementById('pvt-sos-cnt');if(cntEl)cntEl.textContent=uncovered.length?'('+uncovered.length+'⚠)':'';
   const q=(document.getElementById('proc-sos-search')?.value||'').toLowerCase();
   let list=all.filter(x=>{
-    if(procSoFilter==='nopo'&&(x.pos.length||x.noPo))return false;
+    if(procSoFilter==='nopo'&&(x.pos.length||x.noPo||x.closed))return false;
+    if(procSoFilter==='closed'&&!x.closed)return false;
     if(procSoFilter==='covered'&&!x.pos.length)return false;
     if(procSoFilter==='inv'&&!x.noPo)return false;
     if(q&&!(x.so.toLowerCase().includes(q)||(x.p.name||'').toLowerCase().includes(q)||(x.p.pm||'').toLowerCase().includes(q)||x.pos.some(po=>(po.po_number||'').toLowerCase().includes(q)||(po.vendor||'').toLowerCase().includes(q))))return false;
@@ -715,7 +777,9 @@ function procRenderSOs(){
   const tab=(id,lbl,n)=>`<button class="proc-qtab${procSoFilter===id?' on':''}" style="flex:none;padding:6px 14px" onclick="procSoFilter='${id}';procRenderSOs()">${lbl}${n!==undefined?' <span style="font-family:var(--mono)">'+n+'</span>':''}</button>`;
   const rows=list.slice(0,200).map(x=>{
     const dChip=x.d===null?'<span class="proc-chip pc-ok">no prod date</span>':x.d<-60?'<span class="proc-chip pc-ok">stale</span>':`<span class="proc-chip ${x.d<0?'pc-crit':x.d<=5?'pc-soon':'pc-ok'}">${x.d<0?Math.abs(x.d)+'d over':x.d===0?'TODAY':x.d+'d'}</span>`;
-    const poCell=x.noPo
+    const poCell=x.closed&&!x.pos.length&&!x.noPo
+      ?'<span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;background:var(--gray-100);color:var(--gray-500)">✅ prod done — no PO recorded</span>'
+      :x.noPo
       ?`<span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;background:var(--success-bg);color:var(--success)">📦 From inventory</span>${x.stRow?.updated_by?`<span style="font-size:9px;color:var(--gray-400)"> ${procEsc(x.stRow.updated_by)}</span>`:''}`
       :x.pos.length
         ?x.pos.slice(0,3).map(po=>{
@@ -723,12 +787,14 @@ function procRenderSOs(){
           return`<span style="font-size:9.5px;font-weight:600;padding:3px 8px;border-radius:9px;margin-right:4px;white-space:nowrap;${po.status==='received'?'background:var(--success-bg);color:var(--success)':late?'background:var(--red-light);color:var(--red)':'background:var(--blue-bg);color:var(--blue)'}" title="${procEsc(po.vendor||'')} ${procEsc(po.po_number||'')} · ETA ${fmt(po.eta)}">${procEsc(po.po_number||po.vendor||'PO')}${po.status==='received'?' ✓':late?' ⚠':''}</span>`;
         }).join('')+(x.pos.length>3?`<span style="font-size:9px;color:var(--gray-500)">+${x.pos.length-3}</span>`:'')
         :'<span style="font-size:10px;color:var(--red);font-weight:600">— none —</span>';
-    const actions=x.noPo
+    const actions=x.closed&&!x.noPo
+      ?`<button class="proc-btn proc-btn-g" style="font-size:10px;padding:4px 10px;opacity:.65" title="For record-keeping only — production already done" onclick="procOpenAssign('${procEsc(x.so)}','${x.p.id}')">＋ Assign</button>`
+      :x.noPo
       ?`<button class="proc-ibtn" style="font-size:10px" title="Undo — this SO needs a PO after all" onclick="procClearNoPo('${procEsc(x.so)}')">↩︎ undo</button>`
       :`<button class="proc-btn proc-btn-g" style="font-size:10px;padding:4px 10px" onclick="procOpenAssign('${procEsc(x.so)}','${x.p.id}')">＋ Assign PO</button>
         ${!x.pos.length?`<button class="proc-btn proc-btn-g" style="font-size:10px;padding:4px 10px" onclick="procMarkNoPo('${procEsc(x.so)}','${x.p.id}')">📦 No PO needed</button>`:''}`;
     return`<tr>
-      <td style="font-family:var(--mono);font-size:11.5px;font-weight:600;color:var(--red);white-space:nowrap">${procEsc(x.so)}</td>
+      <td style="font-family:var(--mono);font-size:11.5px;font-weight:600;color:var(--red);white-space:nowrap;max-width:130px;overflow:hidden;text-overflow:ellipsis" title="${procEsc(x.so)}">${procEsc(x.so)}</td>
       <td style="font-size:12px;min-width:140px"><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px">${procEsc(x.p.name)}</div><div style="font-size:9.5px;color:var(--gray-500)">${x.p.pm?procEsc(x.p.pm):''}</div></td>
       <td>${dChip}</td>
       <td style="min-width:160px">${poCell}</td>
@@ -743,6 +809,7 @@ function procRenderSOs(){
         ${tab('nopo','⚠ No PO',uncovered.length)}
         ${tab('covered','✓ Has PO',all.filter(x=>x.pos.length).length)}
         ${tab('inv','📦 No PO needed',all.filter(x=>x.noPo).length)}
+        ${tab('closed','✅ Prod done',all.filter(x=>x.closed).length)}
         ${tab('all','All',all.length)}
       </div>
     </div>
@@ -765,6 +832,7 @@ async function procMarkNoPo(so,pid){
   procSoStatus[so]=row;
   await procLog('SO no PO needed (inventory)',so,pid,null,note.trim()||'inventory');
   showToast('📦 '+so+' — from inventory ✓');
+  await procSyncMilestones();
   procRenderSOs();procRenderQueue();procRenderMain(true);procRenderDay();
 }
 async function procClearNoPo(so){
@@ -813,7 +881,7 @@ async function procDoAssign(poId){
   const po=procPos.find(x=>x.id===poId);
   await procLog('assigned PO to SO',(po?.vendor||'')+' '+(po?.po_number||'')+' → '+so,pid,null,so);
   procCloseModal();showToast('✓ '+(po?.po_number||'PO')+' assigned to '+so);
-  await procLoad();procRenderSOs();procRenderQueue();procRenderMain(true);procRenderDay();
+  await procLoad();await procSyncMilestones();procRenderSOs();procRenderQueue();procRenderMain(true);procRenderDay();
 }
 
 // ── ODOO DROP-IMPORTER ──
@@ -948,7 +1016,7 @@ async function procImpCommit(){
     for(const c of chunk(linkRows,400)){const{error}=await sb.from('procurement_po_projects').insert(c);if(error)throw error;}
     await procLog('imported Odoo export',inserts.length+' new / '+updates.length+' updated POs',null,null,String(res.rows.length));
     procCloseModal();showToast(`📥 Imported: ${inserts.length} new · ${updates.length} updated · ${linkRows.length} SO links ✓`);
-    await procLoad();procRenderQueue();procRenderMain(true);
+    await procLoad();await procSyncMilestones();procRenderQueue();procRenderMain(true);
   }catch(err){alert('Import stopped: '+err.message+'\n\nAlready-committed rows are saved; re-dropping the same file is safe (it updates, never duplicates).');btn.disabled=false;btn.textContent='Retry import';}
 }
 </script>
