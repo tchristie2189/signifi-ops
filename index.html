@@ -4551,7 +4551,10 @@ function openEditProj(id){
         </div>
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100);display:flex;justify-content:space-between;align-items:center">Milestone dates
-        <button type="button" onclick="backfillMilestones('${id}')" style="font-size:10px;padding:3px 10px;border:1px solid var(--gray-300);border-radius:12px;background:var(--white);cursor:pointer;font-family:var(--font);text-transform:none;letter-spacing:0;font-weight:500" title="Creates any milestones this project is missing (undated) so they can be scheduled — fixes projects created before the full-skeleton fix">➕ Generate missing milestones</button>
+        <span style="display:flex;gap:6px">
+        <button type="button" onclick="backfillMilestones('${id}')" style="font-size:10px;padding:3px 10px;border:1px solid var(--gray-300);border-radius:12px;background:var(--white);cursor:pointer;font-family:var(--font);text-transform:none;letter-spacing:0;font-weight:500" title="Creates any STANDARD milestones this project is missing (undated)">➕ Generate missing</button>
+        <button type="button" onclick="closeModal();openAddMsForProj('${id}')" style="font-size:10px;padding:3px 10px;border:1px solid var(--blue);border-radius:12px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font);text-transform:none;letter-spacing:0;font-weight:500" title="Add a one-off custom milestone (any label, any date)">＋ Add custom</button>
+        </span>
       </div>
       ${msRows}
     </div>
@@ -5544,7 +5547,10 @@ function renderProjPageBody(){
       <div class="pp-card">
         <div class="pp-card-head">
           <span class="pp-card-title">Milestone tracker</span>
-          <span style="font-size:10px;color:var(--gray-400)">Synced from hub</span>
+          <span style="display:flex;gap:8px;align-items:center">
+            <button onclick="openAddMsForProj('${ppProjId}')" style="font-size:10px;padding:3px 10px;border:1px solid var(--blue);border-radius:12px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font);font-weight:500">＋ Milestone</button>
+            <span style="font-size:10px;color:var(--gray-400)">Synced from hub</span>
+          </span>
         </div>
         <div style="overflow-x:auto">
           <table class="pp-table" style="min-width:500px">
@@ -8649,7 +8655,7 @@ function renderInsights(){
 </style>
 <script>
 // ── VERSION BADGE ──────────────────────────────────────────
-const OPS_VERSION='v1.9.4';
+const OPS_VERSION='v1.9.5';
 try{const hd=document.getElementById('hdate');if(hd)hd.insertAdjacentHTML('beforebegin','<span style="font-family:var(--mono);font-size:9px;color:#555;border:1px solid #2a2a2a;border-radius:10px;padding:2px 8px" title="Mission Control · ⌘K palette · Live sync · Insights · Calendar">'+OPS_VERSION+'</span>');}catch(e){}
 // ── CONFETTI on milestone done ─────────────────────────────
 function opsConfetti(){const C=['#C8102E','#22c55e','#2563eb','#eab308','#db2777','#7c3aed'];for(let i=0;i<70;i++){const d=document.createElement('div');d.className='cf';d.style.left=Math.random()*100+'vw';d.style.background=C[i%C.length];d.style.setProperty('--cx',(Math.random()*160-80)+'px');d.style.animationDelay=(Math.random()*0.4)+'s';document.body.appendChild(d);setTimeout(()=>d.remove(),2300);}}
@@ -8812,7 +8818,8 @@ const FULL_MS_SET=[
   ['other','Customer care start'],
 ];
 async function backfillMilestones(projId){
-  const proj=projects.find(p=>p.id===projId);if(!proj)return;
+  const proj=projects.find(p=>p.id===projId);
+  if(!proj){alert('Could not find this project — refresh and try again.');return;}
   const projMs=milestones.filter(m=>m.project_id===projId);
   const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const hasSoTags=projMs.some(m=>m.so_tag);
@@ -8824,7 +8831,10 @@ async function backfillMilestones(projId){
       if(!existing.has(label.toLowerCase()))ins.push(Object.assign({project_id:projId,key,label,date:null,changed_by:currentUserName},tag?{so_tag:tag}:{}));
     });
   });
-  if(!ins.length){showToast('All milestones already exist ✓');return;}
+  if(!ins.length){
+    alert('✓ All '+FULL_MS_SET.length+' standard milestones already exist on this project.\n\nNeed something extra (e.g. "Parts arrive — batch 2")? Use the ＋ Add custom button instead.');
+    return;
+  }
   if(!confirm('Generate '+ins.length+' missing milestone'+(ins.length!==1?'s':'')+' (undated) for "'+proj.name+'"?'))return;
   const{error}=await sb.from('milestones').insert(ins);
   if(error){alert('Error: '+error.message);return;}
