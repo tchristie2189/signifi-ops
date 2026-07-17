@@ -459,6 +459,30 @@ const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{
   }
 });
 
+// Fetches every row from a table regardless of table size. A single
+// .select().range(0,49999) is NOT enough — Supabase has a server-side
+// "Max Rows" setting (Project Settings > API) that caps every response
+// at that number (commonly 1000) no matter what range the client asks
+// for. So instead we fetch in pages and keep going until a page comes
+// back shorter than the page size, which is the only reliable way to
+// know we've actually reached the end of the table.
+async function fetchAllRows(table,{select='*',orderCol=null,ascending=true,eq=null,pageSize=1000}={}){
+  let all=[],from=0,pages=0;
+  while(true){
+    let q=sb.from(table).select(select);
+    if(eq)Object.entries(eq).forEach(([col,val])=>{q=q.eq(col,val);});
+    if(orderCol)q=q.order(orderCol,{ascending});
+    const{data,error}=await q.range(from,from+pageSize-1);
+    if(error)return{data:null,error};
+    all=all.concat(data||[]);
+    pages++;
+    if(!data||data.length<pageSize)break; // short page = last page
+    from+=pageSize;
+    if(pages>200){console.warn(table+': stopped after 200 pages ('+all.length+' rows) — check for a runaway loop.');break;}
+  }
+  return{data:all,error:null};
+}
+
 const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end','final-qc':'Final QC',uat:'UAT',installation:'Installation',uninstallation:'Uninstallation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','po-release':'PO Release','mo-release':'MO Release',other:'Other'};
 const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa','final-qc':'ev-fqc',uat:'ev-uat',installation:'ev-inst',uninstallation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
@@ -784,28 +808,25 @@ function renderTab(){
 // SO lists are split tolerantly (comma / space / semicolon) hub-wide — so_number data uses mixed separators
 let procPoData=[],procLinkData=[],procReadyData={};
 async function loadAll(){
-  // .range(0,49999) forces PostgREST to return up to 50k rows instead of its
-  // default 1000-row cap. Without this, once any of these tables crosses
-  // 1000 rows, .select('*').order(...) silently truncates — and since
-  // milestones/projects/history all sort with the newest data last, it's
-  // always the newest inserts (i.e. anything anyone just added) that get
-  // silently dropped first, with no error anywhere to explain why.
+  // fetchAllRows pages through each table so we always get every row,
+  // regardless of Supabase's server-side Max Rows cap (a single .range()
+  // request is capped server-side no matter how large a range you ask for).
   const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext,ppo,ppl,prd]=await Promise.all([
-    sb.from('projects').select('*').order('created_at').range(0,49999),
-    sb.from('milestones').select('*').order('date').range(0,49999),
+    fetchAllRows('projects',{orderCol:'created_at'}),
+    fetchAllRows('milestones',{orderCol:'date'}),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
-    sb.from('checkin_status').select('*').order('updated_at',{ascending:false}).range(0,49999),
-    sb.from('milestone_done').select('*').range(0,49999),
-    sb.from('milestone_history').select('*').order('changed_at',{ascending:true}).range(0,49999),
-    sb.from('adhoc_schedule').select('*').order('created_at').range(0,49999),
+    fetchAllRows('checkin_status',{orderCol:'updated_at',ascending:false}),
+    fetchAllRows('milestone_done'),
+    fetchAllRows('milestone_history',{orderCol:'changed_at',ascending:true}),
+    fetchAllRows('adhoc_schedule',{orderCol:'created_at'}),
     sb.from('app_settings').select('*'),
-    sb.from('project_links').select('project_id,label,url,category,id,sort_order').range(0,49999),
-    sb.from('milestone_deviations').select('*').range(0,49999),
-    sb.from('so_details').select('*').range(0,49999),
-    sb.from('extension_requests').select('*').order('created_at',{ascending:false}).range(0,49999),
-    sb.from('procurement_po').select('*'),
-    sb.from('procurement_po_projects').select('*'),
-    sb.from('procurement_readiness').select('*'),
+    fetchAllRows('project_links',{select:'project_id,label,url,category,id,sort_order'}),
+    fetchAllRows('milestone_deviations'),
+    fetchAllRows('so_details'),
+    fetchAllRows('extension_requests',{orderCol:'created_at',ascending:false}),
+    fetchAllRows('procurement_po'),
+    fetchAllRows('procurement_po_projects'),
+    fetchAllRows('procurement_readiness'),
   ]);
   projects=pr.data||[];activityLog=lg.data||[];
   // Guard: never let a failed/empty milestones fetch wipe what's already loaded.
@@ -818,7 +839,6 @@ async function loadAll(){
     showToast('⚠ Milestones failed to refresh: '+ms.error.message);
   } else if(ms.data){
     milestones=ms.data;
-    if(milestones.length>=49000)console.warn('milestones fetch returned',milestones.length,'rows — approaching the .range(0,49999) cap. Raise the range before this becomes the same silent-truncation bug again.');
   }
   // else: no error and no data (shouldn't normally happen) — keep previous data rather than blanking
   // Procurement tables (empty until the migration is run — panel hides gracefully)
@@ -870,8 +890,8 @@ async function loadAll(){
 
   // Load vinyl schedule from Supabase, then merge with project data
   const[vsRes,psRes]=await Promise.all([
-    sb.from('vinyl_schedule').select('*').order('priority').range(0,49999),
-    sb.from('planogram_schedule').select('*').order('priority').range(0,49999),
+    fetchAllRows('vinyl_schedule',{orderCol:'priority'}),
+    fetchAllRows('planogram_schedule',{orderCol:'priority'}),
   ]);
   const savedVinyl=vsRes.data||[];
   const savedPlan=psRes.data||[];
