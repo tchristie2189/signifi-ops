@@ -2980,7 +2980,13 @@ function renderWeek(){
   // Apply dept filter
   const filteredMsWithAdhoc=weekDeptFilter?allMsWithAdhoc.filter(m=>{
     if(weekDeptFilter==='adhoc')return m._adhoc;
-    if(m._adhoc)return false;
+    if(m._adhoc){
+      // Ad hoc entries belong to shipping or installation — surface them when that
+      // dept is filtered so the schedule view shows the whole picture, not just
+      // tracked-project milestones. (Previously ad hoc was excluded from every
+      // dept filter except the standalone "Ad Hoc" option.)
+      return m._dept===weekDeptFilter;
+    }
     const deptKeyMap={shipping:['shipping','delivery'],arrival:['arrival','parts-arrival'],production:['production-start','production-end','inventory-pick'],qa:['quality-start','quality-end'],uat:['uat'],vinyl:['vinyl'],installation:['training','installation']};
     if(weekDeptFilter==='ui')return m.key==='other'&&/ui\s*(start|end)/i.test(m.label||'');
     return (deptKeyMap[weekDeptFilter]||[]).includes(m.key);
@@ -2996,7 +3002,7 @@ function renderWeek(){
         const projLink=e._projId?`<span style="cursor:pointer;text-decoration:underline;opacity:0.8" onclick="event.stopPropagation();goToProjPage('${e._projId}')">${e.projectName}</span>`:e.projectName;
         const soLine=e._so?`<div style="font-family:var(--mono);font-size:9px;color:var(--red);margin-top:1px;opacity:0.85">${e._so}</div>`:'';
         const namingConv=(!e._adhoc&&e._projId)?(getSOConfigSummary(projects.find(x=>x.id===e._projId),e._so||'').naming_convention||''):'';
-        const namingLine=namingConv?`<div style="font-family:var(--mono);font-size:9px;color:rgba(255,255,255,0.75);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${namingConv.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}">${namingConv}</div>`:'';
+        const namingLine=namingConv?`<div style="font-family:var(--mono);font-size:9px;color:var(--gray-500);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${namingConv.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}">${namingConv}</div>`:'';
         const pmName=e._adhoc?(e._raw?.pm||''):(e._pm||'');
         const pmLine=pmName?`<div style="font-size:9px;color:var(--gray-500);margin-top:1px;opacity:0.9">PM: ${pmName}</div>`:'';
         return`<div class="ev ${isDone?'ev-done':TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${projLink}${e._adhoc?' 📦':''}</div>${soLine}${namingLine}${pmLine}${statusSel}</div>`;
