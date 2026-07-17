@@ -773,23 +773,41 @@ function renderTab(){
 // ── DATA ───────────────────────────────────────────────────
 // SO lists are split tolerantly (comma / space / semicolon) hub-wide — so_number data uses mixed separators
 let procPoData=[],procLinkData=[],procReadyData={};
+// Supabase caps every query at 1000 rows by default. Tables like milestones and
+// procurement_po are past that, so unbounded selects silently truncate — new rows
+// (especially undated milestones, which sort last) never reach the app.
+// sbAll pages through in 1000-row chunks with a stable order until done.
+async function sbAll(table,orderCol,desc){
+  const PAGE=1000;let all=[],from=0;
+  while(true){
+    let q=sb.from(table).select('*');
+    if(orderCol)q=q.order(orderCol,{ascending:!desc});
+    q=q.order('id',{ascending:true}).range(from,from+PAGE-1);
+    const{data,error}=await q;
+    if(error){console.warn('sbAll',table,error.message);return{data:all.length?all:null,error};}
+    all=all.concat(data||[]);
+    if(!data||data.length<PAGE)break;
+    from+=PAGE;
+  }
+  return{data:all,error:null};
+}
 async function loadAll(){
   const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext,ppo,ppl,prd]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
-    sb.from('milestones').select('*').order('date'),
+    sbAll('milestones','date'),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
-    sb.from('checkin_status').select('*').order('updated_at',{ascending:false}),
-    sb.from('milestone_done').select('*'),
-    sb.from('milestone_history').select('*').order('changed_at',{ascending:true}),
+    sbAll('checkin_status','updated_at',true),
+    sbAll('milestone_done'),
+    sbAll('milestone_history','changed_at'),
     sb.from('adhoc_schedule').select('*').order('created_at'),
     sb.from('app_settings').select('*'),
-    sb.from('project_links').select('project_id,label,url,category,id,sort_order'),
-    sb.from('milestone_deviations').select('*'),
-    sb.from('so_details').select('*'),
+    sbAll('project_links','sort_order'),
+    sbAll('milestone_deviations'),
+    sbAll('so_details'),
     sb.from('extension_requests').select('*').order('created_at',{ascending:false}),
-    sb.from('procurement_po').select('*'),
-    sb.from('procurement_po_projects').select('*'),
-    sb.from('procurement_readiness').select('*'),
+    sbAll('procurement_po'),
+    sbAll('procurement_po_projects'),
+    sbAll('procurement_readiness'),
   ]);
   projects=pr.data||[];activityLog=lg.data||[];
   // Guard: never let a failed/empty milestones fetch wipe what's already loaded.
@@ -8658,7 +8676,7 @@ function renderInsights(){
 </style>
 <script>
 // ── VERSION BADGE ──────────────────────────────────────────
-const OPS_VERSION='v1.9.6';
+const OPS_VERSION='v1.9.7';
 try{const hd=document.getElementById('hdate');if(hd)hd.insertAdjacentHTML('beforebegin','<span style="font-family:var(--mono);font-size:9px;color:#555;border:1px solid #2a2a2a;border-radius:10px;padding:2px 8px" title="Mission Control · ⌘K palette · Live sync · Insights · Calendar">'+OPS_VERSION+'</span>');}catch(e){}
 // ── CONFETTI on milestone done ─────────────────────────────
 function opsConfetti(){const C=['#C8102E','#22c55e','#2563eb','#eab308','#db2777','#7c3aed'];for(let i=0;i<70;i++){const d=document.createElement('div');d.className='cf';d.style.left=Math.random()*100+'vw';d.style.background=C[i%C.length];d.style.setProperty('--cx',(Math.random()*160-80)+'px');d.style.animationDelay=(Math.random()*0.4)+'s';document.body.appendChild(d);setTimeout(()=>d.remove(),2300);}}
