@@ -447,7 +447,17 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 <script>
 const SUPABASE_URL='https://oykgpkolliqjeznblayv.supabase.co';
 const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95a2dwa29sbGlxamV6bmJsYXl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNTI3ODgsImV4cCI6MjA5NTYyODc4OH0.kkOBhxyaqLG7PLPNI0SwPNwQSWmbpFjDoP2VQp33_X4';
-const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{
+  global:{
+    // Without this, the browser's HTTP cache can serve a stale response for
+    // an identical GET query (same URL every time, e.g. the milestones
+    // select) instead of hitting the network — so a save can succeed and
+    // loadAll() can "run" but still render the old data, with no error
+    // anywhere to indicate why. cache:'no-store' forces every request,
+    // reads included, to always go to the network.
+    fetch:(url,options={})=>fetch(url,{...options,cache:'no-store'})
+  }
+});
 
 const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end','final-qc':'Final QC',uat:'UAT',installation:'Installation',uninstallation:'Uninstallation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','po-release':'PO Release','mo-release':'MO Release',other:'Other'};
 const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa','final-qc':'ev-fqc',uat:'ev-uat',installation:'ev-inst',uninstallation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
@@ -2921,7 +2931,14 @@ function openAddMsForProj(projId){
   const typeOpts=Object.entries(TYPE_LBL).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
   const proj=projects.find(p=>p.id===projId);
   const projMs=milestones.filter(m=>m.project_id===projId);
-  const hasSoTags=projMs.some(m=>m.so_tag);
+  // Only treat this project as genuinely SO-split if EVERY milestone is tagged —
+  // matching the same fix applied to saveEditProj. Previously this checked
+  // projMs.some(m=>m.so_tag) (any single tagged row), so a project with one
+  // stray tagged milestone (leftover from a partial split or the auto-clone
+  // bug) would silently force new milestones into that SO group, making them
+  // land somewhere the project page / overview grid doesn't expect and
+  // effectively vanish from view.
+  const hasSoTags=projMs.length>0&&projMs.every(m=>m.so_tag);
   const soList=(proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   // For SO-split projects show a dropdown so the milestone lands in the right group
   const soField=hasSoTags&&soList.length>1
@@ -2945,8 +2962,9 @@ async function saveEvForProj(projId){
   const date=document.getElementById('em-date').value;
   if(!label||!date){alert('Please fill in label and date.');return;}
   const soTag=document.getElementById('em-so')?.value||null;
-  const{error}=await sb.from('milestones').insert({project_id:projId,key:document.getElementById('em-type').value,label,date,original_date:date,changed_by:currentUserName,so_tag:soTag||null});
+  const{data,error}=await sb.from('milestones').insert({project_id:projId,key:document.getElementById('em-type').value,label,date,original_date:date,changed_by:currentUserName,so_tag:soTag||null}).select();
   if(error){alert('Error: '+error.message);return;}
+  if(!data||!data.length){alert('The milestone was not saved — the server returned no confirmation. Please try again, and let us know if this keeps happening.');return;}
   await logActivity('added milestone',label,label,projId,null,date);
   closeModal();showToast('Milestone added ✓');await loadAll();
 }
