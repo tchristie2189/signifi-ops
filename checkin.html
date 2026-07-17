@@ -302,10 +302,10 @@ async function procEnter(){
 async function procLoad(){
   const[pr,ms,md,po,pl,rd,ss]=await Promise.all([
     sb.from('projects').select('*').neq('status','complete'),
-    sb.from('milestones').select('*'),
-    sb.from('milestone_done').select('*'),
-    sb.from('procurement_po').select('*').order('created_at',{ascending:false}),
-    sb.from('procurement_po_projects').select('*'),
+    sbAll('milestones','date'),
+    sbAll('milestone_done'),
+    sbAll('procurement_po','created_at',true),
+    sbAll('procurement_po_projects'),
     sb.from('procurement_readiness').select('*'),
     sb.from('procurement_so_status').select('*'),
   ]);
@@ -1025,6 +1025,22 @@ async function procImpCommit(){
 const SUPABASE_URL='https://oykgpkolliqjeznblayv.supabase.co';
 const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95a2dwa29sbGlxamV6bmJsYXl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNTI3ODgsImV4cCI6MjA5NTYyODc4OH0.kkOBhxyaqLG7PLPNI0SwPNwQSWmbpFjDoP2VQp33_X4';
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+// Supabase caps queries at 1000 rows — milestones/POs/links exceed that.
+// sbAll pages through in 1000-row chunks so nothing silently truncates.
+async function sbAll(table,orderCol,desc){
+  const PAGE=1000;let all=[],from=0;
+  while(true){
+    let q=sb.from(table).select('*');
+    if(orderCol)q=q.order(orderCol,{ascending:!desc});
+    q=q.order('id',{ascending:true}).range(from,from+PAGE-1);
+    const{data,error}=await q;
+    if(error){console.warn('sbAll',table,error.message);return{data:all.length?all:null,error};}
+    all=all.concat(data||[]);
+    if(!data||data.length<PAGE)break;
+    from+=PAGE;
+  }
+  return{data:all,error:null};
+}
 
 // ── DEPT PASSCODES & CONFIG ─────────────────────────────────
 const DEPT_CONFIG={
@@ -1108,8 +1124,8 @@ function getGreeting(){const h=new Date().getHours();return h<12?'morning':h<17?
 async function loadCheckinData(){
   const[pr,ms,ci,ah,sod,ext]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
-    sb.from('milestones').select('*').order('date'),
-    sb.from('checkin_status').select('*'),
+    sbAll('milestones','date'),
+    sbAll('checkin_status'),
     sb.from('adhoc_schedule').select('*').order('created_at'),
     sb.from('so_details').select('*'),
     sb.from('extension_requests').select('*').eq('status','pending'),
