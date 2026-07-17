@@ -2778,9 +2778,14 @@ function renderOverview(){
 
   let msHtml='';
   if(hasSoTags){
-    // Milestones are split — group by so_tag
-    msHtml=soList.map(so=>{
+    // Milestones are split — group by so_tag. Untagged = project-wide (always shown);
+    // orphan tags (not in so_number) still render so nothing disappears.
+    const soListForGroup=[...new Set([...soList,...projMs.filter(m=>m.so_tag).map(m=>m.so_tag)])];
+    const ovUntagged=projMs.filter(m=>!m.so_tag);
+    const ovUntaggedHtml=ovUntagged.length?`<div style="grid-column:1/-1;margin:10px 0 4px"><div style="padding:5px 10px;background:var(--gray-50);border-radius:6px;border-left:3px solid var(--gray-400)"><span style="font-size:10px;font-weight:700;color:var(--gray-600);text-transform:uppercase;letter-spacing:0.06em">Project-wide (no SO tag)</span></div></div>`+buildMsHtml(ovUntagged,''):'';
+    msHtml=ovUntaggedHtml+soListForGroup.map(so=>{
       const soMs=projMs.filter(m=>m.so_tag===so);
+      if(!soMs.length&&!soList.includes(so))return'';
       const saved=soDetails.find(d=>d.project_id===proj.id&&d.so_tag===so);
       const soNaming=saved?.naming_convention||proj.naming_convention||'';
       const soHeader=`<div style="grid-column:1/-1;margin:10px 0 4px"><div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 10px;background:var(--gray-50);border-radius:6px;border-left:3px solid var(--red)">
@@ -2834,6 +2839,18 @@ function renderOverview(){
         </div>
       </div>
       ${(()=>{const c=getProjectCompletion(proj);if(c)return`<div style="padding:8px 14px;background:var(--success-bg);border-bottom:1px solid #cfe8da;font-size:11.5px;color:var(--success);font-weight:600">✓ Project complete — Installed${c.date?' '+fmt(c.date):''}</div>`;const b=getProjectBlocker(proj);if(!b)return'';return`<div style="padding:8px 14px;background:${b.overdue?'var(--red-light)':'var(--gray-50)'};border-bottom:1px solid var(--gray-100);font-size:11.5px;color:${b.overdue?'var(--red)':'var(--gray-600)'}">🔗 ${b.blockedStage.label} is blocked by ${b.blockingStage.label} · ${b.estimate}</div>`;})()}
+      ${(()=>{
+        // Diagnostic strip: total milestone count for this project + duplicate-label detection.
+        // Lets you verify at a glance whether data is actually missing vs just further down the grid.
+        const total=projMs.length;
+        const hiddenCount=hideCompleted['overview']?projMs.filter(m=>isMilestoneEffectivelyDone(m)).length:0;
+        const shownCount=total-hiddenCount;
+        const byLabel={};
+        projMs.forEach(m=>{const k=(m.label||'')+'|'+(m.so_tag||'');byLabel[k]=byLabel[k]||[];byLabel[k].push(m);});
+        const dupes=Object.values(byLabel).filter(arr=>arr.length>1);
+        const dupeWarning=dupes.length?`<div style="padding:6px 14px;background:#fef3c7;border-bottom:1px solid #fde68a;font-size:11px;color:#92400e">⚠ ${dupes.length} duplicate milestone${dupes.length>1?'s':''} detected: ${dupes.map(arr=>`"${arr[0].label}" (${arr.length}×)`).join(', ')} — likely leftover from an SO split. Check the DB if these need cleanup.</div>`:'';
+        return`<div style="padding:5px 14px;font-size:10.5px;color:var(--gray-400);border-bottom:1px solid var(--gray-50)">${total} milestone${total!==1?'s':''} total for this project${hiddenCount?` · ${hiddenCount} hidden (completed) · ${shownCount} shown`:''}</div>${dupeWarning}`;
+      })()}
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
     </div>`:'<div class="empty-state">No projects yet.</div>'}`;
 }
@@ -2869,6 +2886,10 @@ async function quickUpdateMs(msId,newDate){
   const m=milestones.find(x=>x.id===msId);
   if(!m)return;
   const oldDate=m.date;
+  // Guard against accidental clear that would hide the milestone from schedules
+  if(oldDate&&!newDate){
+    if(!confirm('Clear this date? It will disappear from all schedules until reset.')){renderTab();return;}
+  }
   if(!m.original_date)await sb.from('milestones').update({original_date:m.date}).eq('id',msId);
   await sb.from('milestones').update({date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',msId);
   m.date=newDate;
@@ -4577,6 +4598,8 @@ async function saveEditProj(id){
   for(const m of projMs){
     const el=document.getElementById('ms-'+m.id);
     if(el&&el.value!==m.date){
+      // Don't blank an existing date via the bulk project-edit save (usually accidental)
+      if(m.date&&!el.value)continue;
       await sb.from('milestones').update({date:el.value,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
       await logActivity('updated date',m.label,m.label,id,m.date,el.value);
     }
@@ -4590,12 +4613,22 @@ async function saveEditProj(id){
   // If this project is already SO-split and the SO field gained new SOs, clone milestones for them
   const newSoNumber=document.getElementById('ep-so').value.trim();
   const newSoList=newSoNumber.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
-  const existingTags=[...new Set(milestones.filter(m=>m.project_id===id&&m.so_tag).map(m=>m.so_tag))];
+  const projMsForSoCheck=milestones.filter(m=>m.project_id===id);
+  const existingTags=[...new Set(projMsForSoCheck.filter(m=>m.so_tag).map(m=>m.so_tag))];
+  // Guard: only treat this project as "fully SO-split" if EVERY milestone is tagged.
+  // Previously this only checked existingTags.length>0 (i.e. any single milestone with
+  // a so_tag), so a project with 18 untagged milestones + 1 stray tagged row (left over
+  // from an old partial split, a bug, or a manual fix) would be wrongly treated as split,
+  // and saving the project would clone a whole new tagged milestone set on top of the
+  // untagged ones — creating exactly-this-kind-of duplicate ("Pack & ship" showing twice
+  // with different dates/so_tags) without ever touching or removing the originals.
+  const untaggedCount=projMsForSoCheck.filter(m=>!m.so_tag).length;
+  const isFullySplit=existingTags.length>0&&untaggedCount===0;
   const brandNewSOs=newSoList.filter(so=>!existingTags.includes(so));
-  if(existingTags.length>0&&brandNewSOs.length>0){
-    // This project is SO-split and has new SOs added — auto-clone milestones
+  if(isFullySplit&&brandNewSOs.length>0){
+    // This project is already SO-split and has new SOs added — auto-clone milestones
     const templateSO=existingTags[0];
-    const templateMs=milestones.filter(m=>m.project_id===id&&m.so_tag===templateSO);
+    const templateMs=projMsForSoCheck.filter(m=>m.so_tag===templateSO);
     if(templateMs.length){
       const newRows=[];
       for(const so of brandNewSOs){
@@ -4608,6 +4641,10 @@ async function saveEditProj(id){
       closeModal();await loadAll();
       return;
     }
+  } else if(existingTags.length>0&&untaggedCount>0&&brandNewSOs.length>0){
+    // Mixed state detected (some tagged, some not) — this is the exact condition that used
+    // to silently create duplicates. Surface it instead of guessing.
+    console.warn('Project '+id+' has a mix of tagged and untagged milestones — skipping auto-clone to avoid creating duplicates.',{existingTags,untaggedCount});
   }
 
   await syncProjectFieldsToSingleSO(id,{
@@ -4703,6 +4740,15 @@ function openEditMs(id,label,date,soTag,projId){
 async function saveEditMs(id,oldLabel,oldDate){
   const newDate=document.getElementById('em-dt').value;
   const newLabel=document.getElementById('em-lbl').value.trim();
+  // GUARD: a milestone that HAD a date must never be saved blank — that would
+  // drop it from every dated view (schedules, week, dept tables). If the picker
+  // came back empty but there was a date before, keep the old one unless the
+  // user explicitly confirms clearing it.
+  if(oldDate&&!newDate){
+    if(!confirm('Clear the date for "'+(newLabel||oldLabel)+'"?\n\nIt will disappear from all schedules until a new date is set. Cancel to keep '+fmt(oldDate)+'.')){
+      return;
+    }
+  }
   const reason=document.getElementById('em-reason')?.value.trim()||'';
   const ms=milestones.find(m=>m.id===id);
   const proj=ms?projects.find(p=>p.id===ms.project_id):null;
@@ -5284,6 +5330,7 @@ function renderProjPageBody(){
     else if(d===0){chip='chip-active';lbl='Today';}
     else if(d<=7){chip='chip-atrisk';lbl='In '+d+'d';}
     else{chip='chip-future';lbl=fmt(m.date);}
+    if(!m.date){chip='chip-atrisk';lbl='⚠ no date — set one';}
     const slDot=ci?.stoplight?`<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${ci.stoplight==='green'?'#22c55e':ci.stoplight==='yellow'?'#eab308':'#ef4444'};margin-left:4px" title="Dept: ${ci.stoplight}"></span>`:'';
     const dev=ppProj?.parent_project_id?milestoneDeviations[ppProjId]?.[m.key]:null;
     const devTag=dev?`<span style="font-size:9px;padding:1px 5px;border-radius:8px;background:#ede9fe;color:#7c3aed;font-weight:600;margin-left:4px" title="Deviated from master">🔀 deviated</span>`:'';
@@ -5300,9 +5347,16 @@ function renderProjPageBody(){
 
   let msHtml='';
   if(ppHasSoTags&&ppSoList.length>1){
-    // Group by SO with headers + push button
-    msHtml=ppSoList.map(so=>{
+    // Group by SO. Union field-SOs with any tag actually present (orphan tags still
+    // render), and always show untagged milestones as a project-wide group so nothing
+    // can silently disappear from the tracker.
+    const ppTags=[...new Set(pMs.filter(m=>m.so_tag).map(m=>m.so_tag))];
+    const ppAllSOs=[...new Set([...ppSoList,...ppTags])];
+    const ppUntagged=pMs.filter(m=>!m.so_tag).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    const ppUntaggedHtml=ppUntagged.length?`<tr><td colspan="4" style="padding:6px 8px 2px;background:var(--gray-50)"><span style="font-size:10px;font-weight:700;color:var(--gray-600);text-transform:uppercase;letter-spacing:0.06em;border-left:3px solid var(--gray-400);padding-left:6px">Project-wide (no SO tag)</span></td></tr>`+ppUntagged.map(buildPPMsRow).join(''):'';
+    msHtml=ppUntaggedHtml+ppAllSOs.map(so=>{
       const soMs=pMs.filter(m=>m.so_tag===so).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+      if(!soMs.length)return'';
       return`<tr><td colspan="4" style="padding:6px 8px 2px;background:var(--gray-50)">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <span style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em;border-left:3px solid var(--red);padding-left:6px">SO: ${so}</span>
@@ -5311,6 +5365,7 @@ function renderProjPageBody(){
       </td></tr>`+soMs.map(buildPPMsRow).join('');
     }).join('');
   } else {
+    // Non-grouped: show ALL milestones (no date filter) so blank-date ones remain visible & fixable
     msHtml=pMs.sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(buildPPMsRow).join('');
   }
 
@@ -8594,7 +8649,7 @@ function renderInsights(){
 </style>
 <script>
 // ── VERSION BADGE ──────────────────────────────────────────
-const OPS_VERSION='v1.9.1';
+const OPS_VERSION='v1.9.4';
 try{const hd=document.getElementById('hdate');if(hd)hd.insertAdjacentHTML('beforebegin','<span style="font-family:var(--mono);font-size:9px;color:#555;border:1px solid #2a2a2a;border-radius:10px;padding:2px 8px" title="Mission Control · ⌘K palette · Live sync · Insights · Calendar">'+OPS_VERSION+'</span>');}catch(e){}
 // ── CONFETTI on milestone done ─────────────────────────────
 function opsConfetti(){const C=['#C8102E','#22c55e','#2563eb','#eab308','#db2777','#7c3aed'];for(let i=0;i<70;i++){const d=document.createElement('div');d.className='cf';d.style.left=Math.random()*100+'vw';d.style.background=C[i%C.length];d.style.setProperty('--cx',(Math.random()*160-80)+'px');d.style.animationDelay=(Math.random()*0.4)+'s';document.body.appendChild(d);setTimeout(()=>d.remove(),2300);}}
