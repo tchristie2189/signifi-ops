@@ -784,19 +784,25 @@ function renderTab(){
 // SO lists are split tolerantly (comma / space / semicolon) hub-wide — so_number data uses mixed separators
 let procPoData=[],procLinkData=[],procReadyData={};
 async function loadAll(){
+  // .range(0,49999) forces PostgREST to return up to 50k rows instead of its
+  // default 1000-row cap. Without this, once any of these tables crosses
+  // 1000 rows, .select('*').order(...) silently truncates — and since
+  // milestones/projects/history all sort with the newest data last, it's
+  // always the newest inserts (i.e. anything anyone just added) that get
+  // silently dropped first, with no error anywhere to explain why.
   const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext,ppo,ppl,prd]=await Promise.all([
-    sb.from('projects').select('*').order('created_at'),
-    sb.from('milestones').select('*').order('date'),
+    sb.from('projects').select('*').order('created_at').range(0,49999),
+    sb.from('milestones').select('*').order('date').range(0,49999),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
-    sb.from('checkin_status').select('*').order('updated_at',{ascending:false}),
-    sb.from('milestone_done').select('*'),
-    sb.from('milestone_history').select('*').order('changed_at',{ascending:true}),
-    sb.from('adhoc_schedule').select('*').order('created_at'),
+    sb.from('checkin_status').select('*').order('updated_at',{ascending:false}).range(0,49999),
+    sb.from('milestone_done').select('*').range(0,49999),
+    sb.from('milestone_history').select('*').order('changed_at',{ascending:true}).range(0,49999),
+    sb.from('adhoc_schedule').select('*').order('created_at').range(0,49999),
     sb.from('app_settings').select('*'),
-    sb.from('project_links').select('project_id,label,url,category,id,sort_order'),
-    sb.from('milestone_deviations').select('*'),
-    sb.from('so_details').select('*'),
-    sb.from('extension_requests').select('*').order('created_at',{ascending:false}),
+    sb.from('project_links').select('project_id,label,url,category,id,sort_order').range(0,49999),
+    sb.from('milestone_deviations').select('*').range(0,49999),
+    sb.from('so_details').select('*').range(0,49999),
+    sb.from('extension_requests').select('*').order('created_at',{ascending:false}).range(0,49999),
     sb.from('procurement_po').select('*'),
     sb.from('procurement_po_projects').select('*'),
     sb.from('procurement_readiness').select('*'),
@@ -812,6 +818,7 @@ async function loadAll(){
     showToast('⚠ Milestones failed to refresh: '+ms.error.message);
   } else if(ms.data){
     milestones=ms.data;
+    if(milestones.length>=49000)console.warn('milestones fetch returned',milestones.length,'rows — approaching the .range(0,49999) cap. Raise the range before this becomes the same silent-truncation bug again.');
   }
   // else: no error and no data (shouldn't normally happen) — keep previous data rather than blanking
   // Procurement tables (empty until the migration is run — panel hides gracefully)
@@ -863,8 +870,8 @@ async function loadAll(){
 
   // Load vinyl schedule from Supabase, then merge with project data
   const[vsRes,psRes]=await Promise.all([
-    sb.from('vinyl_schedule').select('*').order('priority'),
-    sb.from('planogram_schedule').select('*').order('priority'),
+    sb.from('vinyl_schedule').select('*').order('priority').range(0,49999),
+    sb.from('planogram_schedule').select('*').order('priority').range(0,49999),
   ]);
   const savedVinyl=vsRes.data||[];
   const savedPlan=psRes.data||[];
