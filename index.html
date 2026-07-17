@@ -773,41 +773,23 @@ function renderTab(){
 // ── DATA ───────────────────────────────────────────────────
 // SO lists are split tolerantly (comma / space / semicolon) hub-wide — so_number data uses mixed separators
 let procPoData=[],procLinkData=[],procReadyData={};
-// Supabase caps every query at 1000 rows by default. Tables like milestones and
-// procurement_po are past that, so unbounded selects silently truncate — new rows
-// (especially undated milestones, which sort last) never reach the app.
-// sbAll pages through in 1000-row chunks with a stable order until done.
-async function sbAll(table,orderCol,desc){
-  const PAGE=1000;let all=[],from=0;
-  while(true){
-    let q=sb.from(table).select('*');
-    if(orderCol)q=q.order(orderCol,{ascending:!desc});
-    q=q.order('id',{ascending:true}).range(from,from+PAGE-1);
-    const{data,error}=await q;
-    if(error){console.warn('sbAll',table,error.message);return{data:all.length?all:null,error};}
-    all=all.concat(data||[]);
-    if(!data||data.length<PAGE)break;
-    from+=PAGE;
-  }
-  return{data:all,error:null};
-}
 async function loadAll(){
   const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext,ppo,ppl,prd]=await Promise.all([
     sb.from('projects').select('*').order('created_at'),
-    sbAll('milestones','date'),
+    sb.from('milestones').select('*').order('date'),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
-    sbAll('checkin_status','updated_at',true),
-    sbAll('milestone_done'),
-    sbAll('milestone_history','changed_at'),
+    sb.from('checkin_status').select('*').order('updated_at',{ascending:false}),
+    sb.from('milestone_done').select('*'),
+    sb.from('milestone_history').select('*').order('changed_at',{ascending:true}),
     sb.from('adhoc_schedule').select('*').order('created_at'),
     sb.from('app_settings').select('*'),
-    sbAll('project_links','sort_order'),
-    sbAll('milestone_deviations'),
-    sbAll('so_details'),
+    sb.from('project_links').select('project_id,label,url,category,id,sort_order'),
+    sb.from('milestone_deviations').select('*'),
+    sb.from('so_details').select('*'),
     sb.from('extension_requests').select('*').order('created_at',{ascending:false}),
-    sbAll('procurement_po'),
-    sbAll('procurement_po_projects'),
-    sbAll('procurement_readiness'),
+    sb.from('procurement_po').select('*'),
+    sb.from('procurement_po_projects').select('*'),
+    sb.from('procurement_readiness').select('*'),
   ]);
   projects=pr.data||[];activityLog=lg.data||[];
   // Guard: never let a failed/empty milestones fetch wipe what's already loaded.
@@ -2744,9 +2726,13 @@ async function syncSingleSOFieldsToProject(projId,so,updates){
 // ── OVERVIEW ───────────────────────────────────────────────
 function renderOverview(){
   const el=document.getElementById('tab-overview');
-  const upcoming=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=14).length;
-  const overdue=milestones.filter(m=>isMilestoneOverdue(m)).length;
+  const adHocMsOv=getAdHocAsMilestones().filter(m=>!pmFilter||m._raw?.pm===pmFilter);
+  const upcoming=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=14).length
+    +adHocMsOv.filter(m=>daysDiff(m.date)>=0&&daysDiff(m.date)<=14&&m._status!=='Complete').length;
+  const overdue=milestones.filter(m=>isMilestoneOverdue(m)).length
+    +adHocMsOv.filter(m=>daysDiff(m.date)<0&&m._status!=='Complete').length;
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
+  const adHocThisWeekOv=adHocMsOv.filter(m=>daysDiff(m.date)>=0&&daysDiff(m.date)<=6&&m._status!=='Complete').length;
   const proj=activeProjects('overview').find(p=>p.id===selectedProjId)||projects.find(p=>p.id===selectedProjId);
   const overviewNaming=proj?(getSOConfigSummary(proj).naming_convention||''):'';
   const overviewNamingSafe=overviewNaming.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -2796,14 +2782,9 @@ function renderOverview(){
 
   let msHtml='';
   if(hasSoTags){
-    // Milestones are split — group by so_tag. Untagged = project-wide (always shown);
-    // orphan tags (not in so_number) still render so nothing disappears.
-    const soListForGroup=[...new Set([...soList,...projMs.filter(m=>m.so_tag).map(m=>m.so_tag)])];
-    const ovUntagged=projMs.filter(m=>!m.so_tag);
-    const ovUntaggedHtml=ovUntagged.length?`<div style="grid-column:1/-1;margin:10px 0 4px"><div style="padding:5px 10px;background:var(--gray-50);border-radius:6px;border-left:3px solid var(--gray-400)"><span style="font-size:10px;font-weight:700;color:var(--gray-600);text-transform:uppercase;letter-spacing:0.06em">Project-wide (no SO tag)</span></div></div>`+buildMsHtml(ovUntagged,''):'';
-    msHtml=ovUntaggedHtml+soListForGroup.map(so=>{
+    // Milestones are split — group by so_tag
+    msHtml=soList.map(so=>{
       const soMs=projMs.filter(m=>m.so_tag===so);
-      if(!soMs.length&&!soList.includes(so))return'';
       const saved=soDetails.find(d=>d.project_id===proj.id&&d.so_tag===so);
       const soNaming=saved?.naming_convention||proj.naming_convention||'';
       const soHeader=`<div style="grid-column:1/-1;margin:10px 0 4px"><div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 10px;background:var(--gray-50);border-radius:6px;border-left:3px solid var(--red)">
@@ -2829,7 +2810,7 @@ function renderOverview(){
   el.innerHTML=`
     <div class="metrics-row" style="grid-template-columns:repeat(4,1fr)">
       <div class="metric"><div class="metric-label">Total projects</div><div class="metric-val">${projects.length}</div></div>
-      <div class="metric"><div class="metric-label">This week</div><div class="metric-val">${thisWeek}</div></div>
+      <div class="metric"><div class="metric-label">This week</div><div class="metric-val">${thisWeek+adHocThisWeekOv}</div>${adHocThisWeekOv?`<div class="metric-sub"><span style="font-size:10px;color:var(--blue)">(+${adHocThisWeekOv} ad hoc)</span></div>`:''}</div>
       <div class="metric"><div class="metric-label">Next 14 days</div><div class="metric-val">${upcoming}</div></div>
       <div class="metric"><div class="metric-label">Overdue</div><div class="metric-val ${overdue>0?'red':''}">${overdue}</div></div>
     </div>
@@ -2904,10 +2885,6 @@ async function quickUpdateMs(msId,newDate){
   const m=milestones.find(x=>x.id===msId);
   if(!m)return;
   const oldDate=m.date;
-  // Guard against accidental clear that would hide the milestone from schedules
-  if(oldDate&&!newDate){
-    if(!confirm('Clear this date? It will disappear from all schedules until reset.')){renderTab();return;}
-  }
   if(!m.original_date)await sb.from('milestones').update({original_date:m.date}).eq('id',msId);
   await sb.from('milestones').update({date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',msId);
   m.date=newDate;
@@ -3018,9 +2995,11 @@ function renderWeek(){
         const statusSel=adHocStatusSel;
         const projLink=e._projId?`<span style="cursor:pointer;text-decoration:underline;opacity:0.8" onclick="event.stopPropagation();goToProjPage('${e._projId}')">${e.projectName}</span>`:e.projectName;
         const soLine=e._so?`<div style="font-family:var(--mono);font-size:9px;color:var(--red);margin-top:1px;opacity:0.85">${e._so}</div>`:'';
+        const namingConv=(!e._adhoc&&e._projId)?(getSOConfigSummary(projects.find(x=>x.id===e._projId),e._so||'').naming_convention||''):'';
+        const namingLine=namingConv?`<div style="font-family:var(--mono);font-size:9px;color:rgba(255,255,255,0.75);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${namingConv.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}">${namingConv}</div>`:'';
         const pmName=e._adhoc?(e._raw?.pm||''):(e._pm||'');
         const pmLine=pmName?`<div style="font-size:9px;color:var(--gray-500);margin-top:1px;opacity:0.9">PM: ${pmName}</div>`:'';
-        return`<div class="ev ${isDone?'ev-done':TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${projLink}${e._adhoc?' 📦':''}</div>${soLine}${pmLine}${statusSel}</div>`;
+        return`<div class="ev ${isDone?'ev-done':TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${projLink}${e._adhoc?' 📦':''}</div>${soLine}${namingLine}${pmLine}${statusSel}</div>`;
       }).join(''):'<div class="empty-day">—</div>'}</div></div>`;
   }).join('');
   el.innerHTML=`
@@ -4455,10 +4434,7 @@ function openEditProj(id){
     // Group milestones under SO headers so they're not one giant repeated flat list
     const tagsPresent=[...new Set(projMs.map(m=>m.so_tag).filter(Boolean))];
     const allSOs=[...new Set([...soList,...tagsPresent])];
-    const emRow=m=>`<div style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${m.label}${!m.date?' <span style=\'font-size:9px;color:var(--warning);font-weight:700\'>⚠ set date</span>':''}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="deleteMs('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></div>`;
-    const emUntagged=projMs.filter(m=>!m.so_tag).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-    const emUntaggedRows=emUntagged.length?`<div style="font-size:10px;font-weight:700;color:var(--gray-600);text-transform:uppercase;letter-spacing:0.06em;margin:14px 0 6px;border-left:3px solid var(--gray-400);padding-left:6px">Project-wide (no SO tag)</div>`+emUntagged.map(emRow).join(''):'';
-    msRows=emUntaggedRows+allSOs.map(so=>{
+    msRows=allSOs.map(so=>{
       const soMs=projMs.filter(m=>m.so_tag===so).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
       if(!soMs.length)return'';
       const header=`<div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em;margin:14px 0 6px;border-left:3px solid var(--red);padding-left:6px">SO: ${so}</div>`;
@@ -4467,7 +4443,7 @@ function openEditProj(id){
     }).join('');
     msRows=`<div style="font-size:10px;color:var(--blue);background:var(--blue-bg);border-radius:6px;padding:8px 10px;margin-bottom:8px">💡 This project has ${allSOs.length} SOs. For per-SO naming, address, and "Push to all" tools, use the <strong>Project Page</strong> instead — it has the full SO-aware editor.</div>`+msRows;
   } else {
-    msRows=[...projMs].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(m=>`<div style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${m.label}${!m.date?' <span style=\'font-size:9px;color:var(--warning);font-weight:700\'>⚠ set date</span>':''}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="deleteMs('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></div>`).join('');
+    msRows=projMs.map(m=>`<div style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${m.label}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="deleteMs('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></div>`).join('');
   }
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:560px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
     <div class="modal-head"><span class="modal-title">Edit project</span><button class="modal-close" onclick="closeModal()">✕</button></div>
@@ -4572,10 +4548,7 @@ function openEditProj(id){
         </div>
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100);display:flex;justify-content:space-between;align-items:center">Milestone dates
-        <span style="display:flex;gap:6px">
-        <button type="button" onclick="backfillMilestones('${id}')" style="font-size:10px;padding:3px 10px;border:1px solid var(--gray-300);border-radius:12px;background:var(--white);cursor:pointer;font-family:var(--font);text-transform:none;letter-spacing:0;font-weight:500" title="Creates any STANDARD milestones this project is missing (undated)">➕ Generate missing</button>
-        <button type="button" onclick="closeModal();openAddMsForProj('${id}')" style="font-size:10px;padding:3px 10px;border:1px solid var(--blue);border-radius:12px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font);text-transform:none;letter-spacing:0;font-weight:500" title="Add a one-off custom milestone (any label, any date)">＋ Add custom</button>
-        </span>
+        <button type="button" onclick="backfillMilestones('${id}')" style="font-size:10px;padding:3px 10px;border:1px solid var(--gray-300);border-radius:12px;background:var(--white);cursor:pointer;font-family:var(--font);text-transform:none;letter-spacing:0;font-weight:500" title="Creates any milestones this project is missing (undated) so they can be scheduled — fixes projects created before the full-skeleton fix">➕ Generate missing milestones</button>
       </div>
       ${msRows}
     </div>
@@ -4622,8 +4595,6 @@ async function saveEditProj(id){
   for(const m of projMs){
     const el=document.getElementById('ms-'+m.id);
     if(el&&el.value!==m.date){
-      // Don't blank an existing date via the bulk project-edit save (usually accidental)
-      if(m.date&&!el.value)continue;
       await sb.from('milestones').update({date:el.value,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
       await logActivity('updated date',m.label,m.label,id,m.date,el.value);
     }
@@ -4764,15 +4735,6 @@ function openEditMs(id,label,date,soTag,projId){
 async function saveEditMs(id,oldLabel,oldDate){
   const newDate=document.getElementById('em-dt').value;
   const newLabel=document.getElementById('em-lbl').value.trim();
-  // GUARD: a milestone that HAD a date must never be saved blank — that would
-  // drop it from every dated view (schedules, week, dept tables). If the picker
-  // came back empty but there was a date before, keep the old one unless the
-  // user explicitly confirms clearing it.
-  if(oldDate&&!newDate){
-    if(!confirm('Clear the date for "'+(newLabel||oldLabel)+'"?\n\nIt will disappear from all schedules until a new date is set. Cancel to keep '+fmt(oldDate)+'.')){
-      return;
-    }
-  }
   const reason=document.getElementById('em-reason')?.value.trim()||'';
   const ms=milestones.find(m=>m.id===id);
   const proj=ms?projects.find(p=>p.id===ms.project_id):null;
@@ -5354,7 +5316,6 @@ function renderProjPageBody(){
     else if(d===0){chip='chip-active';lbl='Today';}
     else if(d<=7){chip='chip-atrisk';lbl='In '+d+'d';}
     else{chip='chip-future';lbl=fmt(m.date);}
-    if(!m.date){chip='chip-atrisk';lbl='⚠ no date — set one';}
     const slDot=ci?.stoplight?`<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${ci.stoplight==='green'?'#22c55e':ci.stoplight==='yellow'?'#eab308':'#ef4444'};margin-left:4px" title="Dept: ${ci.stoplight}"></span>`:'';
     const dev=ppProj?.parent_project_id?milestoneDeviations[ppProjId]?.[m.key]:null;
     const devTag=dev?`<span style="font-size:9px;padding:1px 5px;border-radius:8px;background:#ede9fe;color:#7c3aed;font-weight:600;margin-left:4px" title="Deviated from master">🔀 deviated</span>`:'';
@@ -5371,16 +5332,9 @@ function renderProjPageBody(){
 
   let msHtml='';
   if(ppHasSoTags&&ppSoList.length>1){
-    // Group by SO. Union field-SOs with any tag actually present (orphan tags still
-    // render), and always show untagged milestones as a project-wide group so nothing
-    // can silently disappear from the tracker.
-    const ppTags=[...new Set(pMs.filter(m=>m.so_tag).map(m=>m.so_tag))];
-    const ppAllSOs=[...new Set([...ppSoList,...ppTags])];
-    const ppUntagged=pMs.filter(m=>!m.so_tag).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-    const ppUntaggedHtml=ppUntagged.length?`<tr><td colspan="4" style="padding:6px 8px 2px;background:var(--gray-50)"><span style="font-size:10px;font-weight:700;color:var(--gray-600);text-transform:uppercase;letter-spacing:0.06em;border-left:3px solid var(--gray-400);padding-left:6px">Project-wide (no SO tag)</span></td></tr>`+ppUntagged.map(buildPPMsRow).join(''):'';
-    msHtml=ppUntaggedHtml+ppAllSOs.map(so=>{
+    // Group by SO with headers + push button
+    msHtml=ppSoList.map(so=>{
       const soMs=pMs.filter(m=>m.so_tag===so).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-      if(!soMs.length)return'';
       return`<tr><td colspan="4" style="padding:6px 8px 2px;background:var(--gray-50)">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <span style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em;border-left:3px solid var(--red);padding-left:6px">SO: ${so}</span>
@@ -5389,7 +5343,6 @@ function renderProjPageBody(){
       </td></tr>`+soMs.map(buildPPMsRow).join('');
     }).join('');
   } else {
-    // Non-grouped: show ALL milestones (no date filter) so blank-date ones remain visible & fixable
     msHtml=pMs.sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(buildPPMsRow).join('');
   }
 
@@ -5568,10 +5521,7 @@ function renderProjPageBody(){
       <div class="pp-card">
         <div class="pp-card-head">
           <span class="pp-card-title">Milestone tracker</span>
-          <span style="display:flex;gap:8px;align-items:center">
-            <button onclick="openAddMsForProj('${ppProjId}')" style="font-size:10px;padding:3px 10px;border:1px solid var(--blue);border-radius:12px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font);font-weight:500">＋ Milestone</button>
-            <span style="font-size:10px;color:var(--gray-400)">Synced from hub</span>
-          </span>
+          <span style="font-size:10px;color:var(--gray-400)">Synced from hub</span>
         </div>
         <div style="overflow-x:auto">
           <table class="pp-table" style="min-width:500px">
@@ -8676,7 +8626,7 @@ function renderInsights(){
 </style>
 <script>
 // ── VERSION BADGE ──────────────────────────────────────────
-const OPS_VERSION='v1.9.7';
+const OPS_VERSION='v1.9.1';
 try{const hd=document.getElementById('hdate');if(hd)hd.insertAdjacentHTML('beforebegin','<span style="font-family:var(--mono);font-size:9px;color:#555;border:1px solid #2a2a2a;border-radius:10px;padding:2px 8px" title="Mission Control · ⌘K palette · Live sync · Insights · Calendar">'+OPS_VERSION+'</span>');}catch(e){}
 // ── CONFETTI on milestone done ─────────────────────────────
 function opsConfetti(){const C=['#C8102E','#22c55e','#2563eb','#eab308','#db2777','#7c3aed'];for(let i=0;i<70;i++){const d=document.createElement('div');d.className='cf';d.style.left=Math.random()*100+'vw';d.style.background=C[i%C.length];d.style.setProperty('--cx',(Math.random()*160-80)+'px');d.style.animationDelay=(Math.random()*0.4)+'s';document.body.appendChild(d);setTimeout(()=>d.remove(),2300);}}
@@ -8839,30 +8789,25 @@ const FULL_MS_SET=[
   ['other','Customer care start'],
 ];
 async function backfillMilestones(projId){
-  const proj=projects.find(p=>p.id===projId);
-  if(!proj){alert('Could not find this project — refresh and try again.');return;}
+  const proj=projects.find(p=>p.id===projId);if(!proj)return;
   const projMs=milestones.filter(m=>m.project_id===projId);
   const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   const hasSoTags=projMs.some(m=>m.so_tag);
   const targets=(hasSoTags&&soList.length>1)?soList:[null];
   const ins=[];
   targets.forEach(tag=>{
-    const existing=new Set(projMs.filter(m=>!tag||m.so_tag===tag||!m.so_tag).map(m=>(m.label||'').toLowerCase().trim()));
+    const existing=new Set(projMs.filter(m=>!tag||m.so_tag===tag).map(m=>(m.label||'').toLowerCase().trim()));
     FULL_MS_SET.forEach(([key,label])=>{
       if(!existing.has(label.toLowerCase()))ins.push(Object.assign({project_id:projId,key,label,date:null,changed_by:currentUserName},tag?{so_tag:tag}:{}));
     });
   });
-  if(!ins.length){
-    alert('✓ All '+FULL_MS_SET.length+' standard milestones already exist on this project.\n\nNeed something extra (e.g. "Parts arrive — batch 2")? Use the ＋ Add custom button instead.');
-    return;
-  }
+  if(!ins.length){showToast('All milestones already exist ✓');return;}
   if(!confirm('Generate '+ins.length+' missing milestone'+(ins.length!==1?'s':'')+' (undated) for "'+proj.name+'"?'))return;
   const{error}=await sb.from('milestones').insert(ins);
   if(error){alert('Error: '+error.message);return;}
   await logActivity('generated missing milestones',proj.name||'',proj.so_number||'',projId,null,String(ins.length));
+  showToast(ins.length+' missing milestones generated ✓');
   closeModal();await loadAll();
-  showToast(ins.length+' milestones generated ✓ — undated, at the top of the list');
-  openEditProj(projId); // reopen so the new rows are immediately visible with empty date inputs
 }
 </script>
 <script>
