@@ -320,6 +320,30 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
   .section{break-inside:avoid;}
 }
 @media(max-width:800px){.metrics-row{grid-template-columns:repeat(2,1fr);}.week-grid{grid-template-columns:1fr;}.intake-grid,.form-grid,.ms-intake-grid{grid-template-columns:1fr;}.glance-grid{grid-template-columns:1fr;}.header-inner{padding:0 1rem;}.page-body{padding:1rem 1rem 3rem;}}
+/* Production tab breaks out to full viewport width — all other tabs keep the 1300px layout */
+body.production-view-active .page-body{max-width:none;width:100%;padding-left:28px;padding-right:28px;}
+body.production-view-active .header-inner{max-width:none;width:100%;padding-left:28px;padding-right:28px;}
+/* ═══ PRODUCTION BOARD (read-only hub view) — layout matches Daily Check-In ═══ */
+.pb-scroll{width:100%;overflow-x:auto;overflow-y:hidden;padding-bottom:14px}
+.pb-cols{display:flex;align-items:flex-start;gap:16px;width:max-content;min-width:100%}
+.pb-col{flex:0 0 350px;width:350px;min-width:350px;max-width:350px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;display:flex;flex-direction:column;max-height:calc(100vh - 230px)}
+.pb-col-head{position:sticky;top:0;z-index:2;background:var(--gray-50);border-radius:10px 10px 0 0;padding:11px 14px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--gray-200)}
+.pb-col-cnt{font-size:11px;font-weight:600;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:1px 8px}
+.pb-col-body{overflow-y:auto;padding:10px;flex:1}
+.pb-card{width:100%;background:var(--white);border:1px solid var(--gray-200);border-left:4px solid #7c3aed;border-radius:10px;margin-bottom:12px;overflow:hidden;cursor:pointer}
+.pb-card.pb-waiting{border-left-color:#d97706;background:#fffaf2}
+.pb-img{width:100%;height:160px;object-fit:contain;background:#f2f2f2;display:block}
+.pb-body{padding:14px}
+.pb-name{font-size:15px;font-weight:700;line-height:1.3;margin-bottom:2px}
+.pb-so{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--red);word-break:break-word;margin-bottom:4px}
+.pb-so .pb-so-more{cursor:pointer;text-decoration:underline;color:#7c3aed;font-weight:600}
+.pb-meta{font-size:12px;color:var(--gray-600);line-height:1.55}
+.pb-meta b{color:var(--gray-800);font-weight:600}
+.pb-dates{font-size:11px;color:var(--gray-500);margin-top:4px}
+.pb-badges{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
+.pb-badge{font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:10px;background:var(--gray-100);color:var(--gray-600)}
+.pb-badge.wait{background:#fef3c7;color:#92400e}
+.pb-badge.pri-High,.pb-badge.late{background:var(--red-light);color:var(--red)}
 </style>
 </head>
 <body>
@@ -833,6 +857,7 @@ document.addEventListener('click',()=>document.getElementById('nav-dropdown')?.c
 
 function setTab(tab){
   currentTab=tab;
+  document.body.classList.toggle('production-view-active',tab==='prodqueue');
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   if(ni&&document.getElementById('nav-more')?.contains(ni))openNavMore();
@@ -852,6 +877,9 @@ function toggleNavMore(){
   else{el.style.display='none';const arrow=document.querySelector('#nav-more-toggle .nav-more-arrow');if(arrow)arrow.textContent='▸';}
 }
 function renderTab(){
+  // Safety net: keep the breakout class in sync even if currentTab was set
+  // without going through setTab (palette, deep links, restores).
+  document.body.classList.toggle('production-view-active',currentTab==='prodqueue');
   const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,prodqueue:renderProductionQueue,qaqueue:renderQaQueue,shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),procurement:renderProcurementCC,vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity};
   if(m[currentTab])m[currentTab]();
 }
@@ -2029,6 +2057,14 @@ function pbHubSo(soRaw){
   return{text:sos.slice(0,3).join(', ')+' +'+(sos.length-3)+' more',title:sos.join(', ')};
 }
 function pbHubDur(s){if(s==null)return'—';const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600);if(d>0)return d+'d '+h+'h';const m=Math.floor((s%3600)/60);return h>0?h+'h '+m+'m':m+'m';}
+let pbHubShippedLimit=20;
+const pbHubSoExpanded=new Set();
+function pbHubSoHtml(soRaw,pid){
+  const sos=(soRaw||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  if(sos.length<=3)return sos.join(', ')||'—';
+  if(pbHubSoExpanded.has(pid))return sos.join(', ')+` <span class="pb-so-more" onclick="event.stopPropagation();pbHubSoExpanded.delete('${pid}');renderProductionQueue()">collapse</span>`;
+  return sos.slice(0,3).join(', ')+` <span class="pb-so-more" onclick="event.stopPropagation();pbHubSoExpanded.add('${pid}');renderProductionQueue()">+${sos.length-3} more</span>`;
+}
 function renderProductionQueue(){
   const el=document.getElementById('tab-prodqueue');
   if(!pbHub.loaded){
@@ -2038,14 +2074,19 @@ function renderProductionQueue(){
   }
   if(pbHub.missing){renderQueueBoard('production');return;} // migration not run → legacy queue
   const ap=filterBySales(filterByPM(activeProjects('prodqueue')));
+  let shippedTotal=0;
   const cols=PB_STAGES.map(s=>{
-    const cards=ap.filter(p=>pbHubStageOf(p)===s.key).sort((a,b)=>{
+    let cards=ap.filter(p=>pbHubStageOf(p)===s.key).sort((a,b)=>{
       const pa=pbHub.board[a.id]?.priority==='High'?0:1,pb_=pbHub.board[b.id]?.priority==='High'?0:1;
       if(pa!==pb_)return pa-pb_;
       const da=(milestones.find(m=>m.project_id===a.id&&m.key==='production-end')?.date)||'9999';
       const db=(milestones.find(m=>m.project_id===b.id&&m.key==='production-end')?.date)||'9999';
       return da.localeCompare(db);
     });
+    if(s.key==='shipped'){
+      cards=cards.sort((a,b)=>((pbHub.board[b.id]?.stage_entered_at||'')+'').localeCompare((pbHub.board[a.id]?.stage_entered_at||'')+''));
+      shippedTotal=cards.length;cards=cards.slice(0,pbHubShippedLimit);
+    }
     const cardHtml=cards.map(p=>{
       const b=pbHub.board[p.id]||{};
       const img=pbHub.photos[p.id];
@@ -2055,26 +2096,29 @@ function renderProductionQueue(){
       const wSecs=b.waiting&&b.waiting_since?Math.round((Date.now()-new Date(b.waiting_since).getTime())/1000):null;
       const rl=(pbHub.reasons.find(r=>r.code===b.waiting_reason)||{}).label||b.waiting_reason||'';
       const late=prodEnd&&daysDiff(prodEnd)<0&&pbHubStageOf(p)!=='shipped';
-      return`<div style="background:white;border:1px solid var(--gray-200);border-left:4px solid ${b.waiting?'#d97706':s.color};border-radius:8px;margin-bottom:8px;overflow:hidden;cursor:pointer" onclick="goToProjPage('${p.id}')">
-        ${img?`<img src="${img.url}" style="width:100%;height:70px;object-fit:cover;display:block;background:#eee" onerror="this.style.display='none'">`:''}
-        <div style="padding:7px 9px">
-          <div style="font-family:var(--mono);font-size:10px;font-weight:700;color:var(--red);word-break:break-word" ${pbHubSo(p.so_number).title?`title="${pbHubSo(p.so_number).title}"`:''}>${pbHubSo(p.so_number).text}</div>
-          <div style="font-size:12px;font-weight:700;line-height:1.25">${p.name||''}</div>
-          <div style="font-size:10px;color:var(--gray-500);margin-top:2px">${p.client||'—'} · Due ${prodEnd?fmt(prodEnd):'—'} · Ship ${shipD?fmt(shipD):'—'}${b.owner?' · '+b.owner:''}</div>
-          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:5px">
-            <span style="font-size:9px;font-weight:600;padding:1px 6px;border-radius:8px;background:var(--gray-100);color:var(--gray-600)">⏱ ${pbHubDur(secs)}</span>
-            ${late?'<span style="font-size:9px;font-weight:600;padding:1px 6px;border-radius:8px;background:var(--red-light);color:var(--red)">Overdue</span>':''}
-            ${b.priority==='High'?'<span style="font-size:9px;font-weight:600;padding:1px 6px;border-radius:8px;background:var(--red-light);color:var(--red)">High</span>':''}
-            ${b.waiting?`<span style="font-size:9px;font-weight:600;padding:1px 6px;border-radius:8px;background:#fef3c7;color:#92400e">⏸ ${rl} · ${pbHubDur(wSecs)}</span>`:''}
+      const machine=[p.product_type,p.form_factor].filter(Boolean).join(' · ');
+      return`<div class="pb-card ${b.waiting?'pb-waiting':''}" style="border-left-color:${b.waiting?'#d97706':s.color}" onclick="goToProjPage('${p.id}')">
+        ${img?`<img class="pb-img" src="${img.url}" onerror="this.style.display='none'">`:''}
+        <div class="pb-body">
+          <div class="pb-name">${p.name||''}</div>
+          <div class="pb-so">${pbHubSoHtml(p.so_number,p.id)}</div>
+          <div class="pb-meta"><b>${p.client||'—'}</b>${machine?'<br>'+machine:''}</div>
+          <div class="pb-dates">Prod due <b>${prodEnd?fmt(prodEnd):'—'}</b> · Ship <b>${shipD?fmt(shipD):'—'}</b>${b.owner?' · '+b.owner:''}</div>
+          <div class="pb-badges">
+            <span class="pb-badge">⏱ ${pbHubDur(secs)}</span>
+            ${late?'<span class="pb-badge late">Overdue</span>':''}
+            ${b.priority==='High'?'<span class="pb-badge pri-High">High</span>':''}
+            ${b.waiting?`<span class="pb-badge wait">⏸ ${rl} · ${pbHubDur(wSecs)}</span>`:''}
           </div>
         </div></div>`;
     }).join('');
-    return`<div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;display:flex;flex-direction:column;min-height:300px;min-width:0">
-      <div style="padding:8px 11px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${s.color};border-bottom:1px solid var(--gray-200);display:flex;justify-content:space-between">${s.label}<span style="background:white;border:1px solid var(--gray-300);border-radius:9px;padding:0 7px;font-size:10px">${cards.length}</span></div>
-      <div style="padding:7px;flex:1;overflow-y:auto;max-height:60vh">${cardHtml||'<div style="text-align:center;font-size:11px;color:var(--gray-400);padding:14px 0">—</div>'}</div>
+    const more=s.key==='shipped'&&shippedTotal>pbHubShippedLimit
+      ?`<button class="btn" style="width:100%;font-size:11px" onclick="pbHubShippedLimit+=20;renderProductionQueue()">Load 20 more (${shippedTotal-pbHubShippedLimit} hidden)</button>`:'';
+    return`<div class="pb-col">
+      <div class="pb-col-head" style="color:${s.color}">${s.label}<span class="pb-col-cnt">${s.key==='shipped'?shippedTotal:cards.length}</span></div>
+      <div class="pb-col-body">${cardHtml||'<div style="text-align:center;font-size:12px;color:var(--gray-400);padding:24px 0">—</div>'}${more}</div>
     </div>`;
   }).join('');
-  // Bottleneck + history reporting from production_stage_history
   const forwardMoves=pbHub.history.filter(h=>h.move_type==='forward'&&h.seconds_in_prev_stage!=null);
   const byStage={};forwardMoves.forEach(h=>{if(h.from_stage){byStage[h.from_stage]=byStage[h.from_stage]||[];byStage[h.from_stage].push(h.seconds_in_prev_stage);}});
   const avgRow=PB_STAGES.slice(0,4).map(s=>{
@@ -2092,7 +2136,7 @@ function renderProductionQueue(){
     const icon={forward:'→',backward:'↩',waiting:'⏸',resumed:'▶'}[h.move_type]||'·';
     const rl=(pbHub.reasons.find(r=>r.code===h.reason_code)||{}).label||h.reason_code||'';
     return`<tr><td style="padding:3px 10px 3px 0;white-space:nowrap;color:var(--gray-400)">${new Date(h.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})} ${new Date(h.created_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</td>
-      <td style="padding:3px 10px 3px 0"><span style="font-family:var(--mono);font-size:10px;color:var(--red)">${h.so_number||''}</span> ${h.kiosk_name||''}</td>
+      <td style="padding:3px 10px 3px 0"><span style="font-family:var(--mono);font-size:10px;color:var(--red)">${((h.so_number||'').split(/[\s,;]+/)[0]||'')}</span> ${h.kiosk_name||''}</td>
       <td style="padding:3px 10px 3px 0;white-space:nowrap">${icon} ${h.move_type==='waiting'?'Paused':h.move_type==='resumed'?'Resumed':f+' → '+t}</td>
       <td style="padding:3px 10px 3px 0;color:var(--gray-500)">${rl}${h.notes?' — '+h.notes:''}</td>
       <td style="padding:3px 0;color:var(--gray-400);white-space:nowrap">${h.seconds_in_prev_stage!=null?pbHubDur(Number(h.seconds_in_prev_stage)):''}</td>
@@ -2104,8 +2148,8 @@ function renderProductionQueue(){
       <button class="btn" style="font-size:11px" onclick="pbHub.loaded=false;renderProductionQueue()">↻ Refresh</button>
     </div>
     <div style="margin-bottom:10px">${avgRow}<span style="font-size:11px;color:var(--gray-600)">Top delay reasons: ${topReasons}</span></div>
-    <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;margin-bottom:16px">${cols}</div>
-    <details><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--gray-600)">Movement history (latest 25)</summary>
+    <div class="pb-scroll"><div class="pb-cols">${cols}</div></div>
+    <details style="margin-top:6px"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--gray-600)">Movement history (latest 25)</summary>
       <table style="font-size:11px;border-collapse:collapse;margin-top:8px;width:100%">${histRows||'<tr><td style="color:var(--gray-400)">No movements yet.</td></tr>'}</table></details>`;
 }
 function renderQaQueue(){renderQueueBoard('qa');}
