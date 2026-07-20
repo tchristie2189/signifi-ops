@@ -69,6 +69,34 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .sb-yellow{color:#eab308;}
 .sb-red{color:#ef4444;}
 .toast{position:fixed;bottom:20px;right:20px;background:var(--black);color:white;padding:10px 18px;border-radius:var(--radius-lg);font-size:12px;font-weight:500;z-index:999;display:none;}
+/* ═══ PRODUCTION BOARD ═══ */
+.pb-wrap{padding:0 4px}
+.pb-cols{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;align-items:start}
+.pb-col{background:#f7f7f8;border:1px solid #e5e5e5;border-radius:10px;min-height:70vh;display:flex;flex-direction:column}
+.pb-col.pb-over{outline:2px dashed #7c3aed;outline-offset:-2px;background:#f3efff}
+.pb-col-head{padding:9px 12px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e5e5e5}
+.pb-col-cnt{font-size:11px;font-weight:600;background:#fff;border:1px solid #d4d4d4;border-radius:10px;padding:1px 8px}
+.pb-col-body{padding:8px;flex:1;overflow-y:auto}
+.pb-card{background:#fff;border:1px solid #e5e5e5;border-left:4px solid #7c3aed;border-radius:8px;margin-bottom:8px;cursor:grab;overflow:hidden}
+.pb-card.pb-waiting{border-left-color:#d97706;background:#fffaf2}
+.pb-card:active{cursor:grabbing}
+.pb-img{width:100%;height:110px;object-fit:cover;display:block;background:#eee;cursor:zoom-in}
+.pb-noimg{width:100%;height:44px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#999;background:#f2f2f2;cursor:pointer}
+.pb-body{padding:8px 10px}
+.pb-so{font-family:var(--mono,monospace);font-size:11px;font-weight:700;color:#c2255c}
+.pb-name{font-size:13px;font-weight:700;line-height:1.25;margin:1px 0 3px}
+.pb-meta{font-size:10.5px;color:#666;line-height:1.5}
+.pb-meta b{color:#333;font-weight:600}
+.pb-badges{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.pb-badge{font-size:9.5px;font-weight:600;padding:2px 7px;border-radius:9px;background:#f1f1f1;color:#555}
+.pb-badge.wait{background:#fef3c7;color:#92400e}
+.pb-badge.pri-High{background:#fee2e2;color:#b91c1c}
+.pb-badge.late{background:#fee2e2;color:#b91c1c}
+.pb-actions{display:flex;gap:5px;margin-top:7px}
+.pb-btn{font-size:10px;padding:3px 9px;border:1px solid #d4d4d4;border-radius:12px;background:#fff;cursor:pointer;font-family:var(--font)}
+.pb-btn:hover{border-color:#7c3aed;color:#7c3aed}
+.pb-sel{font-size:10px;padding:2px 4px;border:1px solid #d4d4d4;border-radius:6px;background:#fff;font-family:var(--font);max-width:92px}
+@media(max-width:1100px){.pb-cols{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
 <body>
@@ -249,6 +277,393 @@ body.proc-mode .page{max-width:1160px;}
 </style>
 <div id="proc-modal-root"></div>
 <script>
+// ═══ PRODUCTION BOARD MODULE — active only for the prod2026 passcode ═══
+// Replaces the traffic-light check-in for Production ONLY. Mirrors the
+// physical floor board: Upcoming → WIP → Issues → Ready for QA/QC → Shipped,
+// plus a Waiting overlay state that pauses any stage without losing it.
+// STAGE LOGIC BLOCK — keep identical to the copy in signifi-ops-index.html.
+const PB_STAGES=[
+  {key:'upcoming',label:'Upcoming / Waiting for Parts',color:'#6b7280'},
+  {key:'wip',label:'WIP',color:'#7c3aed'},
+  {key:'issues',label:'Issues',color:'#dc2626'},
+  {key:'ready_qa',label:'Ready for QA/QC',color:'#d97706'},
+  {key:'shipped',label:'Shipped',color:'#059669'},
+];
+const PB_IDX=Object.fromEntries(PB_STAGES.map((s,i)=>[s.key,i]));
+let pbBoard={},pbHistory=[],pbReasons=[],pbPhotos={},pbMsDone={},pbDrag=null;
+function pbCloseModal(){const r=document.getElementById('pb-modal-root');if(r)r.innerHTML='';}
+function pbModal(inner){
+  let r=document.getElementById('pb-modal-root');
+  if(!r){r=document.createElement('div');r.id='pb-modal-root';document.body.appendChild(r);}
+  r.innerHTML=`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)pbCloseModal()">
+    <div style="background:#fff;border-radius:12px;width:400px;max-width:95vw;overflow:hidden" onclick="event.stopPropagation()">${inner}</div></div>`;
+}
+const PB_BTN='font-family:var(--font);font-size:13px;font-weight:500;padding:9px 16px;border:1px solid #d4d4d4;border-radius:8px;background:#fff;cursor:pointer';
+const PB_BTNP='font-family:var(--font);font-size:13px;font-weight:600;padding:9px 16px;border:none;border-radius:8px;background:#111;color:#fff;cursor:pointer';
+
+async function prodEnter(){
+  document.getElementById('week-tabs').style.display='none';
+  document.getElementById('ci-content').innerHTML='<div style="padding:40px;text-align:center;color:#888">Loading production board…</div>';
+  await pbLoad();
+  pbRender();
+}
+async function pbLoad(){
+  const[pr,ms,md,bd,rc,ph]=await Promise.all([
+    sbAll('projects','created_at'),
+    sbAll('milestones','date'),
+    sbAll('milestone_done'),
+    sbAll('production_board',null,false,'project_id'),
+    sb.from('production_reason_codes').select('*').eq('active',true).order('sort_order'),
+    sbAll('project_photos','created_at'),
+  ]);
+  if(bd.error&&/does not exist|relation/i.test(bd.error.message||'')){
+    document.getElementById('ci-content').innerHTML='<div style="padding:40px;text-align:center;color:#b91c1c">⚠️ Production board tables not found.<br>Run <b>production-board-migration.sql</b> in the Supabase SQL editor first, then refresh.</div>';
+    throw new Error('migration not run');
+  }
+  projects=(pr.data||[]).filter(p=>p.status!=='complete');
+  milestones=ms.data||[];
+  pbMsDone={};(md.data||[]).forEach(d=>pbMsDone[d.milestone_id]=d);
+  pbBoard={};(bd.data||[]).forEach(b=>pbBoard[b.project_id]=b);
+  pbReasons=rc.data||[];
+  pbPhotos={};(ph.data||[]).forEach(p=>{if((p.label||'').toLowerCase()==='kickoff')pbPhotos[p.project_id]=p;});
+}
+function pbMsOf(pid,key){return milestones.filter(m=>m.project_id===pid&&m.key===key);}
+function pbKeyDone(pid,key){const ms=pbMsOf(pid,key);return ms.length>0&&ms.every(m=>pbMsDone[m.id]);}
+// Legacy projects with no board row: derive stage from milestone completion so
+// nothing needs manual backfill. First real move lazily creates their row.
+function pbStageOf(pid){
+  const b=pbBoard[pid];
+  if(b)return b.stage;
+  if(pbKeyDone(pid,'shipping'))return'shipped';
+  if(pbKeyDone(pid,'production-end'))return'ready_qa';
+  if(pbKeyDone(pid,'production-start'))return'wip';
+  return'upcoming';
+}
+function pbSecsInStage(pid){
+  const b=pbBoard[pid];
+  if(!b)return null;
+  return Math.max(0,Math.round((Date.now()-new Date(b.stage_entered_at).getTime())/1000));
+}
+function pbFmtDur(s){
+  if(s==null)return'—';
+  const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600);
+  if(d>0)return d+'d '+h+'h';
+  const m=Math.floor((s%3600)/60);
+  return h>0?h+'h '+m+'m':m+'m';
+}
+function pbRender(){
+  const q=(document.getElementById('pb-search')?.value||'').toLowerCase();
+  const cols=PB_STAGES.map(s=>{
+    const cards=projects.filter(p=>pbStageOf(p.id)===s.key)
+      .filter(p=>!q||(p.name||'').toLowerCase().includes(q)||(p.so_number||'').toLowerCase().includes(q)||(p.client||'').toLowerCase().includes(q))
+      .sort((a,b)=>{
+        const pa=pbBoard[a.id]?.priority==='High'?0:1,pb_=pbBoard[b.id]?.priority==='High'?0:1;
+        if(pa!==pb_)return pa-pb_;
+        const da=(pbMsOf(a.id,'production-end')[0]?.date)||'9999',db=(pbMsOf(b.id,'production-end')[0]?.date)||'9999';
+        return da.localeCompare(db);
+      });
+    return`<div class="pb-col" data-stage="${s.key}" ondragover="pbOver(event)" ondragleave="pbLeave(event)" ondrop="pbDrop(event,'${s.key}')">
+      <div class="pb-col-head" style="color:${s.color}">${s.label}<span class="pb-col-cnt">${cards.length}</span></div>
+      <div class="pb-col-body">${cards.map(pbCard).join('')||'<div style="text-align:center;font-size:11px;color:#aaa;padding:20px 0">—</div>'}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('ci-content').innerHTML=`<div class="pb-wrap">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap">
+      <div style="font-size:12px;color:#666">Drag cards between stages · <b>Wait</b> pauses without losing the stage · moving backward asks for a reason</div>
+      <input id="pb-search" placeholder="Search SO / kiosk / customer…" oninput="pbRender()" value="${q.replace(/"/g,'&quot;')}" style="font-size:12px;padding:6px 12px;border:1px solid #d4d4d4;border-radius:16px;width:230px;font-family:var(--font)">
+    </div>
+    <div class="pb-cols">${cols}</div></div>`;
+}
+function pbOwnerList(){return[...new Set(Object.values(pbBoard).map(b=>b.owner).filter(Boolean))].sort();}
+function pbCard(p){
+  const b=pbBoard[p.id]||{};
+  const so=(p.so_number||'').trim();
+  const prodEnd=pbMsOf(p.id,'production-end').map(m=>m.date).filter(Boolean).sort()[0]||null;
+  const shipDate=pbMsOf(p.id,'shipping').map(m=>m.date).filter(Boolean).sort()[0]||null;
+  const secs=pbSecsInStage(p.id);
+  const waitSecs=b.waiting&&b.waiting_since?Math.round((Date.now()-new Date(b.waiting_since).getTime())/1000):null;
+  const img=pbPhotos[p.id];
+  const late=prodEnd&&daysDiff(prodEnd)<0&&pbStageOf(p.id)!=='shipped';
+  const reasonLbl=(pbReasons.find(r=>r.code===b.waiting_reason)||{}).label||b.waiting_reason||'';
+  const machine=[p.product_type,p.form_factor].filter(Boolean).join(' · ');
+  return`<div class="pb-card ${b.waiting?'pb-waiting':''}" draggable="${b.waiting?'false':'true'}" ondragstart="pbDragStart(event,'${p.id}')" ondragover="pbCardDragOver(event)" ondragleave="pbCardDragLeave(event)" ondrop="pbCardFileDrop(event,'${p.id}')">
+    ${img?`<img class="pb-img" src="${img.url}" alt="kickoff" onclick="window.open('${img.url}','_blank')" onerror="this.outerHTML='<div class=\\'pb-noimg\\' onclick=\\'pbAddPhoto(&quot;${p.id}&quot;)\\'>📷 image link broken — tap to replace</div>'">`
+        :`<div class="pb-noimg" onclick="pbAddPhoto('${p.id}')">📷 add kick-off screenshot</div>`}
+    <div class="pb-body">
+      <div class="pb-so">${so||'—'}</div>
+      <div class="pb-name">${p.name||''}</div>
+      <div class="pb-meta">
+        <b>${p.client||'—'}</b>${machine?' · '+machine:''}<br>
+        Prod due: <b>${prodEnd?fmt(prodEnd):'—'}</b> · Ship: <b>${shipDate?fmt(shipDate):'—'}</b><br>
+        Owner: <select class="pb-sel" onchange="if(this.value==='__new'){const n=prompt('Owner name:');if(n&&n.trim()){pbSetOwner('${p.id}',n.trim());}else{pbRender();}}else{pbSetOwner('${p.id}',this.value)}" onclick="event.stopPropagation()">
+          <option value="">—</option>${pbOwnerList().map(o=>`<option ${b.owner===o?'selected':''}>${o}</option>`).join('')}
+          <option value="__new">+ Add…</option>
+        </select>
+        Pri: <select class="pb-sel" style="max-width:64px" onchange="pbSetPriority('${p.id}',this.value)" onclick="event.stopPropagation()">
+          ${['','Normal','High','Low'].map(x=>`<option value="${x}" ${b.priority===x?'selected':''}>${x||'—'}</option>`).join('')}
+        </select>
+      </div>
+      <div class="pb-badges">
+        <span class="pb-badge">⏱ ${pbFmtDur(secs)} in stage</span>
+        ${late?'<span class="pb-badge late">Overdue</span>':''}
+        ${b.priority==='High'?'<span class="pb-badge pri-High">High priority</span>':''}
+        ${b.waiting?`<span class="pb-badge wait">⏸ Waiting · ${reasonLbl} · ${pbFmtDur(waitSecs)}</span>`:''}
+      </div>
+      <div class="pb-actions">
+        ${b.waiting?`<button class="pb-btn" onclick="pbResume('${p.id}')">▶ Resume</button>`
+                   :`<button class="pb-btn" onclick="pbOpenWait('${p.id}')">⏸ Wait</button>`}
+        ${img?`<button class="pb-btn" onclick="pbAddPhoto('${p.id}')">📷</button>`:''}
+      </div>
+    </div></div>`;
+}
+// ── drag & drop ──
+function pbDragStart(e,pid){pbDrag=pid;e.dataTransfer.effectAllowed='move';}
+function pbOver(e){e.preventDefault();e.currentTarget.classList.add('pb-over');}
+function pbLeave(e){e.currentTarget.classList.remove('pb-over');}
+function pbDrop(e,stage){
+  e.preventDefault();e.currentTarget.classList.remove('pb-over');
+  const pid=pbDrag;pbDrag=null;
+  if(!pid)return;
+  const cur=pbStageOf(pid);
+  if(cur===stage)return;
+  if(PB_IDX[stage]<PB_IDX[cur]){pbOpenReason(pid,stage,'backward');return;}
+  pbMove(pid,stage,'forward',null,null);
+}
+// ── reason modal (backward moves + waiting) ──
+function pbReasonOpts(){return pbReasons.map(r=>`<option value="${r.code}">${r.label}</option>`).join('');}
+function pbOpenReason(pid,stage,kind){
+  const p=projects.find(x=>x.id===pid);
+  pbModal(`<div style="padding:14px 16px;border-bottom:1px solid #eee;font-size:15px;font-weight:600">↩ Moving ${p?.name||''} backward</div>
+    <div style="padding:14px 16px">
+      <div style="font-size:12px;color:#666;margin-bottom:10px">${PB_STAGES[PB_IDX[pbStageOf(pid)]].label} → <b>${PB_STAGES[PB_IDX[stage]].label}</b>. A reason is required.</div>
+      <label style="font-size:11px;font-weight:600">Reason *</label>
+      <select id="pb-reason" style="width:100%;font-size:13px;padding:7px;border:1px solid #d4d4d4;border-radius:8px;margin:4px 0 10px;font-family:var(--font)"><option value="">Select…</option>${pbReasonOpts()}</select>
+      <label style="font-size:11px;font-weight:600">Notes (optional)</label>
+      <textarea id="pb-notes" rows="2" style="width:100%;font-size:12px;padding:7px;border:1px solid #d4d4d4;border-radius:8px;margin-top:4px;font-family:var(--font)"></textarea>
+    </div>
+    <div style="padding:12px 16px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end">
+      <button style="${PB_BTN}" onclick="pbCloseModal()">Cancel</button>
+      <button style="${PB_BTNP}" onclick="pbConfirmBack('${pid}','${stage}')">Move backward</button></div>`);
+}
+function pbConfirmBack(pid,stage){
+  const code=document.getElementById('pb-reason').value;
+  if(!code){document.getElementById('pb-reason').style.borderColor='#dc2626';return;}
+  const notes=document.getElementById('pb-notes').value.trim()||null;
+  pbCloseModal();
+  pbMove(pid,stage,'backward',code,notes);
+}
+function pbOpenWait(pid){
+  const p=projects.find(x=>x.id===pid);
+  pbModal(`<div style="padding:14px 16px;border-bottom:1px solid #eee;font-size:15px;font-weight:600">⏸ Pause ${p?.name||''}</div>
+    <div style="padding:14px 16px">
+      <div style="font-size:12px;color:#666;margin-bottom:10px">Stays in <b>${PB_STAGES[PB_IDX[pbStageOf(pid)]].label}</b> — the clock switches to waiting time. A reason is required.</div>
+      <label style="font-size:11px;font-weight:600">Waiting on *</label>
+      <select id="pb-reason" style="width:100%;font-size:13px;padding:7px;border:1px solid #d4d4d4;border-radius:8px;margin:4px 0 10px;font-family:var(--font)"><option value="">Select…</option>${pbReasonOpts()}</select>
+      <label style="font-size:11px;font-weight:600">Notes (optional)</label>
+      <textarea id="pb-notes" rows="2" style="width:100%;font-size:12px;padding:7px;border:1px solid #d4d4d4;border-radius:8px;margin-top:4px;font-family:var(--font)"></textarea>
+    </div>
+    <div style="padding:12px 16px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end">
+      <button style="${PB_BTN}" onclick="pbCloseModal()">Cancel</button>
+      <button style="${PB_BTNP}" onclick="pbConfirmWait('${pid}')">Pause</button></div>`);
+}
+async function pbConfirmWait(pid){
+  const code=document.getElementById('pb-reason').value;
+  if(!code){document.getElementById('pb-reason').style.borderColor='#dc2626';return;}
+  const notes=document.getElementById('pb-notes').value.trim()||null;
+  pbCloseModal();
+  const b=await pbEnsureRow(pid);if(!b)return;
+  const now=new Date().toISOString();
+  const{error}=await sb.from('production_board').update({waiting:true,waiting_reason:code,waiting_notes:notes,waiting_since:now,updated_by:currentUserName,updated_at:now}).eq('project_id',pid);
+  if(error){showToast('⚠ '+error.message);return;}
+  Object.assign(b,{waiting:true,waiting_reason:code,waiting_notes:notes,waiting_since:now});
+  await pbLog(pid,b.stage,b.stage,'waiting',code,notes,null);
+  showToast('⏸ Paused — waiting on '+((pbReasons.find(r=>r.code===code)||{}).label||code));
+  pbRender();
+}
+async function pbResume(pid){
+  const b=pbBoard[pid];if(!b||!b.waiting)return;
+  const waitedSecs=b.waiting_since?Math.round((Date.now()-new Date(b.waiting_since).getTime())/1000):null;
+  const now=new Date().toISOString();
+  const{error}=await sb.from('production_board').update({waiting:false,waiting_reason:null,waiting_notes:null,waiting_since:null,updated_by:currentUserName,updated_at:now}).eq('project_id',pid);
+  if(error){showToast('⚠ '+error.message);return;}
+  Object.assign(b,{waiting:false,waiting_reason:null,waiting_notes:null,waiting_since:null});
+  await pbLog(pid,b.stage,b.stage,'resumed',null,null,waitedSecs);
+  showToast('▶ Resumed — back in '+PB_STAGES[PB_IDX[b.stage]].label);
+  pbRender();
+}
+// ── the single move handler: board row + history + milestone sync ──
+async function pbEnsureRow(pid){
+  if(pbBoard[pid])return pbBoard[pid];
+  const stage=pbStageOf(pid);
+  const{data,error}=await sb.from('production_board').insert({project_id:pid,stage,updated_by:currentUserName}).select().single();
+  if(error){showToast('⚠ '+error.message);return null;}
+  pbBoard[pid]=data;return data;
+}
+async function pbMove(pid,toStage,moveType,reasonCode,notes){
+  const b=await pbEnsureRow(pid);if(!b)return;
+  if(b.waiting){showToast('Resume from Waiting before moving stages');pbRender();return;}
+  const fromStage=b.stage;
+  const secs=pbSecsInStage(pid);
+  const now=new Date().toISOString();
+  const{error}=await sb.from('production_board').update({stage:toStage,stage_entered_at:now,updated_by:currentUserName,updated_at:now}).eq('project_id',pid);
+  if(error){showToast('⚠ Move failed: '+error.message);return;}
+  Object.assign(b,{stage:toStage,stage_entered_at:now});
+  await pbLog(pid,fromStage,toStage,moveType,reasonCode,notes,secs);
+  await pbSyncMilestones(pid,fromStage,toStage);
+  const s=PB_STAGES[PB_IDX[toStage]];
+  showToast((moveType==='backward'?'↩ ':'')+s.label+' ✓');
+  pbRender();
+}
+async function pbLog(pid,from,to,type,code,notes,secs){
+  const p=projects.find(x=>x.id===pid);
+  const{error}=await sb.from('production_stage_history').insert({project_id:pid,so_number:p?.so_number||null,kiosk_name:p?.name||null,from_stage:from,to_stage:to,move_type:type,reason_code:code,notes,moved_by:currentUserName,seconds_in_prev_stage:secs});
+  if(error)console.error('pbLog failed',error);
+}
+// Milestone sync — mark/unmark done + fill empty dates. Applies to every
+// milestone row of the key (covers SO-split copies) so hub-wide status,
+// health, and blockers derive correctly from ONE action.
+async function pbSetKeyDone(pid,key,done,fillDate){
+  for(const m of pbMsOf(pid,key)){
+    if(done){
+      if(!m.date&&fillDate){
+        const{error}=await sb.from('milestones').update({date:isoD(new Date()),changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
+        if(!error)m.date=isoD(new Date());
+      }
+      if(!pbMsDone[m.id]){
+        const{data,error}=await sb.from('milestone_done').insert({milestone_id:m.id,project_id:pid,marked_done:true,marked_by:currentUserName,marked_at:new Date().toISOString()}).select().single();
+        if(error){showToast('⚠ Milestone sync: '+error.message);continue;}
+        if(data)pbMsDone[m.id]=data;
+      }
+    } else if(pbMsDone[m.id]){
+      const{error}=await sb.from('milestone_done').delete().eq('milestone_id',m.id);
+      if(error){showToast('⚠ Milestone reopen: '+error.message);continue;}
+      delete pbMsDone[m.id];
+    }
+  }
+}
+async function pbSyncMilestones(pid,from,to){
+  const fi=PB_IDX[from],ti=PB_IDX[to];
+  if(ti>fi){ // forward — complete everything the new stage implies
+    if(ti>=PB_IDX.wip)await pbSetKeyDone(pid,'production-start',true,true);
+    if(ti>=PB_IDX.ready_qa){await pbSetKeyDone(pid,'production-end',true,true);
+      // QA milestone starts: fill its date if empty, but QA marks it done themselves
+      for(const m of pbMsOf(pid,'quality-start')){if(!m.date){const{error}=await sb.from('milestones').update({date:isoD(new Date()),changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);if(!error)m.date=isoD(new Date());}}
+    }
+    if(ti>=PB_IDX.shipped)await pbSetKeyDone(pid,'shipping',true,true);
+  } else { // backward — reopen what the departed stages had completed
+    if(ti<PB_IDX.shipped)await pbSetKeyDone(pid,'shipping',false,false);
+    if(ti<PB_IDX.ready_qa)await pbSetKeyDone(pid,'production-end',false,false);
+    if(ti<PB_IDX.wip)await pbSetKeyDone(pid,'production-start',false,false);
+  }
+}
+// ── owner / priority / kickoff photo ──
+async function pbSetOwner(pid,owner){
+  const b=await pbEnsureRow(pid);if(!b)return;
+  const{error}=await sb.from('production_board').update({owner:owner||null,updated_by:currentUserName,updated_at:new Date().toISOString()}).eq('project_id',pid);
+  if(error){showToast('⚠ '+error.message);return;}
+  b.owner=owner||null;showToast('Owner saved ✓');pbRender();
+}
+async function pbSetPriority(pid,pri){
+  const b=await pbEnsureRow(pid);if(!b)return;
+  const{error}=await sb.from('production_board').update({priority:pri||null,updated_by:currentUserName,updated_at:new Date().toISOString()}).eq('project_id',pid);
+  if(error){showToast('⚠ '+error.message);return;}
+  b.priority=pri||null;pbRender();
+}
+// Kick-off photo: real file upload to the 'kickoff' Storage bucket, with
+// URL-paste kept as a fallback. Images are downscaled client-side (max
+// 1600px, JPEG) so floor tablets on wifi upload fast and cards load fast.
+const PB_BUCKET='kickoff';
+function pbAddPhoto(pid){
+  pbModal(`<div style="padding:14px 16px;border-bottom:1px solid #eee;font-size:15px;font-weight:600">📷 Kick-off screenshot</div>
+    <div style="padding:14px 16px">
+      <input type="file" id="pb-file" accept="image/*" style="display:none" onchange="pbUploadFile('${pid}',this.files[0])">
+      <button style="${PB_BTNP};width:100%;padding:14px" onclick="document.getElementById('pb-file').click()">⬆ Upload image from this device</button>
+      <div style="text-align:center;font-size:11px;color:#999;margin:10px 0">— or —</div>
+      <label style="font-size:11px;font-weight:600">Paste an image URL (SharePoint / Odoo)</label>
+      <input id="pb-url" value="${(pbPhotos[pid]?.url||'').replace(/"/g,'&quot;')}" placeholder="https://…" style="width:100%;font-size:12px;padding:7px;border:1px solid #d4d4d4;border-radius:8px;margin-top:4px;font-family:var(--font)">
+      <div id="pb-up-status" style="font-size:11px;color:#7c3aed;margin-top:8px;display:none"></div>
+    </div>
+    <div style="padding:12px 16px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end">
+      <button style="${PB_BTN}" onclick="pbCloseModal()">Cancel</button>
+      <button style="${PB_BTNP}" onclick="pbSaveUrl('${pid}')">Save URL</button></div>`);
+}
+async function pbSaveUrl(pid){
+  const url=(document.getElementById('pb-url')?.value||'').trim();
+  if(!url){showToast('No URL entered');return;}
+  pbCloseModal();
+  await pbSavePhotoUrl(pid,url);
+}
+function pbUpStatus(msg){const el=document.getElementById('pb-up-status');if(el){el.style.display='block';el.textContent=msg;}}
+async function pbUploadFile(pid,file){
+  if(!file)return;
+  if(!/^image\//.test(file.type)){pbUpStatus('That file is not an image.');return;}
+  try{
+    pbUpStatus('Preparing image…');
+    const blob=await pbShrinkImage(file);
+    const path=pid+'/'+Date.now()+'.jpg';
+    pbUpStatus('Uploading…');
+    const{error:upErr}=await sb.storage.from(PB_BUCKET).upload(path,blob,{contentType:'image/jpeg',upsert:false});
+    if(upErr){
+      if(/bucket.*not.*found|not found/i.test(upErr.message||'')){
+        pbUpStatus('⚠ Storage bucket "'+PB_BUCKET+'" not found — create it in Supabase (Storage → New bucket → name: kickoff → Public) then retry. URL-paste below still works meanwhile.');
+      }else{
+        pbUpStatus('⚠ Upload failed: '+upErr.message);
+      }
+      return;
+    }
+    const{data:pub}=sb.storage.from(PB_BUCKET).getPublicUrl(path);
+    const url=pub?.publicUrl;
+    if(!url){pbUpStatus('⚠ Uploaded but could not get a public URL — is the bucket set to Public?');return;}
+    pbCloseModal();
+    await pbSavePhotoUrl(pid,url);
+  }catch(e){pbUpStatus('⚠ '+(e.message||'Upload failed'));}
+}
+// Downscale to max 1600px on the long edge and re-encode as JPEG ~0.85.
+// A 12MB phone screenshot becomes ~200-400KB without visible quality loss on a card.
+function pbShrinkImage(file){
+  return new Promise((resolve,reject)=>{
+    const img=new Image();
+    img.onload=()=>{
+      const MAX=1600;
+      let{width:w,height:h}=img;
+      if(Math.max(w,h)>MAX){const r=MAX/Math.max(w,h);w=Math.round(w*r);h=Math.round(h*r);}
+      const c=document.createElement('canvas');c.width=w;c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      c.toBlob(b=>b?resolve(b):reject(new Error('Could not process image')),'image/jpeg',0.85);
+    };
+    img.onerror=()=>reject(new Error('Could not read image'));
+    img.src=URL.createObjectURL(file);
+  });
+}
+async function pbSavePhotoUrl(pid,url){
+  if(pbPhotos[pid]){
+    const{error}=await sb.from('project_photos').update({url,uploaded_by:currentUserName}).eq('id',pbPhotos[pid].id);
+    if(error){showToast('⚠ '+error.message);return;}
+    pbPhotos[pid].url=url;
+  } else {
+    const{data,error}=await sb.from('project_photos').insert({project_id:pid,url,label:'kickoff',uploaded_by:currentUserName}).select().single();
+    if(error){showToast('⚠ '+error.message);return;}
+    pbPhotos[pid]=data;
+  }
+  showToast('📷 Screenshot saved ✓');pbRender();
+}
+// Drag-a-file-onto-the-card upload
+function pbCardDragOver(e){
+  if(e.dataTransfer&&[...(e.dataTransfer.items||[])].some(i=>i.kind==='file')){
+    e.preventDefault();e.stopPropagation();e.currentTarget.style.outline='2px dashed #7c3aed';
+  }
+}
+function pbCardDragLeave(e){e.currentTarget.style.outline='';}
+function pbCardFileDrop(e,pid){
+  const f=e.dataTransfer?.files?.[0];
+  if(!f)return; // not a file drop — let card drag-drop proceed normally
+  e.preventDefault();e.stopPropagation();e.currentTarget.style.outline='';
+  pbAddPhoto(pid);
+  // slight defer so the modal exists, then start the upload with the dropped file
+  setTimeout(()=>pbUploadFile(pid,f),50);
+}
+// ═══ END PRODUCTION BOARD MODULE ═══
+
 // ═══ PROCUREMENT MODULE — active only for the proc2026 passcode ═══
 let procPos=[],procLinks=[],procReadiness={},procMsDoneMap={},procSelectedId=null,procQF='all',procTimer=null,procSoStatus={},procSoFilter='nopo';
 function procEsc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
@@ -301,19 +716,19 @@ async function procEnter(){
 }
 async function procLoad(){
   const[pr,ms,md,po,pl,rd,ss]=await Promise.all([
-    sb.from('projects').select('*').neq('status','complete'),
+    sbAll('projects','created_at'),
     sbAll('milestones','date'),
     sbAll('milestone_done'),
     sbAll('procurement_po','created_at',true),
     sbAll('procurement_po_projects'),
-    sb.from('procurement_readiness').select('*'),
-    sb.from('procurement_so_status').select('*'),
+    sbAll('procurement_readiness',null,false,'project_id'),
+    sbAll('procurement_so_status',null,false,'so_number'),
   ]);
   if(po.error&&/does not exist|relation/i.test(po.error.message||'')){
     document.getElementById('ci-content').innerHTML='<div class="proc-card"><div class="proc-empty">⚠️ Procurement tables not found.<br>Run <b>procurement-migration.sql</b> in the Supabase SQL editor first, then refresh.</div></div>';
     throw new Error('migration not run');
   }
-  projects=pr.data||[];
+  projects=(pr.data||[]).filter(p=>p.status!=='complete');
   const pids=new Set(projects.map(p=>p.id));
   milestones=(ms.data||[]).filter(m=>pids.has(m.project_id));
   procMsDoneMap={};(md.data||[]).forEach(d=>procMsDoneMap[d.milestone_id]=d);
@@ -551,7 +966,7 @@ async function procSavePo(poId){
     remarks:document.getElementById('ppo-remarks').value.trim()||null,
     updated_at:new Date().toISOString(),
   };
-  if(rec.status==='received')rec.received_at=new Date().toISOString().split('T')[0];
+  if(rec.status==='received')rec.received_at=isoD(new Date());
   if(!rec.vendor&&!rec.po_number){alert('Enter at least a vendor or PO number.');return;}
   const checkedSOs=[...document.querySelectorAll('#ppo-sos .proc-socheck.on')].map(e=>e.dataset.so);
   let id=poId;
@@ -573,7 +988,7 @@ async function procSavePo(poId){
   await procLoad();await procSyncMilestones();procRenderQueue();procRenderMain(true);
 }
 async function procMarkReceived(poId){
-  const{error}=await sb.from('procurement_po').update({status:'received',received_at:new Date().toISOString().split('T')[0],updated_at:new Date().toISOString()}).eq('id',poId);
+  const{error}=await sb.from('procurement_po').update({status:'received',received_at:isoD(new Date()),updated_at:new Date().toISOString()}).eq('id',poId);
   if(error){alert('Error: '+error.message);return;}
   const po=procPos.find(x=>x.id===poId);const p=projects.find(x=>x.id===procSelectedId);
   await procLog('PO received',(po?.vendor||'')+' '+(po?.po_number||''),p?.id,po?.status,'received');
@@ -890,7 +1305,7 @@ function odooToIso(v){
   if(v instanceof Date&&!isNaN(v))return v.getFullYear()+'-'+String(v.getMonth()+1).padStart(2,'0')+'-'+String(v.getDate()).padStart(2,'0');
   const s=String(v).trim();
   const m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);if(m)return m[1]+'-'+m[2]+'-'+m[3];
-  const d=new Date(s);return isNaN(d)?null:d.toISOString().split('T')[0];
+  const d=new Date(s);return isNaN(d)?null:isoD(d);
 }
 function odooParseRows(rows){
   const keys=Object.keys(rows[0]||{});
@@ -1027,12 +1442,13 @@ const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSI
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 // Supabase caps queries at 1000 rows — milestones/POs/links exceed that.
 // sbAll pages through in 1000-row chunks so nothing silently truncates.
-async function sbAll(table,orderCol,desc){
+async function sbAll(table,orderCol,desc,tiebreak='id'){
   const PAGE=1000;let all=[],from=0;
   while(true){
     let q=sb.from(table).select('*');
     if(orderCol)q=q.order(orderCol,{ascending:!desc});
-    q=q.order('id',{ascending:true}).range(from,from+PAGE-1);
+    if(tiebreak&&tiebreak!==orderCol)q=q.order(tiebreak,{ascending:true});
+    q=q.range(from,from+PAGE-1);
     const{data,error}=await q;
     if(error){console.warn('sbAll',table,error.message);return{data:all.length?all:null,error};}
     all=all.concat(data||[]);
@@ -1066,7 +1482,7 @@ let currentWeek='this';
 function today(){let t=new Date();t.setHours(0,0,0,0);return t;}
 function monday(dt){let r=new Date(dt);let d=r.getDay();r.setDate(r.getDate()+(d===0?-6:1-d));r.setHours(0,0,0,0);return r;}
 function addD(dt,n){let r=new Date(dt);r.setDate(r.getDate()+n);return r;}
-function isoD(dt){return dt.toISOString().split('T')[0];}
+function isoD(dt){return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');}
 function fmt(s){if(!s)return'—';return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});}
 function daysDiff(s){if(!s)return 9999;return Math.round((new Date(s+'T00:00:00')-today())/86400000);}
 function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>{t.style.display='none';},2000);}
@@ -1115,6 +1531,7 @@ function doCheckinLogin(){
     <div style="font-size:18px;font-weight:600;margin-bottom:2px">Good ${getGreeting()}, ${name} 👋</div>
     <div style="font-size:12px;color:var(--gray-500)">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})} · ${dept.name}</div>`;
   if(pass==='proc2026'){procEnter();return;}  // Procurement gets its own workspace
+  if(pass==='prod2026'){prodEnter();return;}  // Production gets the board — traffic-light flow removed for Production only
   showWeekTabs();
   loadCheckinData();
 }
@@ -1123,11 +1540,11 @@ function getGreeting(){const h=new Date().getHours();return h<12?'morning':h<17?
 // ── DATA ──────────────────────────────────────────────────
 async function loadCheckinData(){
   const[pr,ms,ci,ah,sod,ext]=await Promise.all([
-    sb.from('projects').select('*').order('created_at'),
+    sbAll('projects','created_at'),
     sbAll('milestones','date'),
     sbAll('checkin_status'),
-    sb.from('adhoc_schedule').select('*').order('created_at'),
-    sb.from('so_details').select('*'),
+    sbAll('adhoc_schedule','created_at'),
+    sbAll('so_details'),
     sb.from('extension_requests').select('*').eq('status','pending'),
   ]);
   projects=pr.data||[];
@@ -1137,7 +1554,9 @@ async function loadCheckinData(){
   checkins={};
   (ci.data||[]).forEach(c=>{checkins[c.milestone_id]=c;});
   // Also index by adhoc id for ad hoc stoplights
-  (ci.data||[]).forEach(c=>{if(c.adhoc_id)checkins['adhoc-'+c.adhoc_id]=c;});
+  // Ad hoc items save under string keys (e.g. 'adhoc-ship-123') directly in
+  // milestone_id (a text column, verified against schema) — so the normal
+  // indexing line above restores them too. No separate adhoc_id column exists.
   window._adHocShipping=(ah.data||[]).filter(r=>r.dept==='shipping');
   window._adHocInstall=(ah.data||[]).filter(r=>r.dept==='installation');
   render();
@@ -1382,10 +1801,12 @@ async function applyStoplight(milestoneId,newColor,note){
   const now=new Date().toISOString();
   const payload={stoplight:newColor,notes:note||null,stoplight_by:newColor?currentUserName:null,stoplight_at:newColor?now:null,dept:currentDept.name,updated_at:now};
   if(existing){
-    await sb.from('checkin_status').update(payload).eq('milestone_id',milestoneId);
+    const{error}=await sb.from('checkin_status').update(payload).eq('milestone_id',milestoneId);
+    if(error){showToast('⚠ Save failed: '+error.message);return;}
     checkins[milestoneId]={...existing,...payload};
   } else {
-    const{data}=await sb.from('checkin_status').insert({milestone_id:milestoneId,project_id:milestones.find(m=>m.id===milestoneId)?.project_id,checked:false,...payload}).select().single();
+    const{data,error}=await sb.from('checkin_status').insert({milestone_id:milestoneId,project_id:milestones.find(m=>m.id===milestoneId)?.project_id,checked:false,...payload}).select().single();
+    if(error){showToast('⚠ Save failed: '+error.message);return;}
     if(data)checkins[milestoneId]=data;
   }
   render();
@@ -1425,10 +1846,12 @@ async function toggleCheck(milestoneId,el){
   const now=new Date().toISOString();
   const payload={checked:newVal,checked_by:newVal?currentUserName:null,checked_at:newVal?now:null,dept:currentDept.name,updated_at:now};
   if(existing){
-    await sb.from('checkin_status').update(payload).eq('milestone_id',milestoneId);
+    const{error}=await sb.from('checkin_status').update(payload).eq('milestone_id',milestoneId);
+    if(error){showToast('⚠ Save failed: '+error.message);return;}
     checkins[milestoneId]={...existing,...payload};
   } else {
-    const{data}=await sb.from('checkin_status').insert({milestone_id:milestoneId,project_id:milestones.find(m=>m.id===milestoneId)?.project_id,stoplight:null,...payload}).select().single();
+    const{data,error}=await sb.from('checkin_status').insert({milestone_id:milestoneId,project_id:milestones.find(m=>m.id===milestoneId)?.project_id,stoplight:null,...payload}).select().single();
+    if(error){showToast('⚠ Save failed: '+error.message);return;}
     if(data)checkins[milestoneId]=data;
   }
   render();
@@ -1461,21 +1884,25 @@ async function markAllClear(){
     :`Mark all ${todo.length} item(s) as on track and done?`;
   if(!confirm(confirmMsg))return;
   const now=new Date().toISOString();
+  const failed=[];let okCount=0;
   for(const m of todo){
     const id=m._id||m.id;
     const existing=checkins[id];
     // Ad hoc items aren't real milestone rows — still keyed the same way in checkin_status via milestone_id (works as a free-text key here)
     const payload={stoplight:'green',checked:true,stoplight_by:currentUserName,stoplight_at:now,checked_by:currentUserName,checked_at:now,dept:currentDept.name,updated_at:now,notes:existing?.notes||null};
     if(existing){
-      await sb.from('checkin_status').update(payload).eq('milestone_id',id);
+      const{error}=await sb.from('checkin_status').update(payload).eq('milestone_id',id);
+      if(error){failed.push(m.label||id);continue;}
       checkins[id]={...existing,...payload};
     } else {
-      const{data}=await sb.from('checkin_status').insert({milestone_id:id,project_id:m.project_id||null,...payload}).select().single();
+      const{data,error}=await sb.from('checkin_status').insert({milestone_id:id,project_id:m.project_id||null,...payload}).select().single();
+      if(error){failed.push(m.label||id);continue;}
       if(data)checkins[id]=data;
     }
+    okCount++;
   }
   render();
-  showToast(`✅ ${todo.length} item(s) marked all clear`);
+  showToast(failed.length?`✅ ${okCount} marked clear · ⚠ ${failed.length} failed to save (${failed.slice(0,3).join(', ')}${failed.length>3?'…':''})`:`✅ ${okCount} item(s) marked all clear`);
 }
 
 // ── EXTENSION REQUESTS ───────────────────────────────────────────────────
@@ -1514,12 +1941,13 @@ async function submitExtensionRequest(){
   const soTag=opt.dataset.sotag||null;
   const btn=document.getElementById('ext-submit-btn');
   btn.disabled=true;btn.textContent='Submitting...';
-  await sb.from('extension_requests').insert({
+  const{error}=await sb.from('extension_requests').insert({
     project_id:projId,so_tag:soTag||null,milestone_id:milestoneId,
     dept:currentDept.name,requested_by:currentUserName,
     days,reason,status:'pending'
   });
   btn.disabled=false;btn.textContent='Submit request';
+  if(error){showToast('⚠ Request failed to send: '+error.message);return;}
   closeExtensionModal();
   showToast('⏳ Request sent — PM will review the new timeline');
 }
@@ -1571,15 +1999,17 @@ async function saveInlineNote(milestoneId,note){
   const now=new Date().toISOString();
   const payload={notes:note||null,updated_at:now};
   if(existing){
-    await sb.from('checkin_status').update(payload).eq('milestone_id',milestoneId);
+    const{error}=await sb.from('checkin_status').update(payload).eq('milestone_id',milestoneId);
+    if(error){showToast('⚠ Note failed to save: '+error.message);return;}
     checkins[milestoneId]={...existing,...payload};
   } else {
     const m=window._ciItemMap?.[milestoneId];
-    const{data}=await sb.from('checkin_status').insert({
+    const{data,error}=await sb.from('checkin_status').insert({
       milestone_id:milestoneId,project_id:m?.project_id||null,
       stoplight:null,checked:false,dept:currentDept?.name||'',
       ...payload
     }).select().single();
+    if(error){showToast('⚠ Note failed to save: '+error.message);return;}
     if(data)checkins[milestoneId]=data;
   }
   // Don't re-render on blur to avoid losing focus mid-typing
