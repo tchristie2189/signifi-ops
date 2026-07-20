@@ -70,33 +70,58 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .sb-red{color:#ef4444;}
 .toast{position:fixed;bottom:20px;right:20px;background:var(--black);color:white;padding:10px 18px;border-radius:var(--radius-lg);font-size:12px;font-weight:500;z-index:999;display:none;}
 /* ═══ PRODUCTION BOARD ═══ */
-.pb-wrap{padding:0 4px}
-.pb-cols{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;align-items:start}
-.pb-col{background:#f7f7f8;border:1px solid #e5e5e5;border-radius:10px;min-height:70vh;display:flex;flex-direction:column;min-width:0}
+/* Full-width takeover: override the generic 700px check-in container */
+body.production-mode .page{width:100%;max-width:none;margin:0;padding:24px 28px 48px;}
+body.production-mode .header-inner{width:100%;max-width:none;padding-left:28px;padding-right:28px;}
+body.production-mode #main-wrap{width:100%;}
+body.production-mode #ci-content{width:100%;max-width:none;}
+/* Horizontal Kanban: fixed-width columns, sideways scroll is intentional */
+.pb-scroll{width:100%;overflow-x:auto;overflow-y:hidden;padding-bottom:14px;}
+.pb-cols{display:flex;align-items:flex-start;gap:16px;width:max-content;min-width:100%;}
+.pb-col{flex:0 0 350px;width:350px;min-width:350px;max-width:350px;background:#f7f7f8;border:1px solid #e5e5e5;border-radius:10px;display:flex;flex-direction:column;max-height:calc(100vh - 230px);}
 .pb-col.pb-over{outline:2px dashed #7c3aed;outline-offset:-2px;background:#f3efff}
-.pb-col-head{padding:9px 12px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e5e5e5}
+.pb-col-head{position:sticky;top:0;z-index:2;background:#f7f7f8;border-radius:10px 10px 0 0;padding:11px 14px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e5e5e5}
 .pb-col-cnt{font-size:11px;font-weight:600;background:#fff;border:1px solid #d4d4d4;border-radius:10px;padding:1px 8px}
-.pb-col-body{padding:8px;flex:1;overflow-y:auto}
-.pb-card{background:#fff;border:1px solid #e5e5e5;border-left:4px solid #7c3aed;border-radius:8px;margin-bottom:8px;cursor:grab;overflow:hidden}
+.pb-col-body{overflow-y:auto;padding:10px;flex:1}
+.pb-card{width:100%;background:#fff;border:1px solid #e5e5e5;border-left:4px solid #7c3aed;border-radius:10px;margin-bottom:12px;cursor:grab;overflow:hidden}
 .pb-card.pb-waiting{border-left-color:#d97706;background:#fffaf2}
 .pb-card:active{cursor:grabbing}
-.pb-img{width:100%;height:110px;object-fit:cover;display:block;background:#eee;cursor:zoom-in}
-.pb-noimg{width:100%;height:44px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#999;background:#f2f2f2;cursor:pointer}
-.pb-body{padding:8px 10px}
-.pb-so{font-family:var(--mono,monospace);font-size:11px;font-weight:700;color:#c2255c;word-break:break-word}
-.pb-name{font-size:13px;font-weight:700;line-height:1.25;margin:1px 0 3px}
-.pb-meta{font-size:10.5px;color:#666;line-height:1.5}
-.pb-meta b{color:#333;font-weight:600}
-.pb-badges{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
-.pb-badge{font-size:9.5px;font-weight:600;padding:2px 7px;border-radius:9px;background:#f1f1f1;color:#555}
+.pb-img{width:100%;height:160px;object-fit:contain;background:#f2f2f2;display:block;cursor:zoom-in}
+.pb-noimg{width:100%;height:150px;display:flex;align-items:center;justify-content:center;font-size:12px;color:#888;background:#f2f2f2;cursor:pointer;border-bottom:1px solid #eee}
+.pb-noimg:hover{color:#7c3aed}
+.pb-body{padding:14px}
+.pb-name{font-size:15px;font-weight:700;line-height:1.3;margin-bottom:2px}
+.pb-so{font-family:var(--mono,monospace);font-size:12px;font-weight:700;color:#c2255c;word-break:break-word;margin-bottom:4px}
+.pb-so .pb-so-more{cursor:pointer;text-decoration:underline;color:#7c3aed;font-weight:600}
+.pb-meta{font-size:12px;color:#555;line-height:1.55}
+.pb-meta b{color:#222;font-weight:600}
+.pb-dates{font-size:11px;color:#666;margin-top:4px}
+.pb-ctrl{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:11px;color:#666}
+.pb-sel{font-size:12px;height:30px;padding:2px 6px;border:1px solid #d4d4d4;border-radius:7px;background:#fff;font-family:var(--font);flex:1;min-width:0}
+.pb-badges{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
+.pb-badge{font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:10px;background:#f1f1f1;color:#555}
 .pb-badge.wait{background:#fef3c7;color:#92400e}
 .pb-badge.pri-High{background:#fee2e2;color:#b91c1c}
 .pb-badge.late{background:#fee2e2;color:#b91c1c}
-.pb-actions{display:flex;gap:5px;margin-top:7px}
-.pb-btn{font-size:10px;padding:3px 9px;border:1px solid #d4d4d4;border-radius:12px;background:#fff;cursor:pointer;font-family:var(--font)}
+.pb-actions{display:flex;gap:7px;margin-top:9px}
+.pb-btn{font-size:12px;height:30px;padding:0 13px;border:1px solid #d4d4d4;border-radius:14px;background:#fff;cursor:pointer;font-family:var(--font)}
 .pb-btn:hover{border-color:#7c3aed;color:#7c3aed}
-.pb-sel{font-size:10px;padding:2px 4px;border:1px solid #d4d4d4;border-radius:6px;background:#fff;font-family:var(--font);max-width:92px}
-@media(max-width:1100px){.pb-cols{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* Toolbar */
+.pb-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;width:100%}
+.pb-search{width:320px;max-width:100%;font-size:13px;height:34px;padding:0 14px;border:1px solid #d4d4d4;border-radius:17px;font-family:var(--font)}
+.pb-tsel{font-size:12px;height:34px;padding:0 8px;border:1px solid #d4d4d4;border-radius:8px;background:#fff;font-family:var(--font)}
+.pb-tchk{display:flex;align-items:center;gap:5px;font-size:12px;color:#555;cursor:pointer}
+/* Mobile: one stage at a time via tabs — never five compressed columns */
+.pb-mtabs{display:none}
+@media(max-width:760px){
+  .pb-mtabs{display:flex;gap:6px;overflow-x:auto;margin-bottom:10px}
+  .pb-mtab{flex:none;font-size:12px;font-weight:600;padding:7px 13px;border-radius:16px;border:1px solid #d4d4d4;background:#fff;cursor:pointer;font-family:var(--font)}
+  .pb-mtab.on{background:#111;color:#fff;border-color:#111}
+  .pb-cols{width:100%}
+  .pb-col{display:none;flex:1 1 100%;width:100%;min-width:0;max-width:none}
+  .pb-col.pb-mshow{display:flex}
+  body.production-mode .page{padding:16px 12px 40px}
+}
 </style>
 </head>
 <body>
@@ -291,6 +316,8 @@ const PB_STAGES=[
 ];
 const PB_IDX=Object.fromEntries(PB_STAGES.map((s,i)=>[s.key,i]));
 let pbBoard={},pbHistory=[],pbReasons=[],pbPhotos={},pbMsDone={},pbDrag=null;
+let pbF={owner:'',pri:'',waitingOnly:false,sort:'date',shippedLimit:20,mStage:'wip'};
+const pbSoExpanded=new Set();
 function pbCloseModal(){const r=document.getElementById('pb-modal-root');if(r)r.innerHTML='';}
 function pbModal(inner){
   let r=document.getElementById('pb-modal-root');
@@ -366,36 +393,72 @@ function pbFmtDur(s){
 }
 function pbRender(){
   const q=(document.getElementById('pb-search')?.value||'').toLowerCase();
+  const owners=pbOwnerList();
+  const match=p=>{
+    if(q&&!((p.name||'').toLowerCase().includes(q)||(p.so_number||'').toLowerCase().includes(q)||(p.client||'').toLowerCase().includes(q)))return false;
+    const b=pbBoard[p.id]||{};
+    if(pbF.owner&&b.owner!==pbF.owner)return false;
+    if(pbF.pri&&(b.priority||'')!==pbF.pri)return false;
+    if(pbF.waitingOnly&&!b.waiting)return false;
+    return true;
+  };
+  const sortCards=(a,b)=>{
+    const ba=pbBoard[a.id]||{},bb=pbBoard[b.id]||{};
+    if(pbF.sort==='priority'){const pa=ba.priority==='High'?0:1,pb_=bb.priority==='High'?0:1;if(pa!==pb_)return pa-pb_;}
+    if(pbF.sort==='customer')return(a.client||'').localeCompare(b.client||'');
+    if(pbF.sort==='kiosk')return(a.name||'').localeCompare(b.name||'');
+    const hi=x=>pbBoard[x.id]?.priority==='High'?0:1;
+    if(hi(a)!==hi(b))return hi(a)-hi(b);
+    const da=(pbMsOf(a.id,'production-end').map(m=>m.date).filter(Boolean).sort()[0])||'9999';
+    const db=(pbMsOf(b.id,'production-end').map(m=>m.date).filter(Boolean).sort()[0])||'9999';
+    return da.localeCompare(db);
+  };
+  let shippedTotal=0;
   const cols=PB_STAGES.map(s=>{
-    const cards=projects.filter(p=>pbStageOf(p.id)===s.key)
-      .filter(p=>!q||(p.name||'').toLowerCase().includes(q)||(p.so_number||'').toLowerCase().includes(q)||(p.client||'').toLowerCase().includes(q))
-      .sort((a,b)=>{
-        const pa=pbBoard[a.id]?.priority==='High'?0:1,pb_=pbBoard[b.id]?.priority==='High'?0:1;
-        if(pa!==pb_)return pa-pb_;
-        const da=(pbMsOf(a.id,'production-end')[0]?.date)||'9999',db=(pbMsOf(b.id,'production-end')[0]?.date)||'9999';
-        return da.localeCompare(db);
-      });
-    return`<div class="pb-col" data-stage="${s.key}" ondragover="pbOver(event)" ondragleave="pbLeave(event)" ondrop="pbDrop(event,'${s.key}')">
-      <div class="pb-col-head" style="color:${s.color}">${s.label}<span class="pb-col-cnt">${cards.length}</span></div>
-      <div class="pb-col-body">${cards.map(pbCard).join('')||'<div style="text-align:center;font-size:11px;color:#aaa;padding:20px 0">—</div>'}</div>
+    let cards=projects.filter(p=>pbStageOf(p.id)===s.key).filter(match).sort(sortCards);
+    if(s.key==='shipped'){
+      // Newest first, capped — the full shipped archive lives in the Ops Hub
+      cards=cards.sort((a,b)=>((pbBoard[b.id]?.stage_entered_at||'')+'').localeCompare((pbBoard[a.id]?.stage_entered_at||'')+''));
+      shippedTotal=cards.length;
+      cards=cards.slice(0,pbF.shippedLimit);
+    }
+    const more=s.key==='shipped'&&shippedTotal>pbF.shippedLimit
+      ?`<button class="pb-btn" style="width:100%" onclick="pbF.shippedLimit+=20;pbRender()">Load 20 more (${shippedTotal-pbF.shippedLimit} hidden)</button>`:'';
+    return`<div class="pb-col ${s.key===pbF.mStage?'pb-mshow':''}" data-stage="${s.key}" ondragover="pbOver(event)" ondragleave="pbLeave(event)" ondrop="pbDrop(event,'${s.key}')">
+      <div class="pb-col-head" style="color:${s.color}">${s.label}<span class="pb-col-cnt">${s.key==='shipped'?shippedTotal:cards.length}</span></div>
+      <div class="pb-col-body">${cards.map(pbCard).join('')||'<div style="text-align:center;font-size:12px;color:#aaa;padding:24px 0">—</div>'}${more}</div>
     </div>`;
   }).join('');
-  document.getElementById('ci-content').innerHTML=`<div class="pb-wrap">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap">
-      <div style="font-size:12px;color:#666">Drag cards between stages · <b>Wait</b> pauses without losing the stage · moving backward asks for a reason</div>
-      <input id="pb-search" placeholder="Search SO / kiosk / customer…" oninput="pbRender()" value="${q.replace(/"/g,'&quot;')}" style="font-size:12px;padding:6px 12px;border:1px solid #d4d4d4;border-radius:16px;width:230px;font-family:var(--font)">
+  document.getElementById('ci-content').innerHTML=`<div>
+    <div class="pb-toolbar">
+      <input id="pb-search" class="pb-search" placeholder="Search SO / kiosk / customer…" oninput="pbRender()" value="${q.replace(/"/g,'&quot;')}">
+      <select class="pb-tsel" onchange="pbF.owner=this.value;pbRender()"><option value="">All owners</option>${owners.map(o=>`<option ${pbF.owner===o?'selected':''}>${o}</option>`).join('')}</select>
+      <select class="pb-tsel" onchange="pbF.pri=this.value;pbRender()"><option value="">All priorities</option>${['High','Normal','Low'].map(x=>`<option ${pbF.pri===x?'selected':''}>${x}</option>`).join('')}</select>
+      <label class="pb-tchk"><input type="checkbox" ${pbF.waitingOnly?'checked':''} onchange="pbF.waitingOnly=this.checked;pbRender()">Waiting only</label>
+      <select class="pb-tsel" onchange="pbF.sort=this.value;pbRender()">
+        <option value="date" ${pbF.sort==='date'?'selected':''}>Sort: Production date</option>
+        <option value="priority" ${pbF.sort==='priority'?'selected':''}>Sort: Priority</option>
+        <option value="customer" ${pbF.sort==='customer'?'selected':''}>Sort: Customer</option>
+        <option value="kiosk" ${pbF.sort==='kiosk'?'selected':''}>Sort: Kiosk name</option>
+      </select>
+      <button class="pb-btn" onclick="prodEnter()">↻ Refresh</button>
+      <span style="font-size:11px;color:#999;margin-left:auto">Scroll sideways for more stages →</span>
     </div>
-    <div class="pb-cols">${cols}</div></div>`;
+    <div class="pb-mtabs">${PB_STAGES.map(s=>`<button class="pb-mtab ${s.key===pbF.mStage?'on':''}" onclick="pbF.mStage='${s.key}';pbRender()">${s.label.split(' ')[0]}</button>`).join('')}</div>
+    <div class="pb-scroll"><div class="pb-cols">${cols}</div></div></div>`;
+  const si=document.getElementById('pb-search');
+  if(si&&q){si.focus();si.setSelectionRange(si.value.length,si.value.length);}
 }
-function pbOwnerList(){return[...new Set(Object.values(pbBoard).map(b=>b.owner).filter(Boolean))].sort();}
-function pbSoDisplay(soRaw){
+function pbSoDisplay(soRaw,pid){
   const sos=(soRaw||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
-  if(sos.length<=3)return{text:sos.join(', ')||'—',title:''};
-  return{text:sos.slice(0,3).join(', ')+' +'+(sos.length-3)+' more',title:sos.join(', ')};
+  if(sos.length<=3)return sos.join(', ')||'—';
+  if(pbSoExpanded.has(pid))return sos.join(', ')+` <span class="pb-so-more" onclick="event.stopPropagation();pbToggleSo('${pid}')">collapse</span>`;
+  return sos.slice(0,3).join(', ')+` <span class="pb-so-more" onclick="event.stopPropagation();pbToggleSo('${pid}')">+${sos.length-3} more</span>`;
 }
+function pbToggleSo(pid){if(pbSoExpanded.has(pid))pbSoExpanded.delete(pid);else pbSoExpanded.add(pid);pbRender();}
+function pbOwnerList(){return[...new Set(Object.values(pbBoard).map(b=>b.owner).filter(Boolean))].sort();}
 function pbCard(p){
   const b=pbBoard[p.id]||{};
-  const so=pbSoDisplay(p.so_number);
   const prodEnd=pbMsOf(p.id,'production-end').map(m=>m.date).filter(Boolean).sort()[0]||null;
   const shipDate=pbMsOf(p.id,'shipping').map(m=>m.date).filter(Boolean).sort()[0]||null;
   const secs=pbSecsInStage(p.id);
@@ -405,19 +468,20 @@ function pbCard(p){
   const reasonLbl=(pbReasons.find(r=>r.code===b.waiting_reason)||{}).label||b.waiting_reason||'';
   const machine=[p.product_type,p.form_factor].filter(Boolean).join(' · ');
   return`<div class="pb-card ${b.waiting?'pb-waiting':''}" draggable="${b.waiting?'false':'true'}" ondragstart="pbDragStart(event,'${p.id}')" ondragover="pbCardDragOver(event)" ondragleave="pbCardDragLeave(event)" ondrop="pbCardFileDrop(event,'${p.id}')">
-    ${img?`<img class="pb-img" src="${img.url}" alt="kickoff" onclick="window.open('${img.url}','_blank')" onerror="this.outerHTML='<div class=\\'pb-noimg\\' onclick=\\'pbAddPhoto(&quot;${p.id}&quot;)\\'>📷 image link broken — tap to replace</div>'">`
-        :`<div class="pb-noimg" onclick="pbAddPhoto('${p.id}')">📷 add kick-off screenshot</div>`}
+    ${img?`<img class="pb-img" src="${img.url}" alt="kickoff" onclick="window.open('${img.url}','_blank')" onerror="this.outerHTML='<div class=\\'pb-noimg\\' onclick=\\'pbAddPhoto(&quot;${p.id}&quot;)\\'>📷 Image link broken — tap to replace</div>'">`
+        :`<div class="pb-noimg" onclick="pbAddPhoto('${p.id}')">📷 Add kick-off screenshot</div>`}
     <div class="pb-body">
-      <div class="pb-so" ${so.title?`title="${so.title}"`:''}>${so.text}</div>
       <div class="pb-name">${p.name||''}</div>
-      <div class="pb-meta">
-        <b>${p.client||'—'}</b>${machine?' · '+machine:''}<br>
-        Prod due: <b>${prodEnd?fmt(prodEnd):'—'}</b> · Ship: <b>${shipDate?fmt(shipDate):'—'}</b><br>
-        Owner: <select class="pb-sel" onchange="if(this.value==='__new'){const n=prompt('Owner name:');if(n&&n.trim()){pbSetOwner('${p.id}',n.trim());}else{pbRender();}}else{pbSetOwner('${p.id}',this.value)}" onclick="event.stopPropagation()">
+      <div class="pb-so">${pbSoDisplay(p.so_number,p.id)}</div>
+      <div class="pb-meta"><b>${p.client||'—'}</b>${machine?'<br>'+machine:''}</div>
+      <div class="pb-dates">Prod due <b>${prodEnd?fmt(prodEnd):'—'}</b> · Ship <b>${shipDate?fmt(shipDate):'—'}</b></div>
+      <div class="pb-ctrl">Owner
+        <select class="pb-sel" onchange="if(this.value==='__new'){const n=prompt('Owner name:');if(n&&n.trim()){pbSetOwner('${p.id}',n.trim());}else{pbRender();}}else{pbSetOwner('${p.id}',this.value)}" onclick="event.stopPropagation()">
           <option value="">—</option>${pbOwnerList().map(o=>`<option ${b.owner===o?'selected':''}>${o}</option>`).join('')}
           <option value="__new">+ Add…</option>
         </select>
-        Pri: <select class="pb-sel" style="max-width:64px" onchange="pbSetPriority('${p.id}',this.value)" onclick="event.stopPropagation()">
+        Pri
+        <select class="pb-sel" style="flex:0 0 76px" onchange="pbSetPriority('${p.id}',this.value)" onclick="event.stopPropagation()">
           ${['','Normal','High','Low'].map(x=>`<option value="${x}" ${b.priority===x?'selected':''}>${x||'—'}</option>`).join('')}
         </select>
       </div>
@@ -430,7 +494,7 @@ function pbCard(p){
       <div class="pb-actions">
         ${b.waiting?`<button class="pb-btn" onclick="pbResume('${p.id}')">▶ Resume</button>`
                    :`<button class="pb-btn" onclick="pbOpenWait('${p.id}')">⏸ Wait</button>`}
-        ${img?`<button class="pb-btn" onclick="pbAddPhoto('${p.id}')">📷</button>`:''}
+        ${img?`<button class="pb-btn" onclick="pbAddPhoto('${p.id}')">📷 Replace</button>`:''}
       </div>
     </div></div>`;
 }
@@ -2036,6 +2100,7 @@ async function saveInlineNote(milestoneId,note){
 }
 
 function signOut(){
+  document.body.classList.remove('production-mode','proc-mode');
   sessionStorage.removeItem('ci_name');
   currentDept=null;currentUserName=null;
   document.getElementById('main-wrap').style.display='none';
