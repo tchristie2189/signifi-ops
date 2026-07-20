@@ -139,7 +139,7 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 <div id="main-wrap" style="display:none">
   <div class="page">
     <div id="ci-header" style="margin-bottom:1rem"></div>
-    <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
+    <div id="standard-checkin-actions" style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
       <button id="all-clear-btn" onclick="markAllClear()" style="font-family:var(--font);font-size:13px;font-weight:600;padding:9px 16px;border:none;border-radius:var(--radius);background:var(--success);color:white;cursor:pointer">✅ All clear today</button>
       <button onclick="openExtensionModal()" style="font-family:var(--font);font-size:13px;font-weight:600;padding:9px 16px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);cursor:pointer">⏳ Request more time</button>
     </div>
@@ -302,10 +302,23 @@ const PB_BTN='font-family:var(--font);font-size:13px;font-weight:500;padding:9px
 const PB_BTNP='font-family:var(--font);font-size:13px;font-weight:600;padding:9px 16px;border:none;border-radius:8px;background:#111;color:#fff;cursor:pointer';
 
 async function prodEnter(){
-  document.getElementById('week-tabs').style.display='none';
-  document.getElementById('ci-content').innerHTML='<div style="padding:40px;text-align:center;color:#888">Loading production board…</div>';
-  await pbLoad();
-  pbRender();
+  document.body.classList.add('production-mode');
+  const acts=document.getElementById('standard-checkin-actions');if(acts)acts.style.display='none';
+  const wt=document.getElementById('week-tabs-row');if(wt)wt.style.display='none';
+  const sb1=document.getElementById('summary-bar');if(sb1)sb1.style.display='none';
+  const as1=document.getElementById('attention-summary');if(as1)as1.style.display='none';
+  const content=document.getElementById('ci-content');
+  if(!content){console.error('Production board cannot render: ci-content was not found.');return;}
+  content.innerHTML='<div style="padding:40px;text-align:center;color:#888">Loading production board…</div>';
+  try{
+    await pbLoad();
+    pbRender();
+  }catch(error){
+    console.error('Production board failed to load:',error);
+    if(!content.innerHTML.includes('Production board tables not found')){
+      content.innerHTML='<div style="padding:40px;text-align:center;color:#b91c1c"><strong>Production board could not be loaded.</strong><br><span style="font-size:12px">Check the browser console and Supabase setup.</span></div>';
+    }
+  }
 }
 async function pbLoad(){
   const[pr,ms,md,bd,rc,ph]=await Promise.all([
@@ -426,14 +439,16 @@ function pbDrop(e,stage){
   if(!pid)return;
   const cur=pbStageOf(pid);
   if(cur===stage)return;
-  if(PB_IDX[stage]<PB_IDX[cur]){pbOpenReason(pid,stage,'backward');return;}
+  const goingBack=PB_IDX[stage]<PB_IDX[cur];
+  if(goingBack||stage==='issues'){pbOpenReason(pid,stage,goingBack?'backward':'forward');return;}
   pbMove(pid,stage,'forward',null,null);
 }
 // ── reason modal (backward moves + waiting) ──
 function pbReasonOpts(){return pbReasons.map(r=>`<option value="${r.code}">${r.label}</option>`).join('');}
 function pbOpenReason(pid,stage,kind){
   const p=projects.find(x=>x.id===pid);
-  pbModal(`<div style="padding:14px 16px;border-bottom:1px solid #eee;font-size:15px;font-weight:600">↩ Moving ${p?.name||''} backward</div>
+  const isIssues=stage==='issues'&&kind==='forward';
+  pbModal(`<div style="padding:14px 16px;border-bottom:1px solid #eee;font-size:15px;font-weight:600">${isIssues?'⚠ Moving '+(p?.name||'')+' to Issues':'↩ Moving '+(p?.name||'')+' backward'}</div>
     <div style="padding:14px 16px">
       <div style="font-size:12px;color:#666;margin-bottom:10px">${PB_STAGES[PB_IDX[pbStageOf(pid)]].label} → <b>${PB_STAGES[PB_IDX[stage]].label}</b>. A reason is required.</div>
       <label style="font-size:11px;font-weight:600">Reason *</label>
@@ -443,14 +458,14 @@ function pbOpenReason(pid,stage,kind){
     </div>
     <div style="padding:12px 16px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end">
       <button style="${PB_BTN}" onclick="pbCloseModal()">Cancel</button>
-      <button style="${PB_BTNP}" onclick="pbConfirmBack('${pid}','${stage}')">Move backward</button></div>`);
+      <button style="${PB_BTNP}" onclick="pbConfirmBack('${pid}','${stage}','${kind}')">${isIssues?'Move to Issues':'Move backward'}</button></div>`);
 }
-function pbConfirmBack(pid,stage){
+function pbConfirmBack(pid,stage,kind){
   const code=document.getElementById('pb-reason').value;
   if(!code){document.getElementById('pb-reason').style.borderColor='#dc2626';return;}
   const notes=document.getElementById('pb-notes').value.trim()||null;
   pbCloseModal();
-  pbMove(pid,stage,'backward',code,notes);
+  pbMove(pid,stage,kind==='forward'?'forward':'backward',code,notes);
 }
 function pbOpenWait(pid){
   const p=projects.find(x=>x.id===pid);
@@ -676,7 +691,7 @@ async function procLog(action,entityName,projectId,oldVal,newVal){
 // ── entry: called from doCheckinLogin instead of the normal check-in flow ──
 async function procEnter(){
   document.body.classList.add('proc-mode');
-  const acb=document.getElementById('all-clear-btn');if(acb)acb.parentElement.style.display='none';
+  const acts=document.getElementById('standard-checkin-actions');if(acts)acts.style.display='none';
   const wt=document.getElementById('week-tabs-row');if(wt)wt.style.display='none';
   const sb1=document.getElementById('summary-bar');if(sb1)sb1.style.display='none';
   const as1=document.getElementById('attention-summary');if(as1)as1.style.display='none';
