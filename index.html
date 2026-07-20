@@ -2023,6 +2023,11 @@ function isMilestoneKeyAllDone(pid,key){
   const ms=milestones.filter(m=>m.project_id===pid&&m.key===key);
   return ms.length>0&&ms.every(m=>milestoneDone[m.id]);
 }
+function pbHubSo(soRaw){
+  const sos=(soRaw||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  if(sos.length<=3)return{text:sos.join(', ')||'—',title:''};
+  return{text:sos.slice(0,3).join(', ')+' +'+(sos.length-3)+' more',title:sos.join(', ')};
+}
 function pbHubDur(s){if(s==null)return'—';const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600);if(d>0)return d+'d '+h+'h';const m=Math.floor((s%3600)/60);return h>0?h+'h '+m+'m':m+'m';}
 function renderProductionQueue(){
   const el=document.getElementById('tab-prodqueue');
@@ -2053,7 +2058,7 @@ function renderProductionQueue(){
       return`<div style="background:white;border:1px solid var(--gray-200);border-left:4px solid ${b.waiting?'#d97706':s.color};border-radius:8px;margin-bottom:8px;overflow:hidden;cursor:pointer" onclick="goToProjPage('${p.id}')">
         ${img?`<img src="${img.url}" style="width:100%;height:70px;object-fit:cover;display:block;background:#eee" onerror="this.style.display='none'">`:''}
         <div style="padding:7px 9px">
-          <div style="font-family:var(--mono);font-size:10px;font-weight:700;color:var(--red)">${(p.so_number||'').trim()||'—'}</div>
+          <div style="font-family:var(--mono);font-size:10px;font-weight:700;color:var(--red);word-break:break-word" ${pbHubSo(p.so_number).title?`title="${pbHubSo(p.so_number).title}"`:''}>${pbHubSo(p.so_number).text}</div>
           <div style="font-size:12px;font-weight:700;line-height:1.25">${p.name||''}</div>
           <div style="font-size:10px;color:var(--gray-500);margin-top:2px">${p.client||'—'} · Due ${prodEnd?fmt(prodEnd):'—'} · Ship ${shipD?fmt(shipD):'—'}${b.owner?' · '+b.owner:''}</div>
           <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:5px">
@@ -2064,7 +2069,7 @@ function renderProductionQueue(){
           </div>
         </div></div>`;
     }).join('');
-    return`<div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;display:flex;flex-direction:column;min-height:300px">
+    return`<div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;display:flex;flex-direction:column;min-height:300px;min-width:0">
       <div style="padding:8px 11px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${s.color};border-bottom:1px solid var(--gray-200);display:flex;justify-content:space-between">${s.label}<span style="background:white;border:1px solid var(--gray-300);border-radius:9px;padding:0 7px;font-size:10px">${cards.length}</span></div>
       <div style="padding:7px;flex:1;overflow-y:auto;max-height:60vh">${cardHtml||'<div style="text-align:center;font-size:11px;color:var(--gray-400);padding:14px 0">—</div>'}</div>
     </div>`;
@@ -2099,7 +2104,7 @@ function renderProductionQueue(){
       <button class="btn" style="font-size:11px" onclick="pbHub.loaded=false;renderProductionQueue()">↻ Refresh</button>
     </div>
     <div style="margin-bottom:10px">${avgRow}<span style="font-size:11px;color:var(--gray-600)">Top delay reasons: ${topReasons}</span></div>
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin-bottom:16px">${cols}</div>
+    <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;margin-bottom:16px">${cols}</div>
     <details><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--gray-600)">Movement history (latest 25)</summary>
       <table style="font-size:11px;border-collapse:collapse;margin-top:8px;width:100%">${histRows||'<tr><td style="color:var(--gray-400)">No movements yet.</td></tr>'}</table></details>`;
 }
