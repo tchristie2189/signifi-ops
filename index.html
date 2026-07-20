@@ -1983,7 +1983,126 @@ function renderQueueBoard(boardKey){
     </div>
     ${adHocSection}`;
 }
-function renderProductionQueue(){renderQueueBoard('production');}
+// ═══ PRODUCTION BOARD (READ-ONLY, management-facing) ═══
+// Displays the live board Production maintains in Daily Check-In. This hub
+// view READS production_board / production_stage_history — it does not move
+// cards. Production never logs in here; Check-In is their write interface.
+// STAGE LOGIC BLOCK — keep identical to the copy in signifi-ops-checkin.html.
+const PB_STAGES=[
+  {key:'upcoming',label:'Upcoming / Waiting for Parts',color:'#6b7280'},
+  {key:'wip',label:'WIP',color:'#7c3aed'},
+  {key:'issues',label:'Issues',color:'#dc2626'},
+  {key:'ready_qa',label:'Ready for QA/QC',color:'#d97706'},
+  {key:'shipped',label:'Shipped',color:'#059669'},
+];
+const PB_IDX=Object.fromEntries(PB_STAGES.map((s,i)=>[s.key,i]));
+let pbHub={board:{},history:[],reasons:[],photos:{},loaded:false,missing:false};
+async function pbHubLoad(){
+  const[bd,hist,rc,ph]=await Promise.all([
+    fetchAllRows('production_board',{tiebreak:'project_id'}),
+    fetchAllRows('production_stage_history',{orderCol:'created_at',ascending:false}),
+    sb.from('production_reason_codes').select('*'),
+    fetchAllRows('project_photos',{orderCol:'created_at'}),
+  ]);
+  if(bd.error&&/does not exist|relation/i.test(bd.error.message||'')){pbHub.missing=true;pbHub.loaded=true;return;}
+  pbHub.board={};(bd.data||[]).forEach(b=>pbHub.board[b.project_id]=b);
+  pbHub.history=hist.data||[];
+  pbHub.reasons=rc.data||[];
+  pbHub.photos={};(ph.data||[]).forEach(p=>{if((p.label||'').toLowerCase()==='kickoff')pbHub.photos[p.project_id]=p;});
+  pbHub.loaded=true;pbHub.missing=false;
+}
+function pbHubStageOf(p){
+  const b=pbHub.board[p.id];
+  if(b)return b.stage;
+  if(isMilestoneKeyAllDone(p.id,'shipping'))return'shipped';
+  if(isMilestoneKeyAllDone(p.id,'production-end'))return'ready_qa';
+  if(isMilestoneKeyAllDone(p.id,'production-start'))return'wip';
+  return'upcoming';
+}
+function isMilestoneKeyAllDone(pid,key){
+  const ms=milestones.filter(m=>m.project_id===pid&&m.key===key);
+  return ms.length>0&&ms.every(m=>milestoneDone[m.id]);
+}
+function pbHubDur(s){if(s==null)return'—';const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600);if(d>0)return d+'d '+h+'h';const m=Math.floor((s%3600)/60);return h>0?h+'h '+m+'m':m+'m';}
+function renderProductionQueue(){
+  const el=document.getElementById('tab-prodqueue');
+  if(!pbHub.loaded){
+    el.innerHTML='<div class="empty-state">Loading production board…</div>';
+    pbHubLoad().then(()=>{if(currentTab==='prodqueue')renderProductionQueue();}).catch(e=>{console.error('production board load failed',e);el.innerHTML='<div class="empty-state">⚠ Production board could not be loaded — see console.</div>';});
+    return;
+  }
+  if(pbHub.missing){renderQueueBoard('production');return;} // migration not run → legacy queue
+  const ap=filterBySales(filterByPM(activeProjects('prodqueue')));
+  const cols=PB_STAGES.map(s=>{
+    const cards=ap.filter(p=>pbHubStageOf(p)===s.key).sort((a,b)=>{
+      const pa=pbHub.board[a.id]?.priority==='High'?0:1,pb_=pbHub.board[b.id]?.priority==='High'?0:1;
+      if(pa!==pb_)return pa-pb_;
+      const da=(milestones.find(m=>m.project_id===a.id&&m.key==='production-end')?.date)||'9999';
+      const db=(milestones.find(m=>m.project_id===b.id&&m.key==='production-end')?.date)||'9999';
+      return da.localeCompare(db);
+    });
+    const cardHtml=cards.map(p=>{
+      const b=pbHub.board[p.id]||{};
+      const img=pbHub.photos[p.id];
+      const prodEnd=milestones.filter(m=>m.project_id===p.id&&m.key==='production-end'&&m.date).map(m=>m.date).sort()[0]||null;
+      const shipD=milestones.filter(m=>m.project_id===p.id&&m.key==='shipping'&&m.date).map(m=>m.date).sort()[0]||null;
+      const secs=b.stage_entered_at?Math.max(0,Math.round((Date.now()-new Date(b.stage_entered_at).getTime())/1000)):null;
+      const wSecs=b.waiting&&b.waiting_since?Math.round((Date.now()-new Date(b.waiting_since).getTime())/1000):null;
+      const rl=(pbHub.reasons.find(r=>r.code===b.waiting_reason)||{}).label||b.waiting_reason||'';
+      const late=prodEnd&&daysDiff(prodEnd)<0&&pbHubStageOf(p)!=='shipped';
+      return`<div style="background:white;border:1px solid var(--gray-200);border-left:4px solid ${b.waiting?'#d97706':s.color};border-radius:8px;margin-bottom:8px;overflow:hidden;cursor:pointer" onclick="goToProjPage('${p.id}')">
+        ${img?`<img src="${img.url}" style="width:100%;height:70px;object-fit:cover;display:block;background:#eee" onerror="this.style.display='none'">`:''}
+        <div style="padding:7px 9px">
+          <div style="font-family:var(--mono);font-size:10px;font-weight:700;color:var(--red)">${(p.so_number||'').trim()||'—'}</div>
+          <div style="font-size:12px;font-weight:700;line-height:1.25">${p.name||''}</div>
+          <div style="font-size:10px;color:var(--gray-500);margin-top:2px">${p.client||'—'} · Due ${prodEnd?fmt(prodEnd):'—'} · Ship ${shipD?fmt(shipD):'—'}${b.owner?' · '+b.owner:''}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:5px">
+            <span style="font-size:9px;font-weight:600;padding:1px 6px;border-radius:8px;background:var(--gray-100);color:var(--gray-600)">⏱ ${pbHubDur(secs)}</span>
+            ${late?'<span style="font-size:9px;font-weight:600;padding:1px 6px;border-radius:8px;background:var(--red-light);color:var(--red)">Overdue</span>':''}
+            ${b.priority==='High'?'<span style="font-size:9px;font-weight:600;padding:1px 6px;border-radius:8px;background:var(--red-light);color:var(--red)">High</span>':''}
+            ${b.waiting?`<span style="font-size:9px;font-weight:600;padding:1px 6px;border-radius:8px;background:#fef3c7;color:#92400e">⏸ ${rl} · ${pbHubDur(wSecs)}</span>`:''}
+          </div>
+        </div></div>`;
+    }).join('');
+    return`<div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;display:flex;flex-direction:column;min-height:300px">
+      <div style="padding:8px 11px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:${s.color};border-bottom:1px solid var(--gray-200);display:flex;justify-content:space-between">${s.label}<span style="background:white;border:1px solid var(--gray-300);border-radius:9px;padding:0 7px;font-size:10px">${cards.length}</span></div>
+      <div style="padding:7px;flex:1;overflow-y:auto;max-height:60vh">${cardHtml||'<div style="text-align:center;font-size:11px;color:var(--gray-400);padding:14px 0">—</div>'}</div>
+    </div>`;
+  }).join('');
+  // Bottleneck + history reporting from production_stage_history
+  const forwardMoves=pbHub.history.filter(h=>h.move_type==='forward'&&h.seconds_in_prev_stage!=null);
+  const byStage={};forwardMoves.forEach(h=>{if(h.from_stage){byStage[h.from_stage]=byStage[h.from_stage]||[];byStage[h.from_stage].push(h.seconds_in_prev_stage);}});
+  const avgRow=PB_STAGES.slice(0,4).map(s=>{
+    const arr=byStage[s.key]||[];
+    const avg=arr.length?Math.round(arr.reduce((a,b)=>a+Number(b),0)/arr.length):null;
+    return`<span style="font-size:11px;color:var(--gray-600);margin-right:14px"><b style="color:${s.color}">${s.label.split(' ')[0]}</b> avg ${pbHubDur(avg)}${arr.length?' ('+arr.length+')':''}</span>`;
+  }).join('');
+  const backMoves=pbHub.history.filter(h=>h.move_type==='backward');
+  const waitingNow=Object.values(pbHub.board).filter(b=>b.waiting).length;
+  const reasonCounts={};pbHub.history.filter(h=>h.reason_code).forEach(h=>{reasonCounts[h.reason_code]=(reasonCounts[h.reason_code]||0)+1;});
+  const topReasons=Object.entries(reasonCounts).sort((a,b)=>b[1]-a[1]).slice(0,4)
+    .map(([c,n])=>((pbHub.reasons.find(r=>r.code===c)||{}).label||c)+' ×'+n).join(' · ')||'—';
+  const histRows=pbHub.history.slice(0,25).map(h=>{
+    const t=PB_STAGES[PB_IDX[h.to_stage]]?.label||h.to_stage,f=PB_STAGES[PB_IDX[h.from_stage]]?.label||h.from_stage||'—';
+    const icon={forward:'→',backward:'↩',waiting:'⏸',resumed:'▶'}[h.move_type]||'·';
+    const rl=(pbHub.reasons.find(r=>r.code===h.reason_code)||{}).label||h.reason_code||'';
+    return`<tr><td style="padding:3px 10px 3px 0;white-space:nowrap;color:var(--gray-400)">${new Date(h.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})} ${new Date(h.created_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</td>
+      <td style="padding:3px 10px 3px 0"><span style="font-family:var(--mono);font-size:10px;color:var(--red)">${h.so_number||''}</span> ${h.kiosk_name||''}</td>
+      <td style="padding:3px 10px 3px 0;white-space:nowrap">${icon} ${h.move_type==='waiting'?'Paused':h.move_type==='resumed'?'Resumed':f+' → '+t}</td>
+      <td style="padding:3px 10px 3px 0;color:var(--gray-500)">${rl}${h.notes?' — '+h.notes:''}</td>
+      <td style="padding:3px 0;color:var(--gray-400);white-space:nowrap">${h.seconds_in_prev_stage!=null?pbHubDur(Number(h.seconds_in_prev_stage)):''}</td>
+      <td style="padding:3px 0 3px 10px;color:var(--gray-400)">${h.moved_by||''}</td></tr>`;
+  }).join('');
+  el.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <div style="font-size:12px;color:var(--gray-500)">Live from Daily Check-In — Production moves cards there; this view is read-only.${backMoves.length?' · <b style="color:var(--red)">'+backMoves.length+' backward move'+(backMoves.length>1?'s':'')+'</b>':''}${waitingNow?' · <b style="color:#92400e">'+waitingNow+' waiting</b>':''}</div>
+      <button class="btn" style="font-size:11px" onclick="pbHub.loaded=false;renderProductionQueue()">↻ Refresh</button>
+    </div>
+    <div style="margin-bottom:10px">${avgRow}<span style="font-size:11px;color:var(--gray-600)">Top delay reasons: ${topReasons}</span></div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin-bottom:16px">${cols}</div>
+    <details><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--gray-600)">Movement history (latest 25)</summary>
+      <table style="font-size:11px;border-collapse:collapse;margin-top:8px;width:100%">${histRows||'<tr><td style="color:var(--gray-400)">No movements yet.</td></tr>'}</table></details>`;
+}
 function renderQaQueue(){renderQueueBoard('qa');}
 
 // ── PROCUREMENT COMMAND CENTER ────────────────────────────────
