@@ -466,6 +466,19 @@ const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{
 // for. So instead we fetch in pages and keep going until a page comes
 // back shorter than the page size, which is the only reliable way to
 // know we've actually reached the end of the table.
+//
+// STANDING RULE FOR THIS FILE: any table that grows over time (one-ish
+// row per project, per milestone, per event, etc.) must be loaded with
+// fetchAllRows, never a raw sb.from(table).select(). A raw select() is
+// only safe for genuinely small/fixed-size lookups, or when explicitly
+// scoped to a single record (e.g. .eq('project_id', pid), which can't
+// exceed the row count of one project's own data) or intentionally
+// capped with .limit() for a "most recent N" feed. When adding a new
+// table fetch, default to fetchAllRows unless one of those two
+// exceptions clearly applies — this exact class of bug (rows silently
+// missing above a row-count cliff, no error, works fine until it
+// doesn't) is expensive to diagnose after the fact and cheap to avoid
+// up front.
 async function fetchAllRows(table,{select='*',orderCol=null,ascending=true,eq=null,pageSize=1000}={}){
   let all=[],from=0,pages=0;
   while(true){
@@ -540,7 +553,7 @@ function today(){let t=new Date();t.setHours(0,0,0,0);return t;}
 function monday(dt){let r=new Date(dt);let d=r.getDay();r.setDate(r.getDate()+(d===0?-6:1-d));r.setHours(0,0,0,0);return r;}
 function addD(dt,n){let r=new Date(dt);r.setDate(r.getDate()+n);return r;}
 function sameDay(a,b){return a.toDateString()===b.toDateString();}
-function isoD(dt){return dt.toISOString().split('T')[0];}
+function isoD(dt){return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');}
 function fmt(s){if(!s)return'—';return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});}
 function fmtFull(s){if(!s)return'—';return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}
 function fmtTime(s){if(!s)return'';try{return new Date(s).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
@@ -819,7 +832,7 @@ async function loadAll(){
     fetchAllRows('milestone_done'),
     fetchAllRows('milestone_history',{orderCol:'changed_at',ascending:true}),
     fetchAllRows('adhoc_schedule',{orderCol:'created_at'}),
-    sb.from('app_settings').select('*'),
+    fetchAllRows('app_settings'),
     fetchAllRows('project_links',{select:'project_id,label,url,category,id,sort_order'}),
     fetchAllRows('milestone_deviations'),
     fetchAllRows('so_details'),
@@ -3668,9 +3681,9 @@ function vsDate(i,field,val,type){
   if(proj&&val){
     const key=type==='vinyl'?'vinyl':'other';
     const label=type==='vinyl'?'Vinyl / branding':'Planogram sign-off';
-    const existing=milestones.find(m=>m.project_id===proj.id&&m.key===key&&(m.label||'').toLowerCase().includes('planogram')||m.key===key&&type==='vinyl');
-    if(existing){sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id).then(()=>{logActivity('updated date',type,label,proj.id,existing.date,val);showToast('Date synced to project ✓');});}
-    else{sb.from('milestones').insert({project_id:proj.id,key,label,date:val,changed_by:currentUserName}).then(()=>{logActivity('added milestone',type,label,proj.id,null,val);loadAll();showToast('Date synced to project ✓');});}
+    const existing=milestones.find(m=>m.project_id===proj.id&&m.key===key&&(type==='vinyl'||(m.label||'').toLowerCase().includes('planogram')));
+    if(existing){sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id).then(({error})=>{if(error){showToast('⚠ Sync failed: '+error.message);return;}logActivity('updated date',type,label,proj.id,existing.date,val);showToast('Date synced to project ✓');});}
+    else{sb.from('milestones').insert({project_id:proj.id,key,label,date:val,changed_by:currentUserName}).then(({error})=>{if(error){showToast('⚠ Sync failed: '+error.message);return;}logActivity('added milestone',type,label,proj.id,null,val);loadAll();showToast('Date synced to project ✓');});}
   } else if(val){
     showToast('Date saved ✓');
   }
@@ -4111,7 +4124,8 @@ async function resolveExtensionRequest(reqId,decision){
         return{milestoneId:r.milestoneId,oldDate:r.oldDate,newDate:finalDate,label:r.label};
       }).filter(u=>u.newDate&&u.newDate!==u.oldDate);
       for(const u of updates){
-        await sb.from('milestones').update({date:u.newDate}).eq('id',u.milestoneId);
+        const{error:updErr}=await sb.from('milestones').update({date:u.newDate}).eq('id',u.milestoneId);
+        if(updErr){alert('Date update failed for "'+u.label+'": '+updErr.message+'\n\nThe request has NOT been marked approved — no partial approval recorded.');await loadAll();return;}
         const m=milestones.find(x=>x.id===u.milestoneId);if(m)m.date=u.newDate;
         await sb.from('milestone_history').insert({milestone_id:u.milestoneId,project_id:req.project_id,old_date:u.oldDate,new_date:u.newDate,changed_by:currentUserName,reason:'Extension request: '+req.reason+' (approved, +'+req.days+'d requested by '+(req.requested_by||req.dept)+')'});
       }
@@ -4643,11 +4657,13 @@ async function saveEditProj(id){
   }).eq('id',id);
   if(error){alert('Error: '+error.message);return;}
   const projMs=milestones.filter(m=>m.project_id===id);
+  const dateChanges=[];
   for(const m of projMs){
     const el=document.getElementById('ms-'+m.id);
     if(el&&el.value!==m.date){
       await sb.from('milestones').update({date:el.value,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
       await logActivity('updated date',m.label,m.label,id,m.date,el.value);
+      if(m.date&&el.value)dateChanges.push({ms:m,oldDate:m.date,newDate:el.value});
     }
   }
   await logActivity('edited project',proj?.name||'',proj?.so_number||'',id,null,null);
@@ -4702,6 +4718,43 @@ async function saveEditProj(id){
     qa_task_url:document.getElementById('ep-qa')?.value.trim()||'',
     install_ticket_url:document.getElementById('ep-install-ticket')?.value.trim()||''
   });
+  // CASCADE: if exactly ONE milestone date changed in this edit, offer to shift
+  // all later milestones by the same delta — same behavior as the single-edit
+  // path. When multiple dates changed we assume the schedule is being set
+  // deliberately and skip the prompt.
+  if(dateChanges.length===1){
+    const{ms:srcMs,oldDate,newDate}=dateChanges[0];
+    const deltaDays=Math.round((new Date(newDate+'T00:00:00')-new Date(oldDate+'T00:00:00'))/86400000);
+    const later=milestones.filter(m=>
+      m.project_id===id&&
+      m.id!==srcMs.id&&
+      m.date&&m.date>oldDate&&
+      (srcMs.so_tag?m.so_tag===srcMs.so_tag:!m.so_tag)&&
+      !isMilestoneEffectivelyDone(m)
+    ).sort((a,b)=>a.date.localeCompare(b.date));
+    if(deltaDays!==0&&later.length){
+      closeModal();
+      const shiftDate=(d,n)=>{const dt=new Date(d+'T00:00:00');dt.setDate(dt.getDate()+n);return isoD(dt);};
+      const previewRows=later.map(m=>`<tr><td style="padding:3px 8px 3px 0;color:var(--gray-700)">${m.label}</td><td style="padding:3px 8px;color:var(--gray-400)">${fmt(m.date)}</td><td style="padding:3px 0;color:var(--gray-700)">→ ${fmt(shiftDate(m.date,deltaDays))}</td></tr>`).join('');
+      window._cascadeData={later:later.map(m=>({id:m.id,label:m.label,oldDate:m.date,newDate:shiftDate(m.date,deltaDays)})),projId:id,deltaDays,sourceLabel:srcMs.label};
+      document.getElementById('modal-root').innerHTML=`
+      <div class="modal-backdrop">
+        <div class="modal" style="width:480px" onclick="event.stopPropagation()">
+          <div class="modal-head"><span class="modal-title">📅 Update following milestones?</span><button class="modal-close" onclick="closeModal();loadAll()">×</button></div>
+          <div style="padding:16px;font-size:13px;color:var(--gray-600)">
+            <strong>${srcMs.label}</strong> moved ${deltaDays>0?'+':''}${deltaDays}d (${fmt(oldDate)} → ${fmt(newDate)}).<br>
+            Shift the ${later.length} milestone${later.length>1?'s':''} after it by the same amount?
+            <table style="margin-top:10px;font-size:12px;border-collapse:collapse">${previewRows}</table>
+          </div>
+          <div class="modal-actions">
+            <button class="btn" onclick="closeModal();loadAll()">Leave as is</button>
+            <button class="btn btn-primary" onclick="applyCascadeShift()">Shift all ${deltaDays>0?'+':''}${deltaDays}d →</button>
+          </div>
+        </div>
+      </div>`;
+      return;
+    }
+  }
   closeModal();showToast('Saved ✓');await loadAll();
 }
 // ── SO SPLITTING ────────────────────────────────────────────
@@ -4807,6 +4860,42 @@ async function saveEditMs(id,oldLabel,oldDate){
     if(ms)await syncMsDateToVinyl(ms,newDate);
   }
 
+  // CASCADE: if the date moved, offer to shift all LATER milestones by the same delta
+  if(oldDate&&newDate&&oldDate!==newDate&&proj){
+    const deltaDays=Math.round((new Date(newDate+'T00:00:00')-new Date(oldDate+'T00:00:00'))/86400000);
+    // Later = strictly after the OLD date of the changed milestone, same project,
+    // same SO group (or all untagged if this one is untagged), not already done.
+    const later=milestones.filter(m=>
+      m.project_id===proj.id&&
+      m.id!==id&&
+      m.date&&m.date>oldDate&&
+      (ms?.so_tag?m.so_tag===ms.so_tag:!m.so_tag)&&
+      !isMilestoneEffectivelyDone(m)
+    ).sort((a,b)=>a.date.localeCompare(b.date));
+    if(deltaDays!==0&&later.length){
+      closeModal();
+      const shiftDate=(d,n)=>{const dt=new Date(d+'T00:00:00');dt.setDate(dt.getDate()+n);return isoD(dt);};
+      const previewRows=later.map(m=>`<tr><td style="padding:3px 8px 3px 0;color:var(--gray-700)">${m.label}</td><td style="padding:3px 8px;color:var(--gray-400)">${fmt(m.date)}</td><td style="padding:3px 0;color:var(--gray-700)">→ ${fmt(shiftDate(m.date,deltaDays))}</td></tr>`).join('');
+      window._cascadeData={later:later.map(m=>({id:m.id,label:m.label,oldDate:m.date,newDate:shiftDate(m.date,deltaDays)})),projId:proj.id,deltaDays,sourceLabel:newLabel};
+      document.getElementById('modal-root').innerHTML=`
+      <div class="modal-backdrop">
+        <div class="modal" style="width:480px" onclick="event.stopPropagation()">
+          <div class="modal-head"><span class="modal-title">📅 Update following milestones?</span><button class="modal-close" onclick="closeModal();loadAll()">×</button></div>
+          <div style="padding:16px;font-size:13px;color:var(--gray-600)">
+            <strong>${newLabel}</strong> moved ${deltaDays>0?'+':''}${deltaDays}d (${fmt(oldDate)} → ${fmt(newDate)}).<br>
+            Shift the ${later.length} milestone${later.length>1?'s':''} after it by the same amount?
+            <table style="margin-top:10px;font-size:12px;border-collapse:collapse">${previewRows}</table>
+          </div>
+          <div class="modal-actions">
+            <button class="btn" onclick="closeModal();loadAll()">Leave as is</button>
+            <button class="btn btn-primary" onclick="applyCascadeShift()">Shift all ${deltaDays>0?'+':''}${deltaDays}d →</button>
+          </div>
+        </div>
+      </div>`;
+      return;
+    }
+  }
+
   // If this milestone has a so_tag and date changed, offer to push to all SOs
   if(ms?.so_tag&&newDate&&oldDate!==newDate&&proj){
     const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
@@ -4844,6 +4933,31 @@ async function saveEditMs(id,oldLabel,oldDate){
   await loadAll();
 }
 
+async function applyCascadeShift(){
+  const cd=window._cascadeData;
+  if(!cd||!cd.later?.length){closeModal();return;}
+  window._cascadeData=null;
+  // Apply each shift + history entry
+  for(const m of cd.later){
+    await sb.from('milestones').update({date:m.newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
+    await sb.from('milestone_history').insert({milestone_id:m.id,project_id:cd.projId,old_date:m.oldDate,new_date:m.newDate,changed_by:currentUserName,reason:'Auto-shifted '+(cd.deltaDays>0?'+':'')+cd.deltaDays+'d following "'+cd.sourceLabel+'" date change'});
+    // Keep vinyl schedule in sync for shifted vinyl/shipping milestones too
+    const full=milestones.find(x=>x.id===m.id);
+    if(full)await syncMsDateToVinyl(full,m.newDate);
+  }
+  await logActivity('cascade-shifted '+cd.later.length+' milestones',cd.sourceLabel,cd.sourceLabel,cd.projId,null,null);
+  closeModal();
+  const shifted=cd.later; // capture for undo
+  showUndoToast(shifted.length+' milestone'+(shifted.length>1?'s':'')+' shifted '+(cd.deltaDays>0?'+':'')+cd.deltaDays+'d',async()=>{
+    for(const m of shifted){
+      await sb.from('milestones').update({date:m.oldDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
+      await sb.from('milestone_history').insert({milestone_id:m.id,project_id:cd.projId,old_date:m.newDate,new_date:m.oldDate,changed_by:currentUserName,reason:'Undo of cascade shift'});
+    }
+    await loadAll();
+    showToast('Cascade undone ✓');
+  });
+  await loadAll();
+}
 async function pushSODateToOthers(projId,fromSO,msKey,newDate,msLabel){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
@@ -4863,7 +4977,17 @@ async function pushSODateToOthers(projId,fromSO,msKey,newDate,msLabel){
   closeModal();showToast('Pushed to '+updated+' other SOs ✓');await loadAll();
 }
 async function deleteMs(id){if(!confirm('Remove this milestone?'))return;const ms=milestones.find(m=>m.id===id);await sb.from('milestones').delete().eq('id',id);await logActivity('removed milestone',ms?.label||'',ms?.label||'',ms?.project_id||null,ms?.date,null);closeModal();showToast('Removed');await loadAll();}
-async function deleteProj(id){if(!confirm('Delete this project? Cannot be undone.'))return;const proj=projects.find(p=>p.id===id);await sb.from('milestones').delete().eq('project_id',id);await sb.from('projects').delete().eq('id',id);await logActivity('deleted project',proj?.name||'',proj?.so_number||'',null,null,null);selectedProjId=null;closeModal();showToast('Deleted');await loadAll();}
+async function deleteProj(id){if(!confirm('Delete this project? Cannot be undone.'))return;const proj=projects.find(p=>p.id===id);
+  // Cascade all project-linked tables so no orphaned rows keep rendering in schedules/views
+  for(const t of['milestones','project_links','project_team','project_sections','action_items','risks','decisions','pm_tasks','checkin_status','checkin_history','milestone_done','milestone_history','milestone_deviations','so_details','extension_requests','procurement_readiness']){
+    const{error:delErr}=await sb.from(t).delete().eq('project_id',id);
+    if(delErr)console.warn('deleteProj cascade: '+t+' — '+delErr.message);
+  }
+  await sb.from('vinyl_schedule').delete().eq('project_id',id).eq('is_standalone',false);
+  await sb.from('planogram_schedule').delete().eq('project_id',id).eq('is_standalone',false);
+  const{error}=await sb.from('projects').delete().eq('id',id);
+  if(error){alert('Delete failed: '+error.message);return;}
+  await logActivity('deleted project',proj?.name||'',proj?.so_number||'',null,null,null);selectedProjId=null;closeModal();showToast('Deleted');await loadAll();}
 
 function openAddEvModal(){
   const projOpts=projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
@@ -7145,9 +7269,10 @@ async function addChildProject(masterId){
   if(masterMs.length){
     const newMs=masterMs.map(m=>({
       project_id:child.id,label:m.label,key:m.key,date:m.date,
-      so_number:so||m.so_number||null,created_by:currentUserName,
+      so_tag:so||m.so_tag||null,changed_by:currentUserName,
     }));
-    const{data:createdMs}=await sb.from('milestones').insert(newMs).select();
+    const{data:createdMs,error:msErr}=await sb.from('milestones').insert(newMs).select();
+    if(msErr){showToast('⚠ Child created but milestones failed to clone: '+msErr.message);}
     if(createdMs)milestones.push(...createdMs);
   }
   // Mark master as campaign master
@@ -7231,7 +7356,8 @@ async function pushDatesToAll(masterId){
         await sb.from('milestone_deviations').delete().eq('project_id',child.id).eq('milestone_key',key);
         if(milestoneDeviations[child.id])delete milestoneDeviations[child.id][key];
       } else {
-        const{data}=await sb.from('milestones').insert({project_id:child.id,label:masterM.label,key,date:masterM.date,created_by:currentUserName}).select().single();
+        const{data,error:insErr}=await sb.from('milestones').insert({project_id:child.id,label:masterM.label,key,date:masterM.date,changed_by:currentUserName}).select().single();
+        if(insErr)console.error('push-to-child milestone insert failed',insErr);
         if(data)milestones.push(data);
       }
       pushed++;
@@ -7361,7 +7487,7 @@ async function migrateCampaignToSO(masterId){
     await sb.from('milestone_done').delete().eq('project_id',cid);
     await sb.from('vinyl_schedule').delete().eq('project_id',cid).eq('is_standalone',false);
     await sb.from('planogram_schedule').delete().eq('project_id',cid).eq('is_standalone',false);
-    await sb.from('adhoc_schedule').delete().eq('project_id',cid);
+    // note: adhoc_schedule intentionally not cascaded — it has no project_id column (rows are standalone, keyed by dept/so)
     await sb.from('pm_tasks').delete().eq('project_id',cid);
     // Delete the child project itself
     await sb.from('projects').delete().eq('id',cid);
