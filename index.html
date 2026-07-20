@@ -479,12 +479,16 @@ const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{
 // missing above a row-count cliff, no error, works fine until it
 // doesn't) is expensive to diagnose after the fact and cheap to avoid
 // up front.
-async function fetchAllRows(table,{select='*',orderCol=null,ascending=true,eq=null,pageSize=1000}={}){
+async function fetchAllRows(table,{select='*',orderCol=null,ascending=true,eq=null,pageSize=1000,tiebreak='id'}={}){
   let all=[],from=0,pages=0;
   while(true){
     let q=sb.from(table).select(select);
     if(eq)Object.entries(eq).forEach(([col,val])=>{q=q.eq(col,val);});
     if(orderCol)q=q.order(orderCol,{ascending});
+    // Stable pagination: without a unique secondary sort, rows sharing the same
+    // orderCol value (e.g. many milestones on one date) can shuffle between
+    // pages and be skipped or duplicated across page boundaries.
+    if(tiebreak&&tiebreak!==orderCol)q=q.order(tiebreak,{ascending:true});
     const{data,error}=await q.range(from,from+pageSize-1);
     if(error)return{data:null,error};
     all=all.concat(data||[]);
@@ -788,6 +792,41 @@ function initUser(name){
 const _savedUser=sessionStorage.getItem('signifi_user');
 if(_savedUser)initUser(_savedUser);
 
+// ── KICKOFF IMAGE CLEANUP ──────────────────────────────────
+// Kick-off screenshots are operational (production floor reference), not
+// archival. Once a project is complete they're dead weight in the 'kickoff'
+// Storage bucket, so we delete them to keep storage from filling up.
+// Only bucket-hosted files are removed — URL-pasted links (SharePoint/Odoo)
+// cost nothing and are left untouched in project_photos.
+async function cleanupKickoffImages(projId){
+  try{
+    const{data:objs,error:listErr}=await sb.storage.from('kickoff').list(projId);
+    if(!listErr&&objs&&objs.length){
+      const{error:rmErr}=await sb.storage.from('kickoff').remove(objs.map(o=>projId+'/'+o.name));
+      if(rmErr){console.warn('kickoff cleanup: storage remove failed',rmErr.message);return false;}
+    }
+    // Remove only the project_photos rows that pointed at the bucket
+    const{error:delErr}=await sb.from('project_photos').delete().eq('project_id',projId).eq('label','kickoff').like('url','%/storage/v1/object/public/kickoff/%');
+    if(delErr)console.warn('kickoff cleanup: photo row delete failed',delErr.message);
+    return true;
+  }catch(e){console.warn('kickoff cleanup failed',e.message);return false;}
+}
+// Once per session: sweep any already-complete projects still holding bucket
+// images (catches completions made from any path, or before this feature existed).
+let _kickoffSweepDone=false;
+async function sweepCompletedKickoffs(){
+  if(_kickoffSweepDone)return;_kickoffSweepDone=true;
+  try{
+    const{data:photos}=await sb.from('project_photos').select('project_id,url').eq('label','kickoff').like('url','%/storage/v1/object/public/kickoff/%');
+    if(!photos||!photos.length)return;
+    const completeIds=new Set(projects.filter(p=>p.status==='complete').map(p=>p.id));
+    const targets=[...new Set(photos.map(p=>p.project_id).filter(id=>completeIds.has(id)))];
+    let cleaned=0;
+    for(const id of targets){if(await cleanupKickoffImages(id))cleaned++;}
+    if(cleaned)console.log('kickoff sweep: cleaned images for '+cleaned+' completed project(s)');
+  }catch(e){console.warn('kickoff sweep failed',e.message);}
+}
+
 // ── NAV DROPDOWN ───────────────────────────────────────────
 function toggleNav(e){e.stopPropagation();document.getElementById('nav-dropdown').classList.toggle('open');}
 document.addEventListener('click',()=>document.getElementById('nav-dropdown')?.classList.remove('open'));
@@ -839,7 +878,7 @@ async function loadAll(){
     fetchAllRows('extension_requests',{orderCol:'created_at',ascending:false}),
     fetchAllRows('procurement_po'),
     fetchAllRows('procurement_po_projects'),
-    fetchAllRows('procurement_readiness'),
+    fetchAllRows('procurement_readiness',{tiebreak:'project_id'}),
   ]);
   projects=pr.data||[];activityLog=lg.data||[];
   // Guard: never let a failed/empty milestones fetch wipe what's already loaded.
@@ -981,6 +1020,7 @@ async function loadAll(){
     window._skipProjPageReload=true;
   }
   renderTab();
+  sweepCompletedKickoffs(); // once per session, non-blocking
 }
 
 // ── PIPELINE BOARD ─────────────────────────────────────────
@@ -4656,6 +4696,9 @@ async function saveEditProj(id){
     changed_by:currentUserName,changed_at:new Date().toISOString()
   }).eq('id',id);
   if(error){alert('Error: '+error.message);return;}
+  // Project just transitioned to complete → free its kickoff screenshots from storage
+  const _newStatus=document.getElementById('ep-status').value;
+  if(_newStatus==='complete'&&proj&&proj.status!=='complete')cleanupKickoffImages(id);
   const projMs=milestones.filter(m=>m.project_id===id);
   const dateChanges=[];
   for(const m of projMs){
@@ -4978,8 +5021,9 @@ async function pushSODateToOthers(projId,fromSO,msKey,newDate,msLabel){
 }
 async function deleteMs(id){if(!confirm('Remove this milestone?'))return;const ms=milestones.find(m=>m.id===id);await sb.from('milestones').delete().eq('id',id);await logActivity('removed milestone',ms?.label||'',ms?.label||'',ms?.project_id||null,ms?.date,null);closeModal();showToast('Removed');await loadAll();}
 async function deleteProj(id){if(!confirm('Delete this project? Cannot be undone.'))return;const proj=projects.find(p=>p.id===id);
+  await cleanupKickoffImages(id); // free storage before rows disappear
   // Cascade all project-linked tables so no orphaned rows keep rendering in schedules/views
-  for(const t of['milestones','project_links','project_team','project_sections','action_items','risks','decisions','pm_tasks','checkin_status','checkin_history','milestone_done','milestone_history','milestone_deviations','so_details','extension_requests','procurement_readiness']){
+  for(const t of['milestones','project_links','project_team','project_sections','action_items','risks','decisions','pm_tasks','checkin_status','checkin_history','milestone_done','milestone_history','milestone_deviations','so_details','extension_requests','procurement_readiness','project_photos']){
     const{error:delErr}=await sb.from(t).delete().eq('project_id',id);
     if(delErr)console.warn('deleteProj cascade: '+t+' — '+delErr.message);
   }
@@ -7490,6 +7534,7 @@ async function migrateCampaignToSO(masterId){
     // note: adhoc_schedule intentionally not cascaded — it has no project_id column (rows are standalone, keyed by dept/so)
     await sb.from('pm_tasks').delete().eq('project_id',cid);
     // Delete the child project itself
+    await cleanupKickoffImages(cid);
     await sb.from('projects').delete().eq('id',cid);
     const idx=projects.findIndex(p=>p.id===cid);
     if(idx>=0)projects.splice(idx,1);
