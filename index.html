@@ -2161,6 +2161,7 @@ function pbHubSoHtml(soRaw,pid){
   if(pbHubSoExpanded.has(pid))return sos.join(', ')+` <span class="pb-so-more" onclick="event.stopPropagation();pbHubSoExpanded.delete('${pid}');renderProductionQueue()">collapse</span>`;
   return sos.slice(0,3).join(', ')+` <span class="pb-so-more" onclick="event.stopPropagation();pbHubSoExpanded.add('${pid}');renderProductionQueue()">+${sos.length-3} more</span>`;
 }
+let pbHubView='board';
 function renderProductionQueue(){
   const el=document.getElementById('tab-prodqueue');
   if(!pbHub.loaded){
@@ -2169,6 +2170,15 @@ function renderProductionQueue(){
     return;
   }
   if(pbHub.missing){renderQueueBoard('production');return;} // migration not run → legacy queue
+  el.innerHTML=`<div style="display:flex;gap:6px;margin-bottom:12px">
+    <button class="btn ${pbHubView==='board'?'btn-primary':''}" onclick="pbHubView='board';renderProductionQueue()">📋 Board</button>
+    <button class="btn ${pbHubView==='reports'?'btn-primary':''}" onclick="pbHubView='reports';renderProductionQueue()">📊 Reports</button>
+  </div><div id="pb-view-body"></div>`;
+  if(pbHubView==='reports'){renderProductionReports();return;}
+  renderProductionBoardView();
+}
+function renderProductionBoardView(){
+  const el=document.getElementById('pb-view-body');
   const ap=filterBySales(filterByPM(activeProjects('prodqueue'))).filter(p=>pbHasProductionMs(p.id));
   let shippedTotal=0;
   const cols=PB_STAGES.map(s=>{
@@ -2216,19 +2226,115 @@ function renderProductionQueue(){
       <div class="pb-col-body">${cardHtml||'<div style="text-align:center;font-size:12px;color:var(--gray-400);padding:24px 0">—</div>'}${more}</div>
     </div>`;
   }).join('');
-  const forwardMoves=pbHub.history.filter(h=>h.move_type==='forward'&&h.seconds_in_prev_stage!=null);
-  const byStage={};forwardMoves.forEach(h=>{if(h.from_stage){byStage[h.from_stage]=byStage[h.from_stage]||[];byStage[h.from_stage].push(h.seconds_in_prev_stage);}});
-  const avgRow=PB_STAGES.slice(0,4).map(s=>{
-    const arr=byStage[s.key]||[];
-    const avg=arr.length?Math.round(arr.reduce((a,b)=>a+Number(b),0)/arr.length):null;
-    return`<span style="font-size:11px;color:var(--gray-600);margin-right:14px"><b style="color:${s.color}">${s.label.split(' ')[0]}</b> avg ${pbHubDur(avg)}${arr.length?' ('+arr.length+')':''}</span>`;
-  }).join('');
   const backMoves=pbHub.history.filter(h=>h.move_type==='backward');
   const waitingNow=Object.values(pbHub.board).filter(b=>b.waiting).length;
-  const reasonCounts={};pbHub.history.filter(h=>h.reason_code).forEach(h=>{reasonCounts[h.reason_code]=(reasonCounts[h.reason_code]||0)+1;});
-  const topReasons=Object.entries(reasonCounts).sort((a,b)=>b[1]-a[1]).slice(0,4)
-    .map(([c,n])=>((pbHub.reasons.find(r=>r.code===c)||{}).label||c)+' ×'+n).join(' · ')||'—';
-  const histRows=pbHub.history.slice(0,25).map(h=>{
+  el.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <div style="font-size:12px;color:var(--gray-500)">Live from Daily Check-In — Production moves cards there; this view is read-only.${backMoves.length?' · <b style="color:var(--red)">'+backMoves.length+' backward move'+(backMoves.length>1?'s':'')+'</b>':''}${waitingNow?' · <b style="color:#92400e">'+waitingNow+' waiting</b>':''} · <span style="cursor:pointer;text-decoration:underline;color:#7c3aed" onclick="pbHubView='reports';renderProductionQueue()">View full reports →</span></div>
+      <button class="btn" style="font-size:11px" onclick="pbHub.loaded=false;renderProductionQueue()">↻ Refresh</button>
+    </div>
+    <div class="pb-scroll"><div class="pb-cols">${cols}</div></div>`;
+}
+function renderQaQueue(){renderQueueBoard('qa');}
+// ═══ PRODUCTION REPORTS ═══ — all computed live from production_stage_history
+let pbRepF={range:'30',owner:'',customer:''};
+function pbRepCutoff(){
+  if(pbRepF.range==='all')return null;
+  const d=new Date();d.setDate(d.getDate()-Number(pbRepF.range));
+  return d;
+}
+function pbRepFilteredHistory(){
+  const cutoff=pbRepCutoff();
+  return pbHub.history.filter(h=>{
+    if(cutoff&&new Date(h.created_at)<cutoff)return false;
+    if(pbRepF.owner){const b=pbHub.board[h.project_id];if((b?.owner||'')!==pbRepF.owner)return false;}
+    if(pbRepF.customer){
+      const p=projects.find(x=>x.id===h.project_id);
+      if(!p||!(p.client||'').toLowerCase().includes(pbRepF.customer.toLowerCase()))return false;
+    }
+    return true;
+  });
+}
+function pbRepCsv(){
+  const rows=pbRepFilteredHistory();
+  const header=['Timestamp','SO','Kiosk','Move type','From','To','Reason','Notes','Time in previous stage (sec)','Moved by'];
+  const lines=[header.join(',')];
+  rows.forEach(h=>{
+    const esc=v=>'"'+String(v??'').replace(/"/g,'""')+'"';
+    lines.push([h.created_at,h.so_number,h.kiosk_name,h.move_type,h.from_stage,h.to_stage,h.reason_code,h.notes,h.seconds_in_prev_stage,h.moved_by].map(esc).join(','));
+  });
+  const blob=new Blob([lines.join('\n')],{type:'text/csv'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='production-history-'+isoD(new Date())+'.csv';a.click();
+}
+function renderProductionReports(){
+  const el=document.getElementById('pb-view-body');
+  const hist=pbRepFilteredHistory();
+  const owners=[...new Set(Object.values(pbHub.board).map(b=>b.owner).filter(Boolean))].sort();
+
+  // Per-stage average forward-move duration
+  const forwardMoves=hist.filter(h=>h.move_type==='forward'&&h.seconds_in_prev_stage!=null);
+  const byStage={};forwardMoves.forEach(h=>{if(h.from_stage){byStage[h.from_stage]=byStage[h.from_stage]||[];byStage[h.from_stage].push(Number(h.seconds_in_prev_stage));}});
+  const stageStatRows=PB_STAGES.slice(0,4).map(s=>{
+    const arr=byStage[s.key]||[];
+    const avg=arr.length?Math.round(arr.reduce((a,b)=>a+b,0)/arr.length):null;
+    const max=arr.length?Math.max(...arr):null;
+    return`<tr><td style="padding:5px 10px 5px 0"><b style="color:${s.color}">${s.label}</b></td>
+      <td style="padding:5px 10px;text-align:right">${pbHubDur(avg)}</td>
+      <td style="padding:5px 10px;text-align:right;color:var(--gray-500)">${pbHubDur(max)}</td>
+      <td style="padding:5px 0;text-align:right;color:var(--gray-500)">${arr.length}</td></tr>`;
+  }).join('');
+
+  // Backward moves
+  const backMoves=hist.filter(h=>h.move_type==='backward');
+  const backByReason={};backMoves.forEach(h=>{const k=h.reason_code||'other';backByReason[k]=(backByReason[k]||0)+1;});
+  const backRows=Object.entries(backByReason).sort((a,b)=>b[1]-a[1]).map(([c,n])=>{
+    const lbl=(pbHub.reasons.find(r=>r.code===c)||{}).label||c;
+    return`<tr><td style="padding:4px 10px 4px 0">${lbl}</td><td style="padding:4px 0;text-align:right;font-weight:600">${n}</td></tr>`;
+  }).join('')||'<tr><td style="color:var(--gray-400);padding:4px 0">No backward moves in range.</td></tr>';
+
+  // Waiting time — resumed events carry the waiting duration in seconds_in_prev_stage
+  const waitEvents=hist.filter(h=>h.move_type==='resumed'&&h.seconds_in_prev_stage!=null);
+  const waitByReason={};waitEvents.forEach(h=>{
+    // the reason lives on the paired 'waiting' event right before this resume — look it up from full history near this project/time
+    const pairedWait=pbHub.history.find(w=>w.project_id===h.project_id&&w.move_type==='waiting'&&new Date(w.created_at)<=new Date(h.created_at));
+    const k=pairedWait?.reason_code||'other';
+    waitByReason[k]=(waitByReason[k]||0)+Number(h.seconds_in_prev_stage);
+  });
+  const totalWaitSecs=waitEvents.reduce((a,h)=>a+Number(h.seconds_in_prev_stage),0);
+  const waitRows=Object.entries(waitByReason).sort((a,b)=>b[1]-a[1]).map(([c,secs])=>{
+    const lbl=(pbHub.reasons.find(r=>r.code===c)||{}).label||c;
+    return`<tr><td style="padding:4px 10px 4px 0">${lbl}</td><td style="padding:4px 0;text-align:right;font-weight:600">${pbHubDur(secs)}</td></tr>`;
+  }).join('')||'<tr><td style="color:var(--gray-400);padding:4px 0">No completed waiting periods in range.</td></tr>';
+
+  // Per-owner breakdown
+  const ownerMoves={};forwardMoves.forEach(h=>{
+    const b=pbHub.board[h.project_id];const o=b?.owner||'(unassigned)';
+    ownerMoves[o]=ownerMoves[o]||[];ownerMoves[o].push(Number(h.seconds_in_prev_stage));
+  });
+  const ownerRows=Object.entries(ownerMoves).sort((a,b)=>b[1].length-a[1].length).map(([o,arr])=>{
+    const avg=Math.round(arr.reduce((a,b)=>a+b,0)/arr.length);
+    return`<tr><td style="padding:4px 10px 4px 0">${o}</td><td style="padding:4px 10px;text-align:right">${arr.length} moves</td><td style="padding:4px 0;text-align:right;color:var(--gray-500)">avg ${pbHubDur(avg)}</td></tr>`;
+  }).join('')||'<tr><td style="color:var(--gray-400);padding:4px 0">No moves in range.</td></tr>';
+
+  // Weekly trend — avg WIP+QA duration per week, last 8 weeks (or full range if shorter)
+  const weeks=[];
+  for(let i=7;i>=0;i--){
+    const ws=new Date();ws.setDate(ws.getDate()-ws.getDay()+1-i*7);ws.setHours(0,0,0,0);
+    const we=new Date(ws);we.setDate(we.getDate()+7);
+    const inWeek=pbHub.history.filter(h=>h.move_type==='forward'&&(h.from_stage==='wip'||h.from_stage==='ready_qa')&&h.seconds_in_prev_stage!=null&&new Date(h.created_at)>=ws&&new Date(h.created_at)<we);
+    const avg=inWeek.length?Math.round(inWeek.reduce((a,h)=>a+Number(h.seconds_in_prev_stage),0)/inWeek.length):0;
+    weeks.push({label:ws.toLocaleDateString('en-US',{month:'short',day:'numeric'}),avg,count:inWeek.length});
+  }
+  const maxAvg=Math.max(1,...weeks.map(w=>w.avg));
+  const trendRows=weeks.map(w=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+    <span style="width:56px;font-size:10px;color:var(--gray-500);flex-shrink:0">${w.label}</span>
+    <div style="flex:1;background:var(--gray-100);border-radius:4px;height:16px;overflow:hidden"><div style="width:${w.avg?Math.max(3,w.avg/maxAvg*100):0}%;height:100%;background:#7c3aed"></div></div>
+    <span style="width:70px;font-size:10px;color:var(--gray-500);text-align:right;flex-shrink:0">${w.count?pbHubDur(w.avg):'—'}</span>
+  </div>`).join('');
+
+  // Filtered movement history table
+  const histRows=hist.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,100).map(h=>{
     const t=PB_STAGES[PB_IDX[h.to_stage]]?.label||h.to_stage,f=PB_STAGES[PB_IDX[h.from_stage]]?.label||h.from_stage||'—';
     const icon={forward:'→',backward:'↩',waiting:'⏸',resumed:'▶'}[h.move_type]||'·';
     const rl=(pbHub.reasons.find(r=>r.code===h.reason_code)||{}).label||h.reason_code||'';
@@ -2239,17 +2345,44 @@ function renderProductionQueue(){
       <td style="padding:3px 0;color:var(--gray-400);white-space:nowrap">${h.seconds_in_prev_stage!=null?pbHubDur(Number(h.seconds_in_prev_stage)):''}</td>
       <td style="padding:3px 0 3px 10px;color:var(--gray-400)">${h.moved_by||''}</td></tr>`;
   }).join('');
+
+  const card=(title,body)=>`<div class="pp-card" style="margin-bottom:14px"><div class="pp-card-head"><span class="pp-card-title">${title}</span></div><div style="padding:12px 14px">${body}</div></div>`;
+
   el.innerHTML=`
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
-      <div style="font-size:12px;color:var(--gray-500)">Live from Daily Check-In — Production moves cards there; this view is read-only.${backMoves.length?' · <b style="color:var(--red)">'+backMoves.length+' backward move'+(backMoves.length>1?'s':'')+'</b>':''}${waitingNow?' · <b style="color:#92400e">'+waitingNow+' waiting</b>':''}</div>
-      <button class="btn" style="font-size:11px" onclick="pbHub.loaded=false;renderProductionQueue()">↻ Refresh</button>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+      <select style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pbRepF.range=this.value;renderProductionReports()">
+        ${[['7','Last 7 days'],['30','Last 30 days'],['90','Last 90 days'],['all','All time']].map(([v,l])=>`<option value="${v}" ${pbRepF.range===v?'selected':''}>${l}</option>`).join('')}
+      </select>
+      <select style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pbRepF.owner=this.value;renderProductionReports()">
+        <option value="">All owners</option>${owners.map(o=>`<option ${pbRepF.owner===o?'selected':''}>${o}</option>`).join('')}
+      </select>
+      <input style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:180px" placeholder="Filter by customer…" value="${(pbRepF.customer||'').replace(/"/g,'&quot;')}" oninput="pbRepF.customer=this.value;renderProductionReports()">
+      <button class="btn" onclick="pbRepCsv()">⬇ Export CSV</button>
+      <span style="font-size:11px;color:var(--gray-400);margin-left:auto">${hist.length} movement${hist.length!==1?'s':''} in range</span>
     </div>
-    <div style="margin-bottom:10px">${avgRow}<span style="font-size:11px;color:var(--gray-600)">Top delay reasons: ${topReasons}</span></div>
-    <div class="pb-scroll"><div class="pb-cols">${cols}</div></div>
-    <details style="margin-top:6px"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--gray-600)">Movement history (latest 25)</summary>
-      <table style="font-size:11px;border-collapse:collapse;margin-top:8px;width:100%">${histRows||'<tr><td style="color:var(--gray-400)">No movements yet.</td></tr>'}</table></details>`;
+
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">
+      <div class="metric"><div class="metric-label">Total moves</div><div class="metric-val">${hist.length}</div></div>
+      <div class="metric"><div class="metric-label">Backward moves</div><div class="metric-val ${backMoves.length?'red':''}">${backMoves.length}</div></div>
+      <div class="metric"><div class="metric-label">Total waiting time</div><div class="metric-val">${pbHubDur(totalWaitSecs)}</div></div>
+      <div class="metric"><div class="metric-label">Currently waiting</div><div class="metric-val">${Object.values(pbHub.board).filter(b=>b.waiting).length}</div></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:14px;align-items:start">
+      <div>
+        ${card('⏱ Average time per stage',`<table style="width:100%;font-size:12px"><tr style="color:var(--gray-400);font-size:10px;text-transform:uppercase"><td>Stage</td><td style="text-align:right">Avg</td><td style="text-align:right">Max</td><td style="text-align:right">Moves</td></tr>${stageStatRows}</table>`)}
+        ${card('📈 WIP/QA duration trend — last 8 weeks',trendRows)}
+        ${card('👤 By production owner',`<table style="width:100%;font-size:12px">${ownerRows}</table>`)}
+      </div>
+      <div>
+        ${card('↩ Backward moves by reason',`<table style="width:100%;font-size:12px">${backRows}</table>`)}
+        ${card('⏸ Waiting time by reason',`<table style="width:100%;font-size:12px">${waitRows}</table>`)}
+      </div>
+    </div>
+
+    ${card('📜 Movement history (up to 100, filtered)',`<table style="font-size:11px;border-collapse:collapse;width:100%">${histRows||'<tr><td style="color:var(--gray-400)">No movements in range.</td></tr>'}</table>`)}
+  `;
 }
-function renderQaQueue(){renderQueueBoard('qa');}
 
 // ── PROCUREMENT COMMAND CENTER ────────────────────────────────
 // Every number here is computed from real project/milestone/history data.
