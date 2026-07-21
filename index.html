@@ -333,6 +333,8 @@ body.production-view-active .header-inner{max-width:none;width:100%;padding-left
 .pb-card{width:100%;background:var(--white);border:1px solid var(--gray-200);border-left:4px solid #7c3aed;border-radius:10px;margin-bottom:12px;overflow:hidden;cursor:pointer}
 .pb-card.pb-waiting{border-left-color:#d97706;background:#fffaf2}
 .pb-img{width:100%;height:160px;object-fit:contain;background:#f2f2f2;display:block}
+.pb-noimg{width:100%;height:150px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--gray-400);background:#f2f2f2;cursor:pointer;border-bottom:1px solid var(--gray-100)}
+.pb-noimg:hover{color:#7c3aed}
 .pb-body{padding:14px}
 .pb-name{font-size:15px;font-weight:700;line-height:1.3;margin-bottom:2px}
 .pb-so{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--red);word-break:break-word;margin-bottom:4px}
@@ -2039,6 +2041,20 @@ async function pbHubLoad(){
   pbHub.photos={};(ph.data||[]).forEach(p=>{if((p.label||'').toLowerCase()==='kickoff')pbHub.photos[p.project_id]=p;});
   pbHub.loaded=true;pbHub.missing=false;
 }
+// A project counts as genuinely SO-split only if EVERY one of its
+// milestones is tagged — not just "does at least one exist with a tag".
+// A single stray tagged row (from an old partial split, a bug, or a manual
+// fix) must never be enough to flip a project into split-mode, because
+// every consumer of that flag either inserts a full duplicate milestone
+// set per SO (data corruption) or hides all untagged milestones from view
+// (data that looks deleted). This was fixed piecemeal in several places;
+// this helper is now the single source of truth for that decision.
+function isProjectFullySplit(projMs){
+  return projMs.length>0&&projMs.every(m=>m.so_tag);
+}
+function pbHasProductionMs(pid){
+  return milestones.some(m=>m.project_id===pid&&(m.key==='production-start'||m.key==='production-end'));
+}
 function pbHubStageOf(p){
   const b=pbHub.board[p.id];
   if(b)return b.stage;
@@ -2057,6 +2073,86 @@ function pbHubSo(soRaw){
   return{text:sos.slice(0,3).join(', ')+' +'+(sos.length-3)+' more',title:sos.join(', ')};
 }
 function pbHubDur(s){if(s==null)return'—';const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600);if(d>0)return d+'d '+h+'h';const m=Math.floor((s%3600)/60);return h>0?h+'h '+m+'m':m+'m';}
+// ── KICKOFF PHOTO UPLOAD (Hub side) ──
+// The Production board here is otherwise read-only/click-through — this is
+// the one deliberate exception, since PMs reviewing the board are often the
+// ones who actually have the kick-off screenshot handy. Same bucket, same
+// resize logic as Check-In's uploader, so a photo added from either side
+// shows up identically on both.
+function pbHubAddPhoto(e,pid){
+  e.stopPropagation(); // don't trigger the card's goToProjPage click
+  const existing=pbHub.photos[pid];
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:400px" onclick="event.stopPropagation()">
+    <div class="modal-head"><span class="modal-title">📷 Kick-off screenshot</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <input type="file" id="pbh-file" accept="image/*" style="display:none" onchange="pbHubUploadFile('${pid}',this.files[0])">
+      <button class="btn btn-primary" style="width:100%;padding:14px" onclick="document.getElementById('pbh-file').click()">⬆ Upload image from this device</button>
+      <div style="text-align:center;font-size:11px;color:var(--gray-400);margin:10px 0">— or —</div>
+      <label style="font-size:11px;font-weight:600">Paste an image URL (SharePoint / Odoo)</label>
+      <input id="pbh-url" value="${(existing?.url||'').replace(/"/g,'&quot;')}" placeholder="https://…" style="width:100%;font-size:12px;padding:7px;border:1px solid var(--gray-300);border-radius:8px;margin-top:4px">
+      <div id="pbh-status" style="font-size:11px;color:#7c3aed;margin-top:8px;display:none"></div>
+    </div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="pbHubSaveUrl('${pid}')">Save URL</button></div>
+  </div></div>`;
+}
+function pbHubStatus(msg){const el=document.getElementById('pbh-status');if(el){el.style.display='block';el.textContent=msg;}}
+async function pbHubSaveUrl(pid){
+  const url=(document.getElementById('pbh-url')?.value||'').trim();
+  if(!url){showToast('No URL entered');return;}
+  closeModal();
+  await pbHubSavePhoto(pid,url);
+}
+function pbHubShrinkImage(file){
+  return new Promise((resolve,reject)=>{
+    const img=new Image();
+    img.onload=()=>{
+      const MAX=1600;let{width:w,height:h}=img;
+      if(Math.max(w,h)>MAX){const r=MAX/Math.max(w,h);w=Math.round(w*r);h=Math.round(h*r);}
+      const c=document.createElement('canvas');c.width=w;c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      c.toBlob(b=>b?resolve(b):reject(new Error('Could not process image')),'image/jpeg',0.85);
+    };
+    img.onerror=()=>reject(new Error('Could not read image'));
+    img.src=URL.createObjectURL(file);
+  });
+}
+async function pbHubUploadFile(pid,file){
+  if(!file)return;
+  if(!/^image\//.test(file.type)){pbHubStatus('That file is not an image.');return;}
+  try{
+    pbHubStatus('Preparing image…');
+    const blob=await pbHubShrinkImage(file);
+    const path=pid+'/'+Date.now()+'.jpg';
+    pbHubStatus('Uploading…');
+    const{error:upErr}=await sb.storage.from('kickoff').upload(path,blob,{contentType:'image/jpeg',upsert:false});
+    if(upErr){
+      if(/bucket.*not.*found|not found/i.test(upErr.message||'')){
+        pbHubStatus('⚠ Storage bucket "kickoff" not found — run production-board-migration.sql in Supabase, then retry.');
+      }else{
+        pbHubStatus('⚠ Upload failed: '+upErr.message);
+      }
+      return;
+    }
+    const{data:pub}=sb.storage.from('kickoff').getPublicUrl(path);
+    if(!pub?.publicUrl){pbHubStatus('⚠ Uploaded but could not get a public URL — is the bucket set to Public?');return;}
+    closeModal();
+    await pbHubSavePhoto(pid,pub.publicUrl);
+  }catch(e){pbHubStatus('⚠ '+(e.message||'Upload failed'));}
+}
+async function pbHubSavePhoto(pid,url){
+  const existing=pbHub.photos[pid];
+  if(existing){
+    const{error}=await sb.from('project_photos').update({url,uploaded_by:currentUserName}).eq('id',existing.id);
+    if(error){showToast('⚠ '+error.message);return;}
+    existing.url=url;
+  } else {
+    const{data,error}=await sb.from('project_photos').insert({project_id:pid,url,label:'kickoff',uploaded_by:currentUserName}).select().single();
+    if(error){showToast('⚠ '+error.message);return;}
+    pbHub.photos[pid]=data;
+  }
+  showToast('📷 Screenshot saved ✓');renderProductionQueue();
+}
 let pbHubShippedLimit=20;
 const pbHubSoExpanded=new Set();
 function pbHubSoHtml(soRaw,pid){
@@ -2073,7 +2169,7 @@ function renderProductionQueue(){
     return;
   }
   if(pbHub.missing){renderQueueBoard('production');return;} // migration not run → legacy queue
-  const ap=filterBySales(filterByPM(activeProjects('prodqueue')));
+  const ap=filterBySales(filterByPM(activeProjects('prodqueue'))).filter(p=>pbHasProductionMs(p.id));
   let shippedTotal=0;
   const cols=PB_STAGES.map(s=>{
     let cards=ap.filter(p=>pbHubStageOf(p)===s.key).sort((a,b)=>{
@@ -2098,7 +2194,8 @@ function renderProductionQueue(){
       const late=prodEnd&&daysDiff(prodEnd)<0&&pbHubStageOf(p)!=='shipped';
       const machine=[p.product_type,p.form_factor].filter(Boolean).join(' · ');
       return`<div class="pb-card ${b.waiting?'pb-waiting':''}" style="border-left-color:${b.waiting?'#d97706':s.color}" onclick="goToProjPage('${p.id}')">
-        ${img?`<img class="pb-img" src="${img.url}" onerror="this.style.display='none'">`:''}
+        ${img?`<img class="pb-img" src="${img.url}" draggable="false" onclick="pbHubAddPhoto(event,'${p.id}')" style="cursor:pointer" title="Click to replace" onerror="this.outerHTML='<div class=\\'pb-noimg\\' onclick=\\'pbHubAddPhoto(event,&quot;${p.id}&quot;)\\'>📷 Image link broken — click to replace</div>'">`
+            :`<div class="pb-noimg" onclick="pbHubAddPhoto(event,'${p.id}')">📷 Add kick-off screenshot</div>`}
         <div class="pb-body">
           <div class="pb-name">${p.name||''}</div>
           <div class="pb-so">${pbHubSoHtml(p.so_number,p.id)}</div>
@@ -2997,7 +3094,7 @@ function renderOverview(){
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
   // Check if milestones are already split by SO
   const soList=(proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
-  const hasSoTags=projMs.some(m=>m.so_tag);
+  const hasSoTags=isProjectFullySplit(projMs);
   const canSplit=soList.length>1&&!hasSoTags;
 
   const buildMsHtml=(ms,soLabel='')=>{
@@ -3475,7 +3572,7 @@ function renderDeptView(dept){
   const projRows=filteredProjects.flatMap(p=>{
     const soList=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
     const pMs=milestones.filter(m=>m.project_id===p.id);
-    const hasSoTags=pMs.some(m=>m.so_tag);
+    const hasSoTags=isProjectFullySplit(pMs);
     // If single SO or no SO tags — one row as normal
     if(soList.length<=1||!hasSoTags) return[makeRow(p)];
     // Multi-SO with tags — one row per SO, each using that SO's milestone dates
@@ -4700,7 +4797,7 @@ function openEditProj(id){
   const proj=projects.find(p=>p.id===id);if(!proj)return;
   const overviewConfig=effectiveProjectConfig(proj);
   const projMs=milestones.filter(m=>m.project_id===id);
-  const hasSoTags=projMs.some(m=>m.so_tag);
+  const hasSoTags=isProjectFullySplit(projMs);
   const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
   let msRows='';
   if(hasSoTags&&soList.length>1){
@@ -5684,7 +5781,7 @@ function renderProjPageBody(){
 
   // Milestones from hub — group by SO if split
   const ppProj=projects.find(p=>p.id===ppProjId);
-  const ppHasSoTags=pMs.some(m=>m.so_tag);
+  const ppHasSoTags=isProjectFullySplit(pMs);
   const ppSoList=(ppProj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
 
   const buildPPMsRow=(m)=>{
@@ -7737,7 +7834,7 @@ async function addFinalQCToAllProjects(){
   const inserts=[];
   for(const proj of activeProjs){
     const projMs=milestones.filter(m=>m.project_id===proj.id);
-    const hasSoTags=projMs.some(m=>m.so_tag);
+    const hasSoTags=isProjectFullySplit(projMs);
     if(hasSoTags){
       // SO-split — handle per SO
       const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
@@ -9182,7 +9279,14 @@ async function backfillMilestones(projId){
   const proj=projects.find(p=>p.id===projId);if(!proj)return;
   const projMs=milestones.filter(m=>m.project_id===projId);
   const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
-  const hasSoTags=projMs.some(m=>m.so_tag);
+  // Only treat this project as genuinely SO-split if EVERY milestone is
+  // tagged — same fix applied to saveEditProj/openAddMsForProj. Previously
+  // this checked projMs.some(m=>m.so_tag) (any single tagged row), so a
+  // project with a stray tagged milestone would get a FULL duplicate
+  // milestone set (including vinyl) inserted per SO tag on top of what
+  // already existed untagged — this was the confirmed cause of vinyl (and
+  // potentially any other key) appearing multiple times per SO group.
+  const hasSoTags=isProjectFullySplit(projMs);
   const targets=(hasSoTags&&soList.length>1)?soList:[null];
   const ins=[];
   targets.forEach(tag=>{
