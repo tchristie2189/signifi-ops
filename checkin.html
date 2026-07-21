@@ -128,15 +128,9 @@ body.production-mode #ci-content{width:100%;max-width:none;}
 
 <div class="header">
   <div class="header-inner">
-    <div class="logo">
-      <svg height="20" viewBox="0 0 90 24" xmlns="http://www.w3.org/2000/svg">
-        <rect x="0" y="0" width="8" height="8" rx="1.5" fill="#e22f4a"/>
-        <rect x="9" y="0" width="8" height="8" rx="1.5" fill="#e22f4a"/>
-        <rect x="0" y="9" width="8" height="8" rx="1.5" fill="#797879"/>
-        <rect x="9" y="9" width="8" height="8" rx="1.5" fill="#797879"/>
-        <text x="22" y="13" font-family="DM Sans,sans-serif" font-size="11" font-weight="700" fill="white" letter-spacing="0.5">SIGNIFI</text>
-        <text x="22" y="22" font-family="DM Sans,sans-serif" font-size="6" font-weight="400" fill="#555" letter-spacing="1.5">DAILY CHECK-IN</text>
-      </svg>
+    <div class="logo" id="app-logo-wrap">
+      <img id="app-logo-img" src="data:image/png;base64,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" style="height:22px;object-fit:contain;filter:brightness(0) invert(1)" alt="Signifi Solutions">
+      <span style="font-size:9px;color:#797879;margin-left:6px;font-family:var(--mono,monospace);letter-spacing:0.08em;align-self:flex-end;line-height:22px">DAILY CHECK-IN</span>
     </div>
     <div id="dept-badge" style="display:flex;align-items:center;gap:8px"></div>
   </div>
@@ -371,6 +365,9 @@ function pbMsOf(pid,key){return milestones.filter(m=>m.project_id===pid&&m.key==
 function pbKeyDone(pid,key){const ms=pbMsOf(pid,key);return ms.length>0&&ms.every(m=>pbMsDone[m.id]);}
 // Legacy projects with no board row: derive stage from milestone completion so
 // nothing needs manual backfill. First real move lazily creates their row.
+function pbHasProductionMs(pid){
+  return milestones.some(m=>m.project_id===pid&&(m.key==='production-start'||m.key==='production-end'));
+}
 function pbStageOf(pid){
   const b=pbBoard[pid];
   if(b)return b.stage;
@@ -415,7 +412,7 @@ function pbRender(){
   };
   let shippedTotal=0;
   const cols=PB_STAGES.map(s=>{
-    let cards=projects.filter(p=>pbStageOf(p.id)===s.key).filter(match).sort(sortCards);
+    let cards=projects.filter(p=>pbHasProductionMs(p.id)).filter(p=>pbStageOf(p.id)===s.key).filter(match).sort(sortCards);
     if(s.key==='shipped'){
       // Newest first, capped — the full shipped archive lives in the Ops Hub
       cards=cards.sort((a,b)=>((pbBoard[b.id]?.stage_entered_at||'')+'').localeCompare((pbBoard[a.id]?.stage_entered_at||'')+''));
@@ -468,7 +465,7 @@ function pbCard(p){
   const reasonLbl=(pbReasons.find(r=>r.code===b.waiting_reason)||{}).label||b.waiting_reason||'';
   const machine=[p.product_type,p.form_factor].filter(Boolean).join(' · ');
   return`<div class="pb-card ${b.waiting?'pb-waiting':''}" draggable="${b.waiting?'false':'true'}" ondragstart="pbDragStart(event,'${p.id}')" ondragover="pbCardDragOver(event)" ondragleave="pbCardDragLeave(event)" ondrop="pbCardFileDrop(event,'${p.id}')">
-    ${img?`<img class="pb-img" src="${img.url}" alt="kickoff" onclick="window.open('${img.url}','_blank')" onerror="this.outerHTML='<div class=\\'pb-noimg\\' onclick=\\'pbAddPhoto(&quot;${p.id}&quot;)\\'>📷 Image link broken — tap to replace</div>'">`
+    ${img?`<img class="pb-img" src="${img.url}" draggable="false" alt="kickoff" onclick="window.open('${img.url}','_blank')" onerror="this.outerHTML='<div class=\\'pb-noimg\\' onclick=\\'pbAddPhoto(&quot;${p.id}&quot;)\\'>📷 Image link broken — tap to replace</div>'">`
         :`<div class="pb-noimg" onclick="pbAddPhoto('${p.id}')">📷 Add kick-off screenshot</div>`}
     <div class="pb-body">
       <div class="pb-name">${p.name||''}</div>
