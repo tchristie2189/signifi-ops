@@ -1107,9 +1107,19 @@ function getProjectBlocker(proj){
   if(idx===-1||stage==='complete'||idx===PIPELINE_STAGES.length-1)return null; // complete — nothing downstream waiting
   const curStage=PIPELINE_STAGES[idx],nextStage=PIPELINE_STAGES[idx+1];
   const doneMs=curStage.doneKey?milestones.find(m=>m.project_id===proj.id&&m.key===curStage.doneKey):null;
+  const curStageDone=doneMs?isMilestoneDone(doneMs):false;
   let estimate='No date set yet',overdue=false;
-  if(doneMs?.date){
-    const d=daysDiff(doneMs.date);
+
+  // If the current stage's own milestone is already marked done, its date
+  // being in the past is expected — that's NOT overdue. What we actually
+  // want to estimate is the NEXT stage's own target date (e.g. once Shipping
+  // is done, we care whether Delivery's date has passed, not Shipping's).
+  const estimateMs=curStageDone
+    ?(nextStage.key?milestones.find(m=>m.project_id===proj.id&&m.key===nextStage.key):null)
+    :doneMs;
+
+  if(estimateMs?.date){
+    const d=daysDiff(estimateMs.date);
     if(d<0){estimate=`Overdue by ${Math.abs(d)}d`;overdue=true;}
     else if(d===0)estimate='Today';
     else if(d===1)estimate='Tomorrow';
