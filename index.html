@@ -3744,7 +3744,28 @@ function renderDeptView(dept){
       return{_d:sd||'',html};
     });
   });
-  const adHoc=hasFilter?(adHocRows[dept]||[]).filter(r=>(!pmFilter||r.pm===pmFilter)&&!(hideCompleted[dept]&&r.status==='Complete')):[];
+  // Ad hoc rows previously ignored two of the three filter-bar controls entirely:
+  //  1) "Hide completed" checked for status==='Complete', but shipping's own
+  //     terminal status is 'Delivered' (see SHIP_STATUS_OPTS/shipStatusChipCls) —
+  //     so a delivered ad hoc shipment could never be hidden.
+  //  2) The date range (and search box) were applied to project rows only —
+  //     ad hoc rows always rendered regardless of the selected date window.
+  const adHocDoneStatus=dept==='shipping'?'Delivered':'Complete';
+  const adHoc=hasFilter?(adHocRows[dept]||[]).filter(r=>{
+    if(pmFilter&&r.pm!==pmFilter)return false;
+    if(hideCompleted[dept]&&r.status===adHocDoneStatus)return false;
+    if(f){
+      const rd=dept==='shipping'?r.shipDate:r.installDate;
+      if(f.dateFrom&&rd&&rd<f.dateFrom)return false;
+      if(f.dateTo&&rd&&rd>f.dateTo)return false;
+      if(f.search){
+        const q=f.search.toLowerCase();
+        const hay=((r.name||'')+' '+(r.so||'')+' '+(r.client||'')).toLowerCase();
+        if(!hay.includes(q))return false;
+      }
+    }
+    return true;
+  }):[];
   const ahRows=adHoc.map((r,i)=>makeAdHocRow(r,adHocRows[dept].indexOf(r)));
 
   const allItems=hasFilter?[...projRows,...ahRows].sort((a,b)=>{
