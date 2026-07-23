@@ -534,6 +534,9 @@ const SHIP_STATUS_OPTS=['Pending','Scheduled','Picked up','Shipped','Delivered']
 
 let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={},extensionRequests=[];
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
+// Milestones queued for deletion inside the "Edit project" modal — cleared/deleted
+// together on Save instead of hitting the DB (and reloading) on every single click.
+let pendingMsDeletes=new Set();
 let soDetails=[];
 let milestoneDeviations={}; // keyed by project_id → {milestone_key: deviation_row}
 let currentUser=null,currentUserName='';
@@ -3384,8 +3387,8 @@ async function quickUpdateMs(msId,newDate){
   if(!m)return;
   const oldDate=m.date;
   if(!m.original_date)await sb.from('milestones').update({original_date:m.date}).eq('id',msId);
-  await sb.from('milestones').update({date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',msId);
-  m.date=newDate;
+  await sb.from('milestones').update({date:newDate||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',msId);
+  m.date=newDate||null;
   await syncMsDateToVinyl(m,newDate);
   const proj=projects.find(p=>p.id===m.project_id);
   if(proj?.parent_project_id){
@@ -3439,7 +3442,7 @@ function openAddMsForProj(projId){
     <div class="modal-body"><div class="form-grid">
       <div class="field"><label>Type</label><select id="em-type">${typeOpts}</select></div>
       <div class="field full"><label>Label</label><input id="em-label" placeholder="e.g. Installation, Delivery, Training..."></div>
-      <div class="field"><label>Date</label><input id="em-date" type="date" value="${isoD(today())}"></div>
+      <div class="field"><label>Date <span style="font-weight:400;font-size:10px;color:var(--gray-400)">(optional — leave blank if not yet known)</span></label><input id="em-date" type="date"></div>
       ${soField}
     </div></div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEvForProj('${projId}')">Add</button></div>
@@ -3447,8 +3450,8 @@ function openAddMsForProj(projId){
 }
 async function saveEvForProj(projId){
   const label=document.getElementById('em-label').value.trim();
-  const date=document.getElementById('em-date').value;
-  if(!label||!date){alert('Please fill in label and date.');return;}
+  const date=document.getElementById('em-date').value||null;
+  if(!label){alert('Please fill in a label.');return;}
   const soTag=document.getElementById('em-so')?.value||null;
   const{data,error}=await sb.from('milestones').insert({project_id:projId,key:document.getElementById('em-type').value,label,date,original_date:date,changed_by:currentUserName,so_tag:soTag||null}).select();
   if(error){alert('Error: '+error.message);return;}
@@ -4937,6 +4940,7 @@ function clearIntake(){document.querySelectorAll('#tab-intake input,#tab-intake 
 
 // ── EDIT ───────────────────────────────────────────────────
 function openEditProj(id){
+  pendingMsDeletes=new Set();
   const proj=projects.find(p=>p.id===id);if(!proj)return;
   const overviewConfig=effectiveProjectConfig(proj);
   const projMs=milestones.filter(m=>m.project_id===id);
@@ -4951,12 +4955,12 @@ function openEditProj(id){
       const soMs=projMs.filter(m=>m.so_tag===so).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
       if(!soMs.length)return'';
       const header=`<div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em;margin:14px 0 6px;border-left:3px solid var(--red);padding-left:6px">SO: ${so}</div>`;
-      const rows=soMs.map(m=>`<div style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${m.label}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="deleteMs('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></div>`).join('');
+      const rows=soMs.map(m=>`<div id="msrow-${m.id}" style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${m.label}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="markMsForDelete('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></div>`).join('');
       return header+rows;
     }).join('');
     msRows=`<div style="font-size:10px;color:var(--blue);background:var(--blue-bg);border-radius:6px;padding:8px 10px;margin-bottom:8px">💡 This project has ${allSOs.length} SOs. For per-SO naming, address, and "Push to all" tools, use the <strong>Project Page</strong> instead — it has the full SO-aware editor.</div>`+msRows;
   } else {
-    msRows=projMs.map(m=>`<div style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${m.label}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="deleteMs('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></div>`).join('');
+    msRows=projMs.map(m=>`<div id="msrow-${m.id}" style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${m.label}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="markMsForDelete('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></div>`).join('');
   }
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:560px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
     <div class="modal-head"><span class="modal-title">Edit project</span><button class="modal-close" onclick="closeModal()">✕</button></div>
@@ -5107,16 +5111,26 @@ async function saveEditProj(id){
   // Project just transitioned to complete → free its kickoff screenshots from storage
   const _newStatus=document.getElementById('ep-status').value;
   if(_newStatus==='complete'&&proj&&proj.status!=='complete')cleanupKickoffImages(id);
-  const projMs=milestones.filter(m=>m.project_id===id);
+  // Apply any milestone deletions queued via the ✕ button, all at once — this
+  // is what lets multiple milestones be removed without a reload after each one.
+  if(pendingMsDeletes.size){
+    for(const msId of pendingMsDeletes){
+      const m=milestones.find(x=>x.id===msId);
+      await sb.from('milestones').delete().eq('id',msId);
+      await logActivity('removed milestone',m?.label||'',m?.label||'',id,m?.date,null);
+    }
+  }
+  const projMs=milestones.filter(m=>m.project_id===id&&!pendingMsDeletes.has(m.id));
   const dateChanges=[];
   for(const m of projMs){
     const el=document.getElementById('ms-'+m.id);
     if(el&&el.value!==m.date){
-      await sb.from('milestones').update({date:el.value,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
+      await sb.from('milestones').update({date:el.value||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
       await logActivity('updated date',m.label,m.label,id,m.date,el.value);
       if(m.date&&el.value)dateChanges.push({ms:m,oldDate:m.date,newDate:el.value});
     }
   }
+  pendingMsDeletes=new Set();
   await logActivity('edited project',proj?.name||'',proj?.so_number||'',id,null,null);
   // Sync PM change to vinyl_schedule rows linked to this project
   const newPm=document.getElementById('ep-pm')?.value;
@@ -5294,7 +5308,7 @@ async function saveEditMs(id,oldLabel,oldDate){
   const ms=milestones.find(m=>m.id===id);
   const proj=ms?projects.find(p=>p.id===ms.project_id):null;
 
-  const update={label:newLabel,date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()};
+  const update={label:newLabel,date:newDate||null,changed_by:currentUserName,changed_at:new Date().toISOString()};
   if(!ms?.original_date&&newDate)update.original_date=newDate;
 
   const{error}=await sb.from('milestones').update(update).eq('id',id);
@@ -5426,6 +5440,28 @@ async function pushSODateToOthers(projId,fromSO,msKey,newDate,msLabel){
     }
   }
   closeModal();showToast('Pushed to '+updated+' other SOs ✓');await loadAll();
+}
+function markMsForDelete(id){
+  pendingMsDeletes.add(id);
+  const row=document.getElementById('msrow-'+id);
+  if(!row)return;
+  row.style.opacity='0.4';
+  row.querySelectorAll('input,button').forEach(el=>el.disabled=true);
+  const undo=document.createElement('button');
+  undo.textContent='Undo';
+  undo.type='button';
+  undo.style.cssText='grid-column:3;font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;text-decoration:underline;pointer-events:auto';
+  undo.onclick=()=>unmarkMsForDelete(id);
+  row.appendChild(undo);
+  row.lastElementChild.disabled=false; // re-enable the Undo button itself
+}
+function unmarkMsForDelete(id){
+  pendingMsDeletes.delete(id);
+  const row=document.getElementById('msrow-'+id);
+  if(!row)return;
+  row.style.opacity='1';
+  row.querySelectorAll('input,button').forEach(el=>el.disabled=false);
+  if(row.lastElementChild&&row.lastElementChild.textContent==='Undo')row.lastElementChild.remove();
 }
 async function deleteMs(id){if(!confirm('Remove this milestone?'))return;const ms=milestones.find(m=>m.id===id);await sb.from('milestones').delete().eq('id',id);await logActivity('removed milestone',ms?.label||'',ms?.label||'',ms?.project_id||null,ms?.date,null);closeModal();showToast('Removed');await loadAll();}
 async function deleteProj(id){if(!confirm('Delete this project? Cannot be undone.'))return;const proj=projects.find(p=>p.id===id);
@@ -5857,6 +5893,33 @@ async function switchProjPage(id){
 
 function getSection(key){return ppData.sections[key]?.content||'';}
 
+// Custom link "slots" used to be hard-capped at 5 (custom_1..custom_5). This
+// computes the live slot list (base 5 + any extra ones added) from whatever's
+// actually saved, so the cap can grow without a schema change.
+function getCustomLinkSlots(){
+  const found=new Set([1,2,3,4,5]);
+  ppData.links.forEach(l=>{
+    const m=/^custom_(\d+)$/.exec(l.category||'');
+    if(m)found.add(parseInt(m[1]));
+  });
+  return[...found].sort((a,b)=>a-b).map(n=>{
+    const key='custom_'+n;
+    const row=ppData.links.find(l=>l.category===key);
+    return{label:row?.label||('Custom link '+n),key};
+  });
+}
+async function addCustomLinkSlot(){
+  const slots=getCustomLinkSlots();
+  const next=Math.max(...slots.map(s=>parseInt(s.key.split('_')[1])))+1;
+  const key='custom_'+next;
+  const{data,error}=await sb.from('project_links').insert({project_id:ppProjId,label:'Custom link '+next,url:'',category:key,sort_order:ppData.links.length}).select().single();
+  if(error){alert('Error adding link: '+error.message);return;}
+  if(data)ppData.links.push(data);
+  if(document.querySelector('[data-modal="links-popout"]')){openLinksPopout();}
+  else{renderProjPageBody();}
+  setTimeout(()=>{document.getElementById('ppl-customname-'+key)?.focus();},50);
+}
+
 function renderProjPageBody(){
   const proj=projects.find(p=>p.id===ppProjId);
   if(!proj){return;}
@@ -5871,7 +5934,7 @@ function renderProjPageBody(){
   const LINK_CATS=[
     {cat:'Meetings',items:[{label:'Kickoff deck',key:'kickoff_deck'},{label:'Kickoff recording',key:'kickoff_rec'},{label:'Meeting minutes',key:'meeting_min'}]},
     {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Installation Ticket',key:'install_ticket'},{label:'Vision Training',key:'vision_training'}]},
-    {cat:'Custom',items:[{label:'Custom link 1',key:'custom_1'},{label:'Custom link 2',key:'custom_2'},{label:'Custom link 3',key:'custom_3'},{label:'Custom link 4',key:'custom_4'},{label:'Custom link 5',key:'custom_5'}]},
+    {cat:'Custom',items:getCustomLinkSlots()},
     {cat:'Systems & Tools',items:[{label:'Teams Channel',key:'teams'},{label:'SharePoint Site',key:'sharepoint'},{label:'Jira / UI Task',key:'jira'},{label:'QA Task',key:'qa_task'},{label:'Product Template',key:'product_template'},{label:'Badge Reader',key:'badge_reader'},{label:'Employee List',key:'employee_list'},{label:'Facility Site Survey',key:'facility_survey'},{label:'IT Site Survey',key:'it_survey'},{label:'Odoo Task',key:'odoo'},{label:'Vinyl Render Odoo',key:'vinyl_odoo'},{label:'Client Portal',key:'client_portal'}]},
   ];
   // Start with anything saved in project_links table
@@ -5893,7 +5956,7 @@ function renderProjPageBody(){
           const savedRow=ppData.links.find(l=>l.category===item.key);
           const savedName=savedRow?(savedRow.label||item.label):item.label;
           const savedUrl=savedRow?(savedRow.url||''):'';
-          const nameInput='<input class="pp-link-label" value="'+savedName.replace(/"/g,'&quot;')+'" placeholder="Name this link..." style="cursor:text;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;font-size:11px;color:var(--gray-600);width:105px;font-family:var(--font)" onblur="saveCustomLink(\''+item.key+'\',this.value,null)">';
+          const nameInput='<input class="pp-link-label" id="ppl-customname-'+item.key+'" value="'+savedName.replace(/"/g,'&quot;')+'" placeholder="Name this link..." style="cursor:text;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;font-size:11px;color:var(--gray-600);width:105px;font-family:var(--font)" onblur="saveCustomLink(\''+item.key+'\',this.value,null)">';
           const urlInput='<input class="pp-link-input" value="'+savedUrl.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="saveCustomLink(\''+item.key+'\',null,this.value)" onblur="saveCustomLink(\''+item.key+'\',null,this.value)">'+(savedUrl?'<a href="'+savedUrl+'" target="_blank" class="pp-link-go">↗</a>':'<span class="pp-link-go"> </span>');
           return '<div class="pp-link-item">'+nameInput+urlInput+'</div>';
         }
@@ -5909,6 +5972,7 @@ function renderProjPageBody(){
         :'<div class="pp-link-item">'+labelHtml+'<input class="pp-link-input" value="" placeholder="https://..." onchange="savePPLink(\''+item.label+'\',this.value)" onblur="if(this.value)savePPLink(\''+item.label+'\',this.value)"><span class="pp-link-go"> </span></div>';
         return rows+'<div style="padding-left:110px;margin-top:2px"><button onclick="addPPLink(\''+item.label+'\')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>';
       }).join('')}
+      ${cat.cat==='Custom'?'<button onclick="addCustomLinkSlot()" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-top:2px;font-family:var(--font)">+ Add custom link</button>':''}
     </div>`).join('');
 
   // Team table
@@ -8365,7 +8429,6 @@ function openLinksPopout(soOverride=''){
   const ALL_LINKS=[
     {cat:'Meetings',items:['Kickoff recording','Meeting minutes']},
     {cat:'Project Documents',items:['Statement of Work','Installation Ticket','Vision Training']},
-    {cat:'Custom Links',items:['Custom link 1','Custom link 2','Custom link 3','Custom link 4','Custom link 5']},
     {cat:'Systems & Tools',items:['Teams Channel','SharePoint Site','Jira / UI Task','QA Task','Product Template','Badge Reader','Employee List','Facility Site Survey','IT Site Survey','Odoo Task','Vinyl Render Odoo','Client Portal']},
   ];
   const lv=Object.fromEntries((ppData.links||[]).map(l=>[l.label,l.url||'']));
@@ -8384,23 +8447,30 @@ function openLinksPopout(soOverride=''){
   if(soConfig.ui_task_url)lv['Jira / UI Task']=soConfig.ui_task_url;
   if(soConfig.qa_task_url)lv['QA Task']=soConfig.qa_task_url;
   if(soConfig.install_ticket_url)lv['Installation Ticket']=soConfig.install_ticket_url;
+  const customSlots=getCustomLinkSlots();
+  const customLinksHtml='<div style="margin-bottom:10px">'+
+    '<div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.07em;padding:0 20px;margin-bottom:4px">Custom Links</div>'+
+    customSlots.map(slot=>{
+      const row=ppData.links.find(l=>l.category===slot.key);
+      const name=row?.label||slot.label;
+      const url=row?.url||'';
+      return'<div style="display:flex;align-items:center;gap:6px;padding:5px 20px;border-bottom:1px solid var(--gray-50)">'+
+        '<input id="ppl-customname-'+slot.key+'" value="'+name.replace(/"/g,'&quot;')+'" placeholder="Link name..." '+
+        'style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);width:130px;font-family:var(--font);color:var(--gray-600);flex-shrink:0" '+
+        'onblur="saveCustomLink(\''+slot.key+'\',this.value,null)">'+
+        '<input value="'+url.replace(/"/g,'&quot;')+'" placeholder="https://..." '+
+        'style="flex:1;font-family:var(--mono);font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" '+
+        'onchange="saveCustomLink(\''+slot.key+'\',null,this.value)">'+
+        (url?'<a href="'+url+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;flex-shrink:0">↗</a>':'<span style="width:16px"></span>')+
+      '</div>';
+    }).join('')+
+    '<div style="padding:3px 20px"><button onclick="addCustomLinkSlot()" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add custom link</button></div>'+
+  '</div>';
   const catsHtml=ALL_LINKS.map(cat=>{
-    const isCustom=cat.cat==='Custom Links';
     const itemsHtml=cat.items.map(label=>{
       const entries=(ppData.links||[]).filter(l=>l.label===label);
       const url=lv[label]||entries[0]?.url||'';
-      if(isCustom){
-        return'<div style="display:flex;align-items:center;gap:6px;padding:5px 20px;border-bottom:1px solid var(--gray-50)">'+
-          '<input value="'+label.replace(/"/g,'&quot;')+'" placeholder="Link name..." '+
-          'style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);width:130px;font-family:var(--font);color:var(--gray-600);flex-shrink:0" '+
-          'onblur="renamePPLink(\''+label+'\',this.value)">'+
-          '<input value="'+url.replace(/"/g,'&quot;')+'" placeholder="https://..." data-label="'+label+'" '+
-          'style="flex:1;font-family:var(--mono);font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" '+
-          'onchange="savePPLink(\''+label+'\',this.value)">'+
-          (url?'<a href="'+url+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;flex-shrink:0">↗</a>':'<span style="width:16px"></span>')+
-        '</div>';
-      }
-      // Multi-link rows for non-custom items
+      // Multi-link rows
       const rows=entries.length?entries.map((e,i)=>{
         return'<div style="display:flex;align-items:center;gap:8px;padding:5px 20px;border-bottom:1px solid var(--gray-50)">'+
           '<span style="font-size:12px;color:var(--gray-600);min-width:150px;flex-shrink:0">'+(i===0?label:'')+'</span>'+
@@ -8425,13 +8495,16 @@ function openLinksPopout(soOverride=''){
       '<div style="font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.07em;padding:0 20px;margin-bottom:4px">'+cat.cat+'</div>'+
       itemsHtml+
     '</div>';
-  }).join('');
+  });
+  // Reinsert Custom Links between "Project Documents" and "Systems & Tools" to match the original category order.
+  const docsIdx=ALL_LINKS.findIndex(c=>c.cat==='Project Documents');
+  catsHtml.splice(docsIdx+1,0,customLinksHtml);
   document.getElementById('modal-root').innerHTML=`
   <div class="modal-backdrop" onclick="closeModal()">
     <div class="modal" data-modal="links-popout" style="width:600px;max-height:85vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
       <div class="modal-head"><span class="modal-title">🔗 Quick links — ${proj.name||''}${activeSO?' · '+activeSO:''}</span><button class="modal-close" onclick="closeModal()">×</button></div>
       ${soList.length>1?`<div style="padding:10px 20px;border-bottom:1px solid var(--gray-100);display:flex;align-items:center;gap:8px"><label style="font-size:11px;font-weight:600;color:var(--gray-500)">SO configuration</label><select onchange="openLinksPopout(this.value)" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value="">Master defaults</option>${soList.map(so=>`<option value="${so}"${activeSO===so?' selected':''}>${so}</option>`).join('')}</select>${activeSO&&soConfig.form_factor?`<span style="font-size:11px;color:var(--gray-500)">${soConfig.form_factor}</span>`:''}</div>`:''}
-      <div style="overflow-y:auto;flex:1;padding:12px 0">${catsHtml}</div>
+      <div style="overflow-y:auto;flex:1;padding:12px 0">${catsHtml.join('')}</div>
       <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>
     </div>
   </div>`;
