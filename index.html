@@ -505,17 +505,21 @@ const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{
 // missing above a row-count cliff, no error, works fine until it
 // doesn't) is expensive to diagnose after the fact and cheap to avoid
 // up front.
-async function fetchAllRows(table,{select='*',orderCol=null,ascending=true,eq=null,pageSize=1000,tiebreak='id'}={}){
+function _fetchAllRowsQuery(table,{select='*',orderCol=null,ascending=true,eq=null,tiebreak='id'}={}){
+  let q=sb.from(table).select(select);
+  if(eq)Object.entries(eq).forEach(([col,val])=>{q=q.eq(col,val);});
+  if(orderCol)q=q.order(orderCol,{ascending});
+  // Stable pagination: without a unique secondary sort, rows sharing the same
+  // orderCol value (e.g. many milestones on one date) can shuffle between
+  // pages and be skipped or duplicated across page boundaries.
+  if(tiebreak&&tiebreak!==orderCol)q=q.order(tiebreak,{ascending:true});
+  return q;
+}
+async function fetchAllRowsSequential(table,opts={}){
+  const{pageSize=1000}=opts;
   let all=[],from=0,pages=0;
   while(true){
-    let q=sb.from(table).select(select);
-    if(eq)Object.entries(eq).forEach(([col,val])=>{q=q.eq(col,val);});
-    if(orderCol)q=q.order(orderCol,{ascending});
-    // Stable pagination: without a unique secondary sort, rows sharing the same
-    // orderCol value (e.g. many milestones on one date) can shuffle between
-    // pages and be skipped or duplicated across page boundaries.
-    if(tiebreak&&tiebreak!==orderCol)q=q.order(tiebreak,{ascending:true});
-    const{data,error}=await q.range(from,from+pageSize-1);
+    const{data,error}=await _fetchAllRowsQuery(table,opts).range(from,from+pageSize-1);
     if(error)return{data:null,error};
     all=all.concat(data||[]);
     pages++;
@@ -524,6 +528,30 @@ async function fetchAllRows(table,{select='*',orderCol=null,ascending=true,eq=nu
     if(pages>200){console.warn(table+': stopped after 200 pages ('+all.length+' rows) — check for a runaway loop.');break;}
   }
   return{data:all,error:null};
+}
+async function fetchAllRows(table,opts={}){
+  const{select='*',eq=null,pageSize=1000}=opts;
+  // Get the row count first (a cheap head request — no row data transferred),
+  // so we know how many pages exist and can fetch them all in parallel instead
+  // of one-at-a-time. As tables like milestones/milestone_history have grown
+  // past 1000 rows, the old sequential loop meant page 2 couldn't even start
+  // until page 1 finished — this is the main lever on initial load time.
+  let countQ=sb.from(table).select(select,{count:'exact',head:true});
+  if(eq)Object.entries(eq).forEach(([col,val])=>{countQ=countQ.eq(col,val);});
+  const{count,error:countErr}=await countQ;
+  if(countErr||count==null)return fetchAllRowsSequential(table,opts); // fall back if count isn't available
+  if(count===0)return{data:[],error:null};
+  const pageCount=Math.min(Math.ceil(count/pageSize),200);
+  if(pageCount===1){
+    const{data,error}=await _fetchAllRowsQuery(table,opts).range(0,pageSize-1);
+    return{data:data||[],error:error||null};
+  }
+  const results=await Promise.all(Array.from({length:pageCount},(_,i)=>{
+    const from=i*pageSize;
+    return _fetchAllRowsQuery(table,opts).range(from,from+pageSize-1);
+  }));
+  for(const r of results)if(r.error)return{data:null,error:r.error};
+  return{data:results.flatMap(r=>r.data||[]),error:null};
 }
 
 const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end','final-qc':'Final QC',uat:'UAT',installation:'Installation',uninstallation:'Uninstallation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','po-release':'PO Release','mo-release':'MO Release',other:'Other'};
@@ -537,6 +565,11 @@ let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc
 // Milestones queued for deletion inside the "Edit project" modal — cleared/deleted
 // together on Save instead of hitting the DB (and reloading) on every single click.
 let pendingMsDeletes=new Set();
+// Some Quick Links (QA Task, Odoo Task, etc.) can also live directly on the
+// projects table as single-value fields. Those show up in the link list as a
+// synthetic row with id 'proj-<label>' so they're editable/copyable/removable
+// from the same UI as a normal project_links row.
+const PP_LINK_PROJ_FIELDS={'Odoo Task':'odoo_url','Jira / UI Task':'ui_task_url','QA Task':'qa_task_url','Product Template':'product_template_url','Badge Reader':'badge_reader_url','Employee List':'employee_list_url','Facility Site Survey':'facility_survey_url','IT Site Survey':'it_survey_url','Vision Training':'vision_training_url','Vinyl Render Odoo':'vinyl_odoo_url','Installation Ticket':'install_ticket_url','Kickoff deck':'kickoff_deck_url'};
 let soDetails=[];
 let milestoneDeviations={}; // keyed by project_id → {milestone_key: deviation_row}
 let currentUser=null,currentUserName='';
@@ -892,11 +925,13 @@ function renderTab(){
 // ── DATA ───────────────────────────────────────────────────
 // SO lists are split tolerantly (comma / space / semicolon) hub-wide — so_number data uses mixed separators
 let procPoData=[],procLinkData=[],procReadyData={};
+let globalSections={};
+function getGlobalSection(projId,key){return globalSections[projId]?.[key]||'';}
 async function loadAll(){
   // fetchAllRows pages through each table so we always get every row,
   // regardless of Supabase's server-side Max Rows cap (a single .range()
   // request is capped server-side no matter how large a range you ask for).
-  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext,ppo,ppl,prd]=await Promise.all([
+  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext,ppo,ppl,prd,psec]=await Promise.all([
     fetchAllRows('projects',{orderCol:'created_at'}),
     fetchAllRows('milestones',{orderCol:'date'}),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
@@ -912,7 +947,16 @@ async function loadAll(){
     fetchAllRows('procurement_po'),
     fetchAllRows('procurement_po_projects'),
     fetchAllRows('procurement_readiness',{tiebreak:'project_id'}),
+    fetchAllRows('project_sections',{select:'project_id,section_key,content'}),
   ]);
+  // Global lookup for intake notes (project_sections) by project — used to show
+  // dept-specific notes (shipping/install/production/etc.) on their respective
+  // schedule pages, not just inside the single currently-open Project Page.
+  globalSections={};
+  (psec.data||[]).forEach(s=>{
+    if(!globalSections[s.project_id])globalSections[s.project_id]={};
+    globalSections[s.project_id][s.section_key]=s.content;
+  });
   projects=pr.data||[];activityLog=lg.data||[];
   // Guard: never let a failed/empty milestones fetch wipe what's already loaded.
   // Previously `milestones=ms.data||[]` unconditionally overwrote the array, so
@@ -2216,13 +2260,17 @@ function renderProductionBoardView(){
       const rl=(pbHub.reasons.find(r=>r.code===b.waiting_reason)||{}).label||b.waiting_reason||'';
       const late=prodEnd&&daysDiff(prodEnd)<0&&pbHubStageOf(p)!=='shipped';
       const machine=[p.product_type,p.form_factor].filter(Boolean).join(' · ');
+      const naming=(getSOConfigSummary(p).naming_convention||'');
+      const prodNote=getGlobalSection(p.id,'notes_production');
       return`<div class="pb-card ${b.waiting?'pb-waiting':''}" style="border-left-color:${b.waiting?'#d97706':s.color}" onclick="goToProjPage('${p.id}')">
         ${img?`<img class="pb-img" src="${img.url}" draggable="false" onclick="pbHubAddPhoto(event,'${p.id}')" style="cursor:pointer" title="Click to replace" onerror="this.outerHTML='<div class=\\'pb-noimg\\' onclick=\\'pbHubAddPhoto(event,&quot;${p.id}&quot;)\\'>📷 Image link broken — click to replace</div>'">`
             :`<div class="pb-noimg" onclick="pbHubAddPhoto(event,'${p.id}')">📷 Add kick-off screenshot</div>`}
         <div class="pb-body">
           <div class="pb-name">${p.name||''}</div>
           <div class="pb-so">${pbHubSoHtml(p.so_number,p.id)}</div>
+          ${naming?`<div style="font-family:var(--mono);font-size:9px;color:var(--gray-400);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${naming.replace(/"/g,'&quot;')}">${naming}</div>`:''}
           <div class="pb-meta"><b>${p.client||'—'}</b>${machine?'<br>'+machine:''}</div>
+          ${prodNote?`<div style="font-size:10px;color:var(--gray-500);background:var(--gray-50);border-radius:4px;padding:3px 6px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${prodNote.replace(/"/g,'&quot;')}">📝 ${prodNote}</div>`:''}
           <div class="pb-dates">Prod due <b>${prodEnd?fmt(prodEnd):'—'}</b> · Ship <b>${shipD?fmt(shipD):'—'}</b>${b.owner?' · '+b.owner:''}</div>
           <div class="pb-badges">
             <span class="pb-badge">⏱ ${pbHubDur(secs)}</span>
@@ -3638,13 +3686,20 @@ function buildGantt(startKeys,endKeys,segsFn,title,legend){
   },150);
   return`<div class="section" style="margin-bottom:10px"><div class="section-head"><div class="section-title">${title} — Gantt</div><div style="display:flex;align-items:center;gap:8px"><div class="legend-row" style="margin:0;gap:8px">${legHtml}</div>${hideCompletedBtn(deptKey)}</div></div><div class="prod-gantt"><div class="gantt-wrap" id="${ganttId}"><table class="gantt-table"><thead><tr><th class="proj-col">Project</th>${hdr}</tr></thead><tbody>${gRows}</tbody></table></div></div></div>`;
 }
+function deptNotesCell(projId,sectionKey){
+  const txt=getGlobalSection(projId,sectionKey);
+  if(!txt)return'<td><span style="font-size:10px;color:var(--gray-300)">—</span></td>';
+  const esc=txt.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const short=txt.length>50?txt.slice(0,50)+'…':txt;
+  return'<td style="max-width:160px"><span style="font-size:11px;color:var(--gray-600)" title="'+esc+'">'+short.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</span></td>';
+}
 function renderDeptView(dept){
   const el=document.getElementById('tab-'+dept);
   const cfg={
     production:{title:'Production schedule',startKey:'production-start',endKey:'production-end',color:'#7c3aed',cols:['Project','SO','Client','PM','Prod start','Prod end','Duration','Status']},
     quality:{title:'Quality / QA schedule',startKey:'quality-start',endKey:'quality-end',color:'#d97706',cols:['Project','SO','Client','PM','QA start','QA end','Duration','Vinyl','UAT','Status']},
-    shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO','Client','PM','Pack & ship','Delivery','Status','Install Ticket','']},
-    installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO','Client','PM','Training','Installation','Confirmed','Install Ticket','Status','']},
+    shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO','Client','PM','Pack & ship','Delivery','Status','Install Ticket','Notes','']},
+    installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO','Client','PM','Training','Installation','Confirmed','Install Ticket','Status','Notes','']},
   };
   const c=cfg[dept];
   let ganttHtml='';
@@ -3674,7 +3729,7 @@ function renderDeptView(dept){
       const sTicketUrl=getSOConfigSummary(p,'').install_ticket_url||'';
       const sTicketCell=sTicketUrl?'<a href="'+sTicketUrl+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
       extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'delivery'))+'</td>';
-      extraAfterStatus='<td class="date-cell">'+sTicketCell+'</td>';
+      extraAfterStatus='<td class="date-cell">'+sTicketCell+'</td>'+deptNotesCell(p.id,'notes_shipping');
     }
     else if(dept==='installation'){
       const trainMs=milestones.find(m=>m.project_id===p.id&&m.key==='training');
@@ -3685,6 +3740,7 @@ function renderDeptView(dept){
       const ticketUrl=p.install_ticket_url||'';
       const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>`:`<input type="text" value="" placeholder="Paste URL..." data-proj="${p.id}" style="font-size:10px;padding:2px 6px;border:1px solid var(--gray-200);border-radius:4px;width:110px;font-family:var(--font)" onchange="saveInstallTicketUrl('${p.id}',this.value)">`;
       extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';
+      extraAfterStatus=deptNotesCell(p.id,'notes_install');
     }
     const statusCell=dept==='shipping'?'<td>'+shipStatusDropdown(p.id,null,getShippingStatus(p,null))+'</td>':'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>';
     const html='<tr><td style="font-weight:500">'+p.name+'<button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+statusCell+extraAfterStatus+'</tr>';
@@ -3699,13 +3755,14 @@ function renderDeptView(dept){
       const shipTicket=r.install_ticket_url||'';
       const shipTicketCell=shipTicket?'<a href="'+shipTicket+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
       extra='<td class="date-cell">'+fmt(r.shipDate||r.ship_date)+'</td><td class="date-cell">'+fmt(r.deliveryDate||r.delivery_date)+'</td>';
-      extraAfterStatus='<td class="date-cell">'+shipTicketCell+'</td>';
+      extraAfterStatus='<td class="date-cell">'+shipTicketCell+'</td>'+deptNotesCell(r.project_id||'','notes_shipping');
     }
     else if(dept==='installation'){
       const linkedProj=r.project_id?projects.find(p=>p.id===r.project_id):null;
       const adTicket=r.install_ticket_url||linkedProj?.install_ticket_url||'';
       const adTicketCell=adTicket?'<a href="'+adTicket+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
       extra='<td class="date-cell">'+fmt(r.trainingDate||r.training_date)+'</td><td class="date-cell">'+fmt(r.installDate||r.install_date)+'</td><td class="date-cell"><span style="font-size:10px;color:var(--gray-400)">—</span></td><td class="date-cell">'+adTicketCell+'</td>';
+      extraAfterStatus=deptNotesCell(r.project_id||'','notes_install');
     }
     else{extra='<td class="date-cell">'+fmt(r.trainingDate||r.training_date)+'</td><td class="date-cell">'+fmt(r.installDate||r.install_date)+'</td>';}
     const editOC='openEditAdHoc(&quot;'+dept+'&quot;,'+origIdx+')';
@@ -3927,19 +3984,22 @@ function renderPlanogram(){
   const activeFilters=[planFilter.status,planFilter.search,planFilter.dateFrom,planFilter.dateTo].filter(Boolean).length;
   const rows=filtered.map((item,i)=>{
     const origIdx=planogramSchedule.indexOf(item);
+    const readStyle='font-size:12px;color:var(--gray-700);padding:4px 2px;';
     return`<tr draggable="true" data-idx="${origIdx}" data-type="planogram" style="${item.status==='Vacation'?'background:#fefce8;color:#854d0e;font-weight:600;':''}" ondragstart="dragStart(event,${origIdx},'planogram')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'planogram')" ondragleave="dragLeave(event)">
       <td><span class="drag-handle">⠿</span></td><td><span class="priority-num">${item.priority||i+1}</span></td>
-      <td><input class="sched-input" value="${item.so||''}" style="width:100px" onchange="ps2('${item.id}','so',this.value)"></td>
-      <td><input class="sched-input" value="${item.client||''}" onchange="ps2('${item.id}','client',this.value)"></td>
-      <td><input class="sched-input" value="${item.name||''}" onchange="ps2('${item.id}','name',this.value)"></td>
+      <td style="${readStyle}">${item.so||'—'}</td>
+      <td style="${readStyle}">${item.client||'—'}</td>
+      <td style="${readStyle}">${item.name||'—'}</td>
       <td><input class="sched-input" value="${item.machineType||''}" style="width:120px" onchange="ps2('${item.id}','machineType',this.value)"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.planStart||''}" onchange="ps2('${item.id}','planStart',this.value)" title="Planogram start"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.planEnd||''}" onchange="ps2('${item.id}','planEnd',this.value)" title="Planogram end"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${origIdx},'date',this.value,'planogram')"></td>
-      <td><select class="sched-select" onchange="ps2('${item.id}','status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
-      <td><select class="sched-select" style="min-width:100px" onchange="ps2('${item.id}','revision_status',this.value)" title="Revision status">
-        ${['','In Progress','Approved','Revision Requested','Re-approved'].map(s=>`<option value="${s}"${(item.revision_status||'')===(s)?' selected':''}>${s||'— status —'}</option>`).join('')}
-      </select></td>
+      <td>
+        <select class="sched-select" onchange="ps2('${item.id}','status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select>
+        <select class="sched-select" style="margin-top:3px" onchange="ps2('${item.id}','revision_status',this.value)" title="Revision status">
+          ${['','In Progress','Approved','Revision Requested','Re-approved'].map(s=>`<option value="${s}"${(item.revision_status||'')===(s)?' selected':''}>${s||'— revision —'}</option>`).join('')}
+        </select>
+      </td>
       <td><input class="sched-input" value="${(item.notes||'').replace(/"/g,'&quot;')}" placeholder="Notes / revision details..." style="min-width:180px" onchange="ps2('${item.id}','notes',this.value)" title="${item.notes||''}"></td>
       <td style="white-space:nowrap">
         ${item.project_id?`<button onclick="syncPlanToProject(${origIdx})" style="font-size:10px;padding:2px 8px;border-radius:8px;border:1px solid var(--blue);color:var(--blue);background:transparent;cursor:pointer;font-family:var(--font)" title="Push dates to Project Overview milestones">↑ Sync</button> `:''}
@@ -3972,7 +4032,6 @@ function renderPlanogram(){
       <th onclick="sortPlan('planEnd')" style="cursor:pointer">Plan End ↕</th>
       <th onclick="sortPlan('date')" style="cursor:pointer">Sign-off Date ↕</th>
       <th onclick="sortPlan('status')" style="cursor:pointer">Status ↕</th>
-      <th>Revision</th>
       <th>Notes</th>
       <th style="width:28px"></th>
     </tr></thead><tbody>${rows||'<tr><td colspan="12" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
@@ -5001,6 +5060,7 @@ function openEditProj(id){
         <div class="field"><label>Solutions</label><input id="ep-solutions" value="${proj.solutions||''}" placeholder="Solutions contact"></div>
         <div class="field"><label>Sales</label><input id="ep-sales" list="ep-sales-list" value="${proj.sales||''}" placeholder="Sales contact"><datalist id="ep-sales-list">${getSalesList().map(s=>`<option>${s}</option>`).join('')}</datalist></div>
         <div class="field"><label>Account Manager</label><input id="ep-am" list="ep-am-list" value="${proj.account_manager||''}" placeholder="Account Manager"><datalist id="ep-am-list">${getAMList().map(a=>`<option>${a}</option>`).join('')}</datalist></div>
+        <div class="field"><label>Location <span style="font-weight:400;font-size:10px;color:var(--gray-400)">(City, Province, Country)</span></label><input id="ep-location" value="${(proj.location||'').replace(/"/g,'&quot;')}" placeholder="e.g. Toronto, ON, Canada"></div>
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
         <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${overviewConfig.naming_convention||''}</textarea></div>
         <div class="field full"><label>Installation address</label><input id="ep-address" value="${overviewConfig.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
@@ -5108,6 +5168,7 @@ async function saveEditProj(id){
     solutions:document.getElementById('ep-solutions')?.value.trim()||null,
     sales:document.getElementById('ep-sales')?.value.trim()||null,
     account_manager:document.getElementById('ep-am')?.value.trim()||null,
+    location:document.getElementById('ep-location')?.value.trim()||null,
     channel_partner:document.getElementById('ep-cp')?.value.trim()||null,
     status:document.getElementById('ep-status').value,
     notes:document.getElementById('ep-notes').value,
@@ -5986,9 +6047,9 @@ function renderProjPageBody(){
         const rows=entries.length?entries.map((e,i)=>
           '<div class="pp-link-item" style="padding-left:'+(i>0?'110px':'0')+'">'
           +(i===0?labelHtml:'<span class="pp-link-label" style="opacity:0"> </span>')
-          +'<input class="pp-link-input" id="ppl-new-'+e.id+'" value="'+e.url.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="updatePPLink(\''+item.label+'\','+i+',this.value)">'
+          +'<input class="pp-link-input" id="ppl-new-'+e.id+'" value="'+e.url.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="updatePPLink(\''+item.label+'\',\''+e.id+'\',this.value)">'
           +(e.url?'<button onclick="copyLinkUrl(\''+e.url.replace(/'/g,"\\'")+'\',this)" class="pp-link-go" style="border:none;background:none;cursor:pointer;font-family:var(--font)" title="Copy link">⧉</button><a href="'+e.url+'" target="_blank" class="pp-link-go">↗</a>':'<span class="pp-link-go"> </span>')
-          +'<button onclick="removePPLink(\''+item.label+'\','+i+')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px">✕</button>'
+          +'<button onclick="removePPLink(\''+item.label+'\',\''+e.id+'\')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px">✕</button>'
           +'</div>').join('')
         :'<div class="pp-link-item">'+labelHtml+'<input class="pp-link-input" value="" placeholder="https://..." onchange="if(this.value)savePPLink(\''+item.label+'\',this.value)"><span class="pp-link-go"> </span></div>';
         return rows+'<div style="padding-left:110px;margin-top:2px"><button onclick="addPPLink(\''+item.label+'\')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>';
@@ -6124,6 +6185,7 @@ function renderProjPageBody(){
           ${proj.product_type?`<span>📦 ${proj.product_type}</span>`:''}
           ${proj.naming_convention?`<span>🏷 ${proj.naming_convention}</span>`:''}
           ${proj.address?`<span>📍 ${proj.address}</span>`:''}
+          ${proj.location&&proj.location!==proj.address?`<span>🗺 <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(proj.location)}" target="_blank" style="color:#93c5fd;text-decoration:underline">${proj.location}</a></span>`:''}
           ${goLive?`<span>🎯 Go-live: <strong>${fmt(goLive)}</strong></span>`:''}
           ${(()=>{const b=getProjectBlocker(proj);if(!b)return'';return`<span style="color:${b.overdue?'#fca5a5':'#93c5fd'}">🔗 ${b.blockedStage.label} blocked by ${b.blockingStage.label} · ${b.estimate}</span>`;})()}
         </div>
@@ -6177,7 +6239,6 @@ function renderProjPageBody(){
           ];
           const populated=NOTE_SECTIONS.filter(s=>getSection(s.key));
           const empty=NOTE_SECTIONS.filter(s=>!getSection(s.key));
-          if(!populated.length&&!proj.notes)return'';
           return `<div class="pp-card" style="margin-bottom:12px">
             <div class="pp-card-head"><span class="pp-card-title">Intake notes</span><span style="font-size:10px;color:var(--gray-400)">From project intake</span></div>
             <div class="pp-card-body" style="display:flex;flex-direction:column;gap:10px">
@@ -6185,10 +6246,10 @@ function renderProjPageBody(){
                 <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">${s.label}</div>
                 <textarea class="pp-textarea" onchange="savePPSection('${s.key}',this.value)" style="min-height:50px">${getSection(s.key)}</textarea>
               </div>`).join('')}
-              ${proj.notes?`<div>
+              <div>
                 <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">General notes</div>
-                <textarea class="pp-textarea" onchange="saveProjField('${proj.id}','notes',this.value)" style="min-height:50px">${proj.notes.replace(/</g,'&lt;')}</textarea>
-              </div>`:''}
+                <textarea class="pp-textarea" placeholder="General notes..." onchange="saveProjField('${proj.id}','notes',this.value)" style="min-height:50px">${(proj.notes||'').replace(/</g,'&lt;')}</textarea>
+              </div>
               ${empty.length?`<details style="font-size:11px;color:var(--gray-400)"><summary style="cursor:pointer">+ Add ${empty.length} more note type${empty.length>1?'s':''}</summary>
                 <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
                   ${empty.map(s=>`<div>
@@ -6529,6 +6590,8 @@ async function savePPSection(key,value){
     const{data}=await sb.from('project_sections').insert({project_id:ppProjId,section_key:key,content:value,updated_by:currentUserName}).select().single();
     if(data)ppData.sections[key]=data;
   }
+  if(!globalSections[ppProjId])globalSections[ppProjId]={};
+  globalSections[ppProjId][key]=value;
   showPPSaved();
 }
 
@@ -6590,14 +6653,22 @@ async function savePPLink(label,url){
   await refreshLinkDependentViews();
   }finally{_ppLinkSaveInFlight.delete(label);}
 }
-async function updatePPLink(label,idx,url){
-  const lockKey=label+'::'+idx;
+async function updatePPLink(label,linkId,url){
+  const lockKey=label+'::'+linkId;
   while(_ppLinkSaveInFlight.has(lockKey))await new Promise(r=>setTimeout(r,50));
   _ppLinkSaveInFlight.add(lockKey);
   try{
-  const entries=(ppData.links||[]).filter(l=>l.label===label);
-  if(entries[idx]){await sb.from('project_links').update({url}).eq('id',entries[idx].id);entries[idx].url=url;}
-  else{const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:'',sort_order:idx}).select().single();if(data)ppData.links.push(data);}
+  if(linkId&&typeof linkId==='string'&&linkId.startsWith('proj-')){
+    const field=PP_LINK_PROJ_FIELDS[label];
+    if(field){
+      await sb.from('projects').update({[field]:url,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',ppProjId);
+      const p=projects.find(x=>x.id===ppProjId);if(p)p[field]=url;
+    }
+  } else {
+    const row=ppData.links.find(l=>l.id===linkId);
+    if(row){await sb.from('project_links').update({url}).eq('id',linkId);row.url=url;}
+    else{const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:'',sort_order:ppData.links.length}).select().single();if(data)ppData.links.push(data);}
+  }
   await syncQuickLinkToHub(label,url);
   showPPSaved();
   await refreshLinkDependentViews();
@@ -6627,11 +6698,17 @@ async function addPPLink(label){
     },50);
   }
 }
-async function removePPLink(label,idx){
-  const entries=(ppData.links||[]).filter(l=>l.label===label);
-  if(!entries[idx])return;
-  await sb.from('project_links').delete().eq('id',entries[idx].id);
-  ppData.links=ppData.links.filter(l=>l.id!==entries[idx].id);
+async function removePPLink(label,linkId){
+  if(linkId&&typeof linkId==='string'&&linkId.startsWith('proj-')){
+    const field=PP_LINK_PROJ_FIELDS[label];
+    if(field){
+      await sb.from('projects').update({[field]:null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',ppProjId);
+      const p=projects.find(x=>x.id===ppProjId);if(p)p[field]=null;
+    }
+  } else {
+    await sb.from('project_links').delete().eq('id',linkId);
+    ppData.links=ppData.links.filter(l=>l.id!==linkId);
+  }
   if(document.querySelector('[data-modal="links-popout"]')){
     openLinksPopout();
   } else {
@@ -8530,16 +8607,16 @@ function openLinksPopout(soOverride=''){
           '<span style="font-size:12px;color:var(--gray-600);min-width:150px;flex-shrink:0">'+(i===0?label:'')+'</span>'+
           '<input value="'+(e.url||'').replace(/"/g,'&quot;')+'" placeholder="https://..." '+
           'style="flex:1;font-family:var(--mono);font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" '+
-          'onchange="updatePPLink(\''+label+'\','+i+',this.value)">'+
+          'onchange="updatePPLink(\''+label+'\',\''+e.id+'\',this.value)">'+
           (e.url?'<button onclick="copyLinkUrl(\''+e.url.replace(/'/g,"\\'")+'\',this)" style="border:none;background:none;cursor:pointer;font-family:var(--font);font-size:11px;color:var(--blue);flex-shrink:0" title="Copy link">⧉</button><a href="'+e.url+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;flex-shrink:0">↗</a>':'<span style="width:16px"></span>')+
-          '<button onclick="removePPLink(\''+label+'\','+i+')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:12px;flex-shrink:0">✕</button>'+
+          '<button onclick="removePPLink(\''+label+'\',\''+e.id+'\')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:12px;flex-shrink:0">✕</button>'+
         '</div>';
       }).join(''):
         '<div style="display:flex;align-items:center;gap:8px;padding:5px 20px;border-bottom:1px solid var(--gray-50)">'+
           '<span style="font-size:12px;color:var(--gray-600);min-width:150px;flex-shrink:0">'+label+'</span>'+
           '<input value="" placeholder="https://..." '+
           'style="flex:1;font-family:var(--mono);font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" '+
-          'onchange="updatePPLink(\''+label+'\',0,this.value)">'+
+          'onchange="if(this.value)savePPLink(\''+label+'\',this.value)">'+
           '<span style="width:16px"></span>'+
         '</div>';
       const addBtn='<div style="padding:3px 20px 3px 170px"><button onclick="addPPLink(\''+label+'\')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>';
