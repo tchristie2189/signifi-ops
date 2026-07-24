@@ -453,6 +453,14 @@ function pbSoDisplay(soRaw,pid){
   return sos.slice(0,3).join(', ')+` <span class="pb-so-more" onclick="event.stopPropagation();pbToggleSo('${pid}')">+${sos.length-3} more</span>`;
 }
 function pbToggleSo(pid){if(pbSoExpanded.has(pid))pbSoExpanded.delete(pid);else pbSoExpanded.add(pid);pbRender();}
+function pbNamingFor(p){
+  const sos=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  if(sos.length===1){
+    const d=(window._soDetails||[]).find(x=>x.project_id===p.id&&x.so_tag===sos[0]);
+    if(d?.naming_convention)return d.naming_convention;
+  }
+  return p.naming_convention||'';
+}
 function pbOwnerList(){return[...new Set(Object.values(pbBoard).map(b=>b.owner).filter(Boolean))].sort();}
 function pbCard(p){
   const b=pbBoard[p.id]||{};
@@ -464,13 +472,17 @@ function pbCard(p){
   const late=prodEnd&&daysDiff(prodEnd)<0&&pbStageOf(p.id)!=='shipped';
   const reasonLbl=(pbReasons.find(r=>r.code===b.waiting_reason)||{}).label||b.waiting_reason||'';
   const machine=[p.product_type,p.form_factor].filter(Boolean).join(' · ');
+  const naming=pbNamingFor(p);
+  const prodNote=window._sections?.[p.id]?.notes_production||'';
   return`<div class="pb-card ${b.waiting?'pb-waiting':''}" draggable="${b.waiting?'false':'true'}" ondragstart="pbDragStart(event,'${p.id}')" ondragover="pbCardDragOver(event)" ondragleave="pbCardDragLeave(event)" ondrop="pbCardFileDrop(event,'${p.id}')">
     ${img?`<img class="pb-img" src="${img.url}" draggable="false" alt="kickoff" onclick="window.open('${img.url}','_blank')" onerror="this.outerHTML='<div class=\\'pb-noimg\\' onclick=\\'pbAddPhoto(&quot;${p.id}&quot;)\\'>📷 Image link broken — tap to replace</div>'">`
         :`<div class="pb-noimg" onclick="pbAddPhoto('${p.id}')">📷 Add kick-off screenshot</div>`}
     <div class="pb-body">
       <div class="pb-name">${p.name||''}</div>
       <div class="pb-so">${pbSoDisplay(p.so_number,p.id)}</div>
+      ${naming?`<div style="font-family:monospace;font-size:9px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${naming.replace(/"/g,'&quot;')}">${naming}</div>`:''}
       <div class="pb-meta"><b>${p.client||'—'}</b>${machine?'<br>'+machine:''}</div>
+      ${prodNote?`<div style="font-size:10px;color:#64748b;background:#f8fafc;border-radius:4px;padding:3px 6px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${prodNote.replace(/"/g,'&quot;')}">📝 ${prodNote}</div>`:''}
       <div class="pb-dates">Prod due <b>${prodEnd?fmt(prodEnd):'—'}</b> · Ship <b>${shipDate?fmt(shipDate):'—'}</b></div>
       <div class="pb-ctrl">Owner
         <select class="pb-sel" onchange="if(this.value==='__new'){const n=prompt('Owner name:');if(n&&n.trim()){pbSetOwner('${p.id}',n.trim());}else{pbRender();}}else{pbSetOwner('${p.id}',this.value)}" onclick="event.stopPropagation()">
@@ -1620,17 +1632,23 @@ function getGreeting(){const h=new Date().getHours();return h<12?'morning':h<17?
 
 // ── DATA ──────────────────────────────────────────────────
 async function loadCheckinData(){
-  const[pr,ms,ci,ah,sod,ext]=await Promise.all([
+  const[pr,ms,ci,ah,sod,ext,psec]=await Promise.all([
     sbAll('projects','created_at'),
     sbAll('milestones','date'),
     sbAll('checkin_status'),
     sbAll('adhoc_schedule','created_at'),
     sbAll('so_details'),
     sb.from('extension_requests').select('*').eq('status','pending'),
+    sbAll('project_sections'),
   ]);
   projects=pr.data||[];
   milestones=ms.data||[];
   window._soDetails=sod.data||[];
+  window._sections={};
+  (psec.data||[]).forEach(s=>{
+    if(!window._sections[s.project_id])window._sections[s.project_id]={};
+    window._sections[s.project_id][s.section_key]=s.content;
+  });
   extensionRequests=ext.data||[];
   checkins={};
   (ci.data||[]).forEach(c=>{checkins[c.milestone_id]=c;});
