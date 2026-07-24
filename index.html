@@ -5978,7 +5978,7 @@ function renderProjPageBody(){
           const savedName=savedRow?(savedRow.label||item.label):item.label;
           const savedUrl=savedRow?(savedRow.url||''):'';
           const nameInput='<input class="pp-link-label" id="ppl-customname-'+item.key+'" value="'+savedName.replace(/"/g,'&quot;')+'" placeholder="Name this link..." style="cursor:text;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;font-size:11px;color:var(--gray-600);width:105px;font-family:var(--font)" onblur="saveCustomLink(\''+item.key+'\',this.value,null)">';
-          const urlInput='<input class="pp-link-input" value="'+savedUrl.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="saveCustomLink(\''+item.key+'\',null,this.value)" onblur="saveCustomLink(\''+item.key+'\',null,this.value)">'+(savedUrl?'<a href="'+savedUrl+'" target="_blank" class="pp-link-go">↗</a>':'<span class="pp-link-go"> </span>');
+          const urlInput='<input class="pp-link-input" value="'+savedUrl.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="saveCustomLink(\''+item.key+'\',null,this.value)" onblur="saveCustomLink(\''+item.key+'\',null,this.value)">'+(savedUrl?'<button onclick="copyLinkUrl(\''+savedUrl.replace(/'/g,"\\'")+'\',this)" class="pp-link-go" style="border:none;background:none;cursor:pointer;font-family:var(--font)" title="Copy link">⧉</button><a href="'+savedUrl+'" target="_blank" class="pp-link-go">↗</a>':'<span class="pp-link-go"> </span>');
           return '<div class="pp-link-item">'+nameInput+urlInput+'</div>';
         }
         const entries=linkMap[item.label]||[];
@@ -5986,11 +5986,11 @@ function renderProjPageBody(){
         const rows=entries.length?entries.map((e,i)=>
           '<div class="pp-link-item" style="padding-left:'+(i>0?'110px':'0')+'">'
           +(i===0?labelHtml:'<span class="pp-link-label" style="opacity:0"> </span>')
-          +'<input class="pp-link-input" id="ppl-new-'+e.id+'" value="'+e.url.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="updatePPLink(\''+item.label+'\','+i+',this.value)" onblur="updatePPLink(\''+item.label+'\','+i+',this.value)">'
-          +(e.url?'<a href="'+e.url+'" target="_blank" class="pp-link-go">↗</a>':'<span class="pp-link-go"> </span>')
+          +'<input class="pp-link-input" id="ppl-new-'+e.id+'" value="'+e.url.replace(/"/g,'&quot;')+'" placeholder="https://..." onchange="updatePPLink(\''+item.label+'\','+i+',this.value)">'
+          +(e.url?'<button onclick="copyLinkUrl(\''+e.url.replace(/'/g,"\\'")+'\',this)" class="pp-link-go" style="border:none;background:none;cursor:pointer;font-family:var(--font)" title="Copy link">⧉</button><a href="'+e.url+'" target="_blank" class="pp-link-go">↗</a>':'<span class="pp-link-go"> </span>')
           +'<button onclick="removePPLink(\''+item.label+'\','+i+')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px;padding:0 2px">✕</button>'
           +'</div>').join('')
-        :'<div class="pp-link-item">'+labelHtml+'<input class="pp-link-input" value="" placeholder="https://..." onchange="savePPLink(\''+item.label+'\',this.value)" onblur="if(this.value)savePPLink(\''+item.label+'\',this.value)"><span class="pp-link-go"> </span></div>';
+        :'<div class="pp-link-item">'+labelHtml+'<input class="pp-link-input" value="" placeholder="https://..." onchange="if(this.value)savePPLink(\''+item.label+'\',this.value)"><span class="pp-link-go"> </span></div>';
         return rows+'<div style="padding-left:110px;margin-top:2px"><button onclick="addPPLink(\''+item.label+'\')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add link</button></div>';
       }).join('')}
       ${cat.cat==='Custom'?'<button onclick="addCustomLinkSlot()" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-top:2px;font-family:var(--font)">+ Add custom link</button>':''}
@@ -6390,6 +6390,25 @@ function showPPSaved(){
   clearTimeout(ppSaveTimer);
   ppSaveTimer=setTimeout(()=>{el.style.display='none';},2000);
 }
+async function copyLinkUrl(url,btn){
+  if(!url)return;
+  try{
+    await navigator.clipboard.writeText(url);
+  }catch(e){
+    // Fallback for contexts where the Clipboard API isn't available
+    const ta=document.createElement('textarea');
+    ta.value=url;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();
+    try{document.execCommand('copy');}catch(e2){}
+    document.body.removeChild(ta);
+  }
+  if(btn){
+    const orig=btn.textContent;
+    btn.textContent='✓';
+    btn.style.color='var(--success)';
+    setTimeout(()=>{btn.textContent=orig;btn.style.color='';},1200);
+  }
+}
 
 async function saveSODetail(projId,so,field,val){
   const existing=soDetails.find(d=>d.project_id===projId&&d.so_tag===so);
@@ -6541,7 +6560,15 @@ async function refreshLinkDependentViews(){
   else if(currentTab==='gendocs')renderGenDocs();
   else if(currentTab==='overview')renderOverview();
 }
+const _ppLinkSaveInFlight=new Set();
 async function savePPLink(label,url){
+  // Guard against two overlapping calls for the same label both deciding
+  // "no existing row" and both inserting — that race is what produced the
+  // duplicate link rows. If a save for this label is already running, wait
+  // for it before deciding whether to insert or update.
+  while(_ppLinkSaveInFlight.has(label))await new Promise(r=>setTimeout(r,50));
+  _ppLinkSaveInFlight.add(label);
+  try{
   await syncQuickLinkToHub(label,url);
   // Find existing row — check by label first, then by custom category placeholder (renamed links)
   const DEFAULT_CUSTOM=['Custom link 1','Custom link 2','Custom link 3','Custom link 4','Custom link 5'];
@@ -6561,14 +6588,20 @@ async function savePPLink(label,url){
   }
   showPPSaved();
   await refreshLinkDependentViews();
+  }finally{_ppLinkSaveInFlight.delete(label);}
 }
 async function updatePPLink(label,idx,url){
+  const lockKey=label+'::'+idx;
+  while(_ppLinkSaveInFlight.has(lockKey))await new Promise(r=>setTimeout(r,50));
+  _ppLinkSaveInFlight.add(lockKey);
+  try{
   const entries=(ppData.links||[]).filter(l=>l.label===label);
   if(entries[idx]){await sb.from('project_links').update({url}).eq('id',entries[idx].id);entries[idx].url=url;}
   else{const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:'',sort_order:idx}).select().single();if(data)ppData.links.push(data);}
   await syncQuickLinkToHub(label,url);
   showPPSaved();
   await refreshLinkDependentViews();
+  }finally{_ppLinkSaveInFlight.delete(lockKey);}
 }
 async function addPPLink(label){
   const{data,error}=await sb.from('project_links').insert({project_id:ppProjId,label,url:'',category:'',sort_order:ppData.links.filter(l=>l.label===label).length}).select().single();
@@ -8482,7 +8515,7 @@ function openLinksPopout(soOverride=''){
         '<input value="'+url.replace(/"/g,'&quot;')+'" placeholder="https://..." '+
         'style="flex:1;font-family:var(--mono);font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" '+
         'onchange="saveCustomLink(\''+slot.key+'\',null,this.value)">'+
-        (url?'<a href="'+url+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;flex-shrink:0">↗</a>':'<span style="width:16px"></span>')+
+        (url?'<button onclick="copyLinkUrl(\''+url.replace(/'/g,"\\'")+'\',this)" style="border:none;background:none;cursor:pointer;font-family:var(--font);font-size:11px;color:var(--blue);flex-shrink:0" title="Copy link">⧉</button><a href="'+url+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;flex-shrink:0">↗</a>':'<span style="width:16px"></span>')+
       '</div>';
     }).join('')+
     '<div style="padding:3px 20px"><button onclick="addCustomLinkSlot()" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)">+ Add custom link</button></div>'+
@@ -8498,7 +8531,7 @@ function openLinksPopout(soOverride=''){
           '<input value="'+(e.url||'').replace(/"/g,'&quot;')+'" placeholder="https://..." '+
           'style="flex:1;font-family:var(--mono);font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" '+
           'onchange="updatePPLink(\''+label+'\','+i+',this.value)">'+
-          (e.url?'<a href="'+e.url+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;flex-shrink:0">↗</a>':'<span style="width:16px"></span>')+
+          (e.url?'<button onclick="copyLinkUrl(\''+e.url.replace(/'/g,"\\'")+'\',this)" style="border:none;background:none;cursor:pointer;font-family:var(--font);font-size:11px;color:var(--blue);flex-shrink:0" title="Copy link">⧉</button><a href="'+e.url+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;flex-shrink:0">↗</a>':'<span style="width:16px"></span>')+
           '<button onclick="removePPLink(\''+label+'\','+i+')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:12px;flex-shrink:0">✕</button>'+
         '</div>';
       }).join(''):
