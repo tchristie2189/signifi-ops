@@ -3963,12 +3963,13 @@ function sortVinyl(key){
 function applyPlanFilter(data){
   return data.filter(item=>{
     if(planFilter.status&&item.status!==planFilter.status)return false;
-    if(planFilter.search){const q=planFilter.search.toLowerCase();if(!(item.name||'').toLowerCase().includes(q)&&!(item.so||'').toLowerCase().includes(q)&&!(item.client||'').toLowerCase().includes(q)&&!(item.machineType||'').toLowerCase().includes(q))return false;}
+    if(planFilter.search){const q=planFilter.search.toLowerCase();if(!(item.name||'').toLowerCase().includes(q)&&!(item.so||'').toLowerCase().includes(q)&&!(item.client||'').toLowerCase().includes(q)&&!(planLinkedProj(item)?.form_factor||'').toLowerCase().includes(q))return false;}
     if(planFilter.dateFrom&&item.date&&item.date<planFilter.dateFrom)return false;
     if(planFilter.dateTo&&item.date&&item.date>planFilter.dateTo)return false;
     return true;
   });
 }
+function planLinkedProj(item){return item.project_id?projects.find(p=>p.id===item.project_id):null;}
 function renderPlanogram(){
   const el=document.getElementById('tab-planogram');
   const planBase=hideCompleted['planogram']?planogramSchedule.filter(v=>v.status!=='Complete'):planogramSchedule;
@@ -3985,12 +3986,13 @@ function renderPlanogram(){
   const rows=filtered.map((item,i)=>{
     const origIdx=planogramSchedule.indexOf(item);
     const readStyle='font-size:12px;color:var(--gray-700);padding:4px 2px;';
+    const soFull=(item.so||'').replace(/"/g,'&quot;');
     return`<tr draggable="true" data-idx="${origIdx}" data-type="planogram" style="${item.status==='Vacation'?'background:#fefce8;color:#854d0e;font-weight:600;':''}" ondragstart="dragStart(event,${origIdx},'planogram')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'planogram')" ondragleave="dragLeave(event)">
       <td><span class="drag-handle">⠿</span></td><td><span class="priority-num">${item.priority||i+1}</span></td>
-      <td style="${readStyle}">${item.so||'—'}</td>
-      <td style="${readStyle}">${item.client||'—'}</td>
-      <td style="${readStyle}">${item.name||'—'}</td>
-      <td><input class="sched-input" value="${item.machineType||''}" style="width:120px" onchange="ps2('${item.id}','machineType',this.value)"></td>
+      <td style="${readStyle}max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${soFull}">${item.so?truncateSO(item.so,3):'—'}</td>
+      <td style="${readStyle}max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(item.client||'').replace(/"/g,'&quot;')}">${item.client||'—'}</td>
+      <td style="${readStyle}max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(item.name||'').replace(/"/g,'&quot;')}">${item.name||'—'}</td>
+      <td style="${readStyle}max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${((planLinkedProj(item)?.form_factor)||'').replace(/"/g,'&quot;')}">${planLinkedProj(item)?.form_factor||'—'}</td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.planStart||''}" onchange="ps2('${item.id}','planStart',this.value)" title="Planogram start"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.planEnd||''}" onchange="ps2('${item.id}','planEnd',this.value)" title="Planogram end"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${origIdx},'date',this.value,'planogram')"></td>
@@ -4027,7 +4029,7 @@ function renderPlanogram(){
       <th onclick="sortPlan('so')" style="cursor:pointer">SO ↕</th>
       <th onclick="sortPlan('client')" style="cursor:pointer">Customer ↕</th>
       <th onclick="sortPlan('name')" style="cursor:pointer">Project ↕</th>
-      <th onclick="sortPlan('machineType')" style="cursor:pointer">Machine Type ↕</th>
+      <th>Form Factor</th>
       <th onclick="sortPlan('planStart')" style="cursor:pointer">Plan Start ↕</th>
       <th onclick="sortPlan('planEnd')" style="cursor:pointer">Plan End ↕</th>
       <th onclick="sortPlan('date')" style="cursor:pointer">Sign-off Date ↕</th>
@@ -5606,8 +5608,8 @@ function exportToExcel(){
   vinylExport.forEach((item,i)=>r2.push([i+1,item.so,item.client,item.name,item.vinylType,item.date||'TBD',item.shipDate||'TBD',item.pm,item.formFactor,item.status]));
   const ws2=XLSX.utils.aoa_to_sheet(r2);XLSX.utils.book_append_sheet(wb,ws2,'Vinyl Schedule');
   // Sheet 3: Planogram Schedule
-  const r3=[['Priority','SO','Customer','Project','Machine Type','Plan Start','Plan End','Sign-off Date','Status']];
-  planogramSchedule.forEach((item,i)=>r3.push([i+1,item.so,item.client,item.name,item.machineType,item.planStart||'',item.planEnd||'',item.date||'TBD',item.status]));
+  const r3=[['Priority','SO','Customer','Project','Form Factor','Plan Start','Plan End','Sign-off Date','Status']];
+  planogramSchedule.forEach((item,i)=>r3.push([i+1,item.so,item.client,item.name,planLinkedProj(item)?.form_factor||'',item.planStart||'',item.planEnd||'',item.date||'TBD',item.status]));
   const ws3=XLSX.utils.aoa_to_sheet(r3);XLSX.utils.book_append_sheet(wb,ws3,'Planogram Schedule');
   // Sheet 4: Production
   const r4=[['Project','SO','Client','Prod Start','Prod End','Duration','Status']];
