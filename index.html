@@ -443,6 +443,7 @@ body.production-view-active .header-inner{max-width:none;width:100%;padding-left
           <div class="nav-group-label">Tools</div>
           <button class="nav-item" id="ni-gendocs" onclick="setTab('gendocs')">📄 Generate docs</button>
           <button class="nav-item" id="ni-templates" onclick="setTab('templates')">📐 Templates</button>
+          <button class="nav-item" id="ni-uat" onclick="setTab('uat')">✅ UAT checklists</button>
           <button class="nav-item" id="ni-intake" onclick="setTab('intake')">➕ New project</button>
           <div class="nav-sep"></div>
           <button class="nav-item" id="nav-more-toggle" onclick="toggleNavMore()" style="color:#666"><span class="nav-more-arrow" style="width:7px;flex-shrink:0">▸</span>More</button>
@@ -469,6 +470,7 @@ body.production-view-active .header-inner{max-width:none;width:100%;padding-left
         <div class="user-chip" id="user-chip">
           <div class="user-avatar" id="user-avatar">?</div>
           <span class="user-name" id="user-name-display">Loading...</span>
+          <span id="user-role-badge" style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#888;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:2px 7px;margin-left:2px;display:none"></span>
         </div>
         <button class="btn-signout" onclick="signOut()">Sign out</button>
       </div>
@@ -499,6 +501,7 @@ body.production-view-active .header-inner{max-width:none;width:100%;padding-left
     <div id="tab-templates" style="display:none"></div>
     <div id="tab-intake" style="display:none"></div>
     <div id="tab-settings" style="display:none"></div>
+    <div id="tab-uat" style="display:none"></div>
   </div>
 </div>
 
@@ -608,7 +611,25 @@ let pendingMsDeletes=new Set();
 const PP_LINK_PROJ_FIELDS={'Odoo Task':'odoo_url','Jira / UI Task':'ui_task_url','QA Task':'qa_task_url','Product Template':'product_template_url','Badge Reader':'badge_reader_url','Employee List':'employee_list_url','Facility Site Survey':'facility_survey_url','IT Site Survey':'it_survey_url','Vision Training':'vision_training_url','Vinyl Render Odoo':'vinyl_odoo_url','Installation Ticket':'install_ticket_url','Kickoff deck':'kickoff_deck_url'};
 let soDetails=[];
 let milestoneDeviations={}; // keyed by project_id → {milestone_key: deviation_row}
-let currentUser=null,currentUserName='';
+let currentUser=null,currentUserName='',currentUserRole='PM';
+// ── ROLES ──────────────────────────────────────────────────
+// Stored in app_settings under key 'team_roles' as [{name,role}], same
+// pattern as pm_list/sales_list/am_list — no schema migration needed, and it
+// loads for free since app_settings is already part of the global loadAll().
+// Trust model matches the existing shared-passcode login: whoever types a
+// name gets that name's role. This is not per-person authentication — it's a
+// lookup, not a lock. If that's ever not good enough, real per-person login
+// (Supabase Auth) is the upgrade path.
+const TEAM_ROLES=['PM','Admin','Management'];
+function getTeamRoles(){return appSettings['team_roles']||[];}
+function getUserRole(name){
+  if(!name)return'PM';
+  const entry=getTeamRoles().find(r=>(r.name||'').trim().toLowerCase()===name.trim().toLowerCase());
+  return entry?entry.role:'PM';
+}
+function isAdmin(){return currentUserRole==='Admin';}
+function isManagement(){return currentUserRole==='Management';}
+function isPM(){return currentUserRole==='PM';}
 let vinylFilter={status:'',search:'',dateFrom:'',dateTo:'',pm:''};
 let planFilter={status:'',search:'',dateFrom:'',dateTo:''};
 let deptFilter={shipping:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'},installation:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'}};
@@ -936,7 +957,7 @@ function setTab(tab){
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   if(ni&&document.getElementById('nav-more')?.contains(ni))openNavMore();
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','pipeline','overview','projpage','week','prodqueue','qaqueue','shipping','installation','procurement','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity'];
+  const ALL=['glance','pipeline','overview','projpage','week','prodqueue','qaqueue','shipping','installation','procurement','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity','uat'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
@@ -954,7 +975,7 @@ function renderTab(){
   // Safety net: keep the breakout class in sync even if currentTab was set
   // without going through setTab (palette, deep links, restores).
   document.body.classList.toggle('production-view-active',currentTab==='prodqueue');
-  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,prodqueue:renderProductionQueue,qaqueue:renderQaQueue,shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),procurement:renderProcurementCC,vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity};
+  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,prodqueue:renderProductionQueue,qaqueue:renderQaQueue,shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),procurement:renderProcurementCC,vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity,uat:renderUAT};
   if(m[currentTab])m[currentTab]();
 }
 
@@ -963,6 +984,21 @@ function renderTab(){
 let procPoData=[],procLinkData=[],procReadyData={};
 let globalSections={};
 function getGlobalSection(projId,key){return globalSections[projId]?.[key]||'';}
+// ── UAT MODULE (Phase 1: templates/sections/questions) ─────
+// Loaded on demand when the UAT tab opens, not as part of loadAll() — see
+// architecture note: UAT data is scoped to admin work here, and future
+// session/answer/photo tables should stay scoped to whichever machine is
+// open rather than joining the global load.
+const UAT_MACHINE_TYPES=['Spark XL','Companion','Locker','TED','TED SU'];
+const UAT_ANSWER_TYPES=[{value:'pass_fail_na',label:'Pass / Fail / N/A'},{value:'text',label:'Text'},{value:'number',label:'Number'},{value:'photo_required',label:'Photo required'}];
+let uatTemplates=[],uatSections=[],uatQuestions=[];
+let uatLoaded=false,uatSelectedMachineType=UAT_MACHINE_TYPES[0],uatSelectedTemplateId=null;
+async function loadUATAdmin(force){
+  if(uatLoaded&&!force)return;
+  const[t,s,q]=await Promise.all([fetchAllRows('uat_templates'),fetchAllRows('uat_sections',{orderCol:'display_order'}),fetchAllRows('uat_questions',{orderCol:'display_order'})]);
+  uatTemplates=t.data||[];uatSections=s.data||[];uatQuestions=q.data||[];
+  uatLoaded=true;
+}
 async function loadAll(){
   // fetchAllRows pages through each table so we always get every row,
   // regardless of Supabase's server-side Max Rows cap (a single .range()
@@ -1033,6 +1069,15 @@ async function loadAll(){
   sortByDate(adHocRows.shipping,'shipDate');
   sortByDate(adHocRows.installation,'installDate');
   appSettings={};(as_.data||[]).forEach(s=>{appSettings[s.key]=s.value;});
+  // Resolve the logged-in name's role now that appSettings (which holds the
+  // team_roles list) has just loaded. Unmatched names default to PM — the
+  // least-restrictive role, matching how the app behaved before roles existed.
+  currentUserRole=getUserRole(currentUserName);
+  const roleBadgeEl=document.getElementById('user-role-badge');
+  if(roleBadgeEl){
+    if(currentUserRole==='PM'){roleBadgeEl.style.display='none';}
+    else{roleBadgeEl.style.display='inline';roleBadgeEl.textContent=currentUserRole;roleBadgeEl.style.color=currentUserRole==='Admin'?'#fca5a5':'#93c5fd';roleBadgeEl.style.borderColor=currentUserRole==='Admin'?'#7f1d1d':'#1e3a5f';}
+  }
   // Build deviation map: {project_id: {milestone_key: row}}
   milestoneDeviations={};
   (dev.data||[]).forEach(d=>{
@@ -7854,6 +7899,71 @@ function peopleListSection(key){
   </div>`;
 }
 
+let _teamRolesWorking=null;
+function getTrWorking(){if(!_teamRolesWorking)_teamRolesWorking=getTeamRoles().map(r=>({...r}));return _teamRolesWorking;}
+function trUpdate(i,field,val){getTrWorking()[i][field]=val;}
+function trRemove(i){
+  const cur=getTrWorking().map((r,j)=>({name:document.getElementById('tr-name-'+j)?.value.trim()||r.name,role:document.getElementById('tr-role-'+j)?.value||r.role}));
+  cur.splice(i,1);
+  _teamRolesWorking=cur;
+  renderSettings();
+}
+function trAdd(){
+  const nameInp=document.getElementById('tr-name-new');
+  const name=(nameInp?.value||'').trim();
+  if(!name)return;
+  const role=document.getElementById('tr-role-new')?.value||'PM';
+  const cur=getTrWorking().map((r,j)=>({name:document.getElementById('tr-name-'+j)?.value.trim()||r.name,role:document.getElementById('tr-role-'+j)?.value||r.role}));
+  cur.push({name,role});
+  _teamRolesWorking=cur;
+  if(nameInp)nameInp.value='';
+  renderSettings();
+}
+async function trSave(){
+  const list=getTrWorking().map((r,i)=>({name:document.getElementById('tr-name-'+i)?.value.trim()||r.name,role:document.getElementById('tr-role-'+i)?.value||r.role})).filter(r=>r.name);
+  _teamRolesWorking=list;
+  appSettings['team_roles']=list;
+  await sb.from('app_settings').upsert({key:'team_roles',value:list,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
+  // If you just changed your own role, reflect it immediately without a re-login
+  currentUserRole=getUserRole(currentUserName);
+  const badge=document.getElementById('user-role-badge');
+  if(badge){
+    if(currentUserRole==='PM'){badge.style.display='none';}
+    else{badge.style.display='inline';badge.textContent=currentUserRole;badge.style.color=currentUserRole==='Admin'?'#fca5a5':'#93c5fd';badge.style.borderColor=currentUserRole==='Admin'?'#7f1d1d':'#1e3a5f';}
+  }
+  const saved=document.getElementById('tr-saved');
+  if(saved){saved.style.display='inline';setTimeout(()=>{saved.style.display='none';},2500);}
+  showToast('Team roles saved ✓');
+}
+function teamRolesSection(){
+  const list=getTrWorking();
+  return`<div style="padding-top:1.25rem;border-top:1px solid var(--gray-100);margin-top:1.25rem">
+    <div style="font-size:14px;font-weight:600;margin-bottom:4px">Team roles</div>
+    <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">Controls access to admin-only features (like the upcoming UAT template builder). Anyone not listed here defaults to PM. Note: login is still a shared team passcode — this maps a typed name to a role, it isn't per-person authentication.</div>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+      ${list.map((r,i)=>`<div style="display:flex;align-items:center;gap:8px">
+        <input value="${(r.name||'').replace(/"/g,'&quot;')}" id="tr-name-${i}" placeholder="Name" style="flex:1;font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" oninput="trUpdate(${i},'name',this.value)">
+        <select id="tr-role-${i}" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="trUpdate(${i},'role',this.value)">
+          ${TEAM_ROLES.map(role=>`<option${role===r.role?' selected':''}>${role}</option>`).join('')}
+        </select>
+        <button onclick="trRemove(${i})" style="background:none;border:1px solid var(--gray-200);border-radius:var(--radius);padding:5px 10px;cursor:pointer;color:var(--gray-400)">✕</button>
+      </div>`).join('')}
+      ${!list.length?`<div style="font-size:12px;color:var(--gray-400);font-style:italic">No one assigned yet — everyone currently defaults to PM.</div>`:''}
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <input id="tr-name-new" placeholder="Add name..." style="flex:1;font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onkeydown="if(event.key==='Enter')trAdd()">
+      <select id="tr-role-new" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)">
+        ${TEAM_ROLES.map(role=>`<option${role==='Admin'?' selected':''}>${role}</option>`).join('')}
+      </select>
+      <button class="btn btn-primary" onclick="trAdd()">+ Add</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-primary" onclick="trSave()">💾 Save changes</button>
+      <span id="tr-saved" style="font-size:11px;color:var(--success);display:none">✓ Saved</span>
+    </div>
+  </div>`;
+}
+
 // ── PROJECT PHOTOS ─────────────────────────────────────────
 async function saveInstallTicketUrl(projId,url){
   await sb.from('projects').update({install_ticket_url:url,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',projId);
@@ -8064,6 +8174,161 @@ async function markMilestoneDeviated(projId,msKey,masterDate,childDate){
 
 function openPushDatesModal(masterId,childId){}// placeholder - handled by openPushAllDatesModal
 
+// ═══════════════════════════════════════════════════════════
+// UAT MODULE — ADMIN TEMPLATE BUILDER (Phase 1)
+// ═══════════════════════════════════════════════════════════
+function renderUAT(){
+  const el=document.getElementById('tab-uat');
+  if(!el)return;
+  if(!uatLoaded){
+    el.innerHTML='<div class="empty-state">Loading UAT templates…</div>';
+    loadUATAdmin().then(renderUAT);
+    return;
+  }
+  if(!isAdmin()){
+    el.innerHTML=`<div class="section" style="max-width:600px">
+      <div class="section-head"><div class="section-title">✅ UAT checklists</div></div>
+      <div style="padding:2rem;text-align:center;color:var(--gray-500);font-size:13px">
+        The UAT template builder is Admin-only. If this should be you, ask an Admin to set your role in Settings → Team roles.
+      </div>
+    </div>`;
+    return;
+  }
+  const typeTemplates=uatTemplates.filter(t=>t.machine_type===uatSelectedMachineType);
+  if(!uatSelectedTemplateId||!typeTemplates.some(t=>t.id===uatSelectedTemplateId)){
+    uatSelectedTemplateId=(typeTemplates.find(t=>t.active)||typeTemplates[0])?.id||null;
+  }
+  const template=uatTemplates.find(t=>t.id===uatSelectedTemplateId);
+  const sections=template?uatSections.filter(s=>s.template_id===template.id).sort((a,b)=>a.display_order-b.display_order):[];
+
+  const pillsHtml=UAT_MACHINE_TYPES.map(mt=>`<button onclick="uatSelectMachineType('${mt}')" style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid ${mt===uatSelectedMachineType?'var(--black)':'var(--gray-300)'};background:${mt===uatSelectedMachineType?'var(--black)':'var(--white)'};color:${mt===uatSelectedMachineType?'white':'var(--gray-700)'};cursor:pointer;font-family:var(--font);font-weight:500">${mt}</button>`).join('');
+
+  const templatesListHtml=typeTemplates.length?typeTemplates.map(t=>`
+    <div onclick="uatSelectTemplate('${t.id}')" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-radius:var(--radius);cursor:pointer;background:${t.id===uatSelectedTemplateId?'var(--gray-100)':'transparent'};margin-bottom:3px">
+      <div style="min-width:0;flex:1">
+        <input value="${(t.name||'').replace(/"/g,'&quot;')}" onclick="event.stopPropagation()" onchange="uatUpdateTemplate('${t.id}','name',this.value)" style="font-size:13px;font-weight:600;border:none;background:transparent;width:100%;font-family:var(--font);padding:2px 0">
+        <div style="font-size:10px;color:var(--gray-400)">v${t.version}${t.active?' · active':''}</div>
+      </div>
+      <button onclick="event.stopPropagation();uatToggleActive('${t.id}')" title="${t.active?'Deactivate':'Activate'}" style="font-size:10px;padding:3px 8px;border-radius:10px;border:1px solid ${t.active?'var(--success)':'var(--gray-300)'};background:${t.active?'var(--success-bg)':'transparent'};color:${t.active?'var(--success)':'var(--gray-400)'};cursor:pointer;font-family:var(--font);white-space:nowrap">${t.active?'✓ Active':'Inactive'}</button>
+      <button onclick="event.stopPropagation();uatDeleteTemplate('${t.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:14px">✕</button>
+    </div>`).join(''):`<div style="font-size:12px;color:var(--gray-400);font-style:italic;padding:8px 0">No templates yet for ${uatSelectedMachineType}.</div>`;
+
+  const sectionsHtml=sections.map(s=>{
+    const questions=uatQuestions.filter(q=>q.section_id===s.id).sort((a,b)=>a.display_order-b.display_order);
+    return`<div class="pp-card" style="margin-bottom:10px">
+      <div class="pp-card-head">
+        <input value="${(s.title||'').replace(/"/g,'&quot;')}" onchange="uatUpdateSection('${s.id}','title',this.value)" style="font-size:12px;font-weight:600;border:none;background:transparent;flex:1;font-family:var(--font);text-transform:none;letter-spacing:0">
+        <button onclick="uatDeleteSection('${s.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:14px">✕ section</button>
+      </div>
+      <table class="pp-table" style="width:100%">
+        <thead><tr><th style="width:44%">Question</th><th style="width:22%">Answer type</th><th style="width:14%">Required</th><th></th></tr></thead>
+        <tbody>
+          ${questions.map(q=>`<tr>
+            <td><input value="${(q.question||'').replace(/"/g,'&quot;')}" placeholder="Question text..." onchange="uatUpdateQuestion('${q.id}','question',this.value)"></td>
+            <td><select onchange="uatUpdateQuestion('${q.id}','answer_type',this.value)">${UAT_ANSWER_TYPES.map(a=>`<option value="${a.value}"${a.value===q.answer_type?' selected':''}>${a.label}</option>`).join('')}</select></td>
+            <td style="text-align:center"><input type="checkbox" ${q.required?'checked':''} onchange="uatUpdateQuestion('${q.id}','required',this.checked)"></td>
+            <td class="pp-actions"><button class="pp-del" onclick="uatDeleteQuestion('${q.id}')">✕</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <button class="pp-add-btn" onclick="uatAddQuestion('${s.id}')">+ Add question</button>
+    </div>`;
+  }).join('');
+
+  el.innerHTML=`
+    <div class="section" style="margin-bottom:14px">
+      <div class="section-head"><div class="section-title">✅ UAT checklists</div><div style="font-size:11px;color:var(--gray-500)">Admin — checklist questions live entirely in the database; the mobile app just renders whatever's here</div></div>
+      <div style="padding:14px 16px;display:flex;gap:8px;flex-wrap:wrap">${pillsHtml}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:260px 1fr;gap:14px">
+      <div class="section" style="align-self:start">
+        <div class="section-head"><div class="section-title" style="font-size:12px">Templates</div></div>
+        <div style="padding:10px">
+          ${templatesListHtml}
+          <button class="pp-add-btn" style="border-top:1px solid var(--gray-100);margin-top:6px;padding-top:10px" onclick="uatAddTemplate('${uatSelectedMachineType}')">+ New template</button>
+        </div>
+      </div>
+      <div>
+        ${template?`
+          ${sectionsHtml}
+          <button class="btn" style="font-size:12px" onclick="uatAddSection('${template.id}')">+ Add section</button>
+        `:`<div class="empty-state">Select or create a template for ${uatSelectedMachineType} to start building its checklist.</div>`}
+      </div>
+    </div>`;
+}
+function uatSelectMachineType(mt){uatSelectedMachineType=mt;uatSelectedTemplateId=null;renderUAT();}
+function uatSelectTemplate(id){uatSelectedTemplateId=id;renderUAT();}
+async function uatAddTemplate(machineType){
+  const{data,error}=await sb.from('uat_templates').insert({machine_type:machineType,name:machineType+' UAT',version:1,active:!uatTemplates.some(t=>t.machine_type===machineType&&t.active),created_by:currentUserName}).select().single();
+  if(error){showToast('⚠ '+error.message);return;}
+  uatTemplates.push(data);
+  uatSelectedTemplateId=data.id;
+  renderUAT();
+}
+async function uatUpdateTemplate(id,field,val){
+  await sb.from('uat_templates').update({[field]:val}).eq('id',id);
+  const t=uatTemplates.find(x=>x.id===id);if(t)t[field]=val;
+  showToast('Saved ✓');
+}
+async function uatToggleActive(id){
+  const t=uatTemplates.find(x=>x.id===id);if(!t)return;
+  const newActive=!t.active;
+  // Only one active template per machine type at a time — keeps "which
+  // checklist does the mobile app show" unambiguous.
+  if(newActive){
+    const siblings=uatTemplates.filter(x=>x.machine_type===t.machine_type&&x.id!==id&&x.active);
+    for(const sib of siblings){await sb.from('uat_templates').update({active:false}).eq('id',sib.id);sib.active=false;}
+  }
+  await sb.from('uat_templates').update({active:newActive}).eq('id',id);
+  t.active=newActive;
+  renderUAT();
+}
+async function uatDeleteTemplate(id){
+  if(!confirm('Delete this template and all its sections/questions? This cannot be undone.'))return;
+  await sb.from('uat_templates').delete().eq('id',id);
+  uatTemplates=uatTemplates.filter(t=>t.id!==id);
+  uatSections=uatSections.filter(s=>s.template_id!==id);
+  uatQuestions=uatQuestions.filter(q=>uatSections.some(s=>s.id===q.section_id));
+  if(uatSelectedTemplateId===id)uatSelectedTemplateId=null;
+  renderUAT();
+}
+async function uatAddSection(templateId){
+  const order=uatSections.filter(s=>s.template_id===templateId).length;
+  const{data,error}=await sb.from('uat_sections').insert({template_id:templateId,title:'New section',display_order:order}).select().single();
+  if(error){showToast('⚠ '+error.message);return;}
+  uatSections.push(data);
+  renderUAT();
+}
+async function uatUpdateSection(id,field,val){
+  await sb.from('uat_sections').update({[field]:val}).eq('id',id);
+  const s=uatSections.find(x=>x.id===id);if(s)s[field]=val;
+  showToast('Saved ✓');
+}
+async function uatDeleteSection(id){
+  if(!confirm('Delete this section and its questions?'))return;
+  await sb.from('uat_sections').delete().eq('id',id);
+  uatSections=uatSections.filter(s=>s.id!==id);
+  uatQuestions=uatQuestions.filter(q=>q.section_id!==id);
+  renderUAT();
+}
+async function uatAddQuestion(sectionId){
+  const order=uatQuestions.filter(q=>q.section_id===sectionId).length;
+  const{data,error}=await sb.from('uat_questions').insert({section_id:sectionId,question:'',answer_type:'pass_fail_na',required:true,display_order:order}).select().single();
+  if(error){showToast('⚠ '+error.message);return;}
+  uatQuestions.push(data);
+  renderUAT();
+}
+async function uatUpdateQuestion(id,field,val){
+  await sb.from('uat_questions').update({[field]:val}).eq('id',id);
+  const q=uatQuestions.find(x=>x.id===id);if(q)q[field]=val;
+  showToast('Saved ✓');
+}
+async function uatDeleteQuestion(id){
+  await sb.from('uat_questions').delete().eq('id',id);
+  uatQuestions=uatQuestions.filter(q=>q.id!==id);
+  renderUAT();
+}
+
 function renderSettings(){
   const el=document.getElementById('tab-settings');
   const types=getProductTypes();
@@ -8118,6 +8383,7 @@ function renderSettings(){
         ${peopleListSection('pm_list')}
         ${peopleListSection('sales_list')}
         ${peopleListSection('am_list')}
+        ${teamRolesSection()}
       </div>
     </div>
     ${migrationSection}
