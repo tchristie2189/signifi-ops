@@ -5219,7 +5219,18 @@ function openEditProj(id){
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
         <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${overviewConfig.naming_convention||''}</textarea></div>
         <div class="field full"><label>Installation address</label><input id="ep-address" value="${overviewConfig.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
-        <div class="field full"><label>Configuration / Form factor</label><input id="ep-form-factor" value="${overviewConfig.form_factor||''}" placeholder="e.g. 18, Spark XL, Smart Companion"></div>
+        <div class="field full"><label>Configuration / Form factor <span style="font-size:10px;color:var(--gray-400);font-weight:400">— select all that apply (same list used in per-SO Configuration)</span></label>
+          <select id="ep-form-factor" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:100px">
+            ${getProductTypes().map(t=>`<option${(overviewConfig.form_factor||'').split(',').map(s=>s.trim()).includes(t)?' selected':''}>${t}</option>`).join('')}
+          </select>
+          <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
+        </div>
+        <div class="field full"><label>UAT machine type(s) <span style="font-size:10px;color:var(--gray-400);font-weight:400">— which checklist(s) this project uses; set once here rather than re-guessed each time</span></label>
+          <select id="ep-uat-machine-types" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:90px">
+            ${UAT_MACHINE_TYPES.map(t=>`<option${(Array.isArray(proj.uat_machine_types)&&proj.uat_machine_types.length?proj.uat_machine_types:formFactorToUATMachineTypes(overviewConfig.form_factor)).includes(t)?' selected':''}>${t}</option>`).join('')}
+          </select>
+          <div style="font-size:10px;color:var(--gray-400);margin-top:3px">${Array.isArray(proj.uat_machine_types)&&proj.uat_machine_types.length?'Confirmed':'Not yet confirmed — pre-checked with a best guess from Form Factor, please verify'}</div>
+        </div>
         <div class="field full"><div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.06em;margin-top:6px;padding-top:10px;border-top:1px solid var(--gray-100)">Project configuration</div></div>
         <div class="field"><label>Voltage</label>${epSelect('ep-voltage',PROJECT_CONFIG_OPTIONS.voltage,proj.voltage)}</div>
         <div class="field"><label>Plug type</label>${epSelect('ep-plug-type',PROJECT_CONFIG_OPTIONS.plug_type,proj.plug_type)}</div>
@@ -5354,7 +5365,8 @@ async function saveEditProj(id){
     vision_training_url:document.getElementById('ep-vision-training')?.value.trim()||null,
     naming_convention:document.getElementById('ep-naming')?.value.trim()||null,
     address:document.getElementById('ep-address')?.value.trim()||null,
-    form_factor:document.getElementById('ep-form-factor')?.value.trim()||null,
+    form_factor:document.getElementById('ep-form-factor')?[...document.getElementById('ep-form-factor').selectedOptions].map(o=>o.value).join(', ')||null:null,
+    uat_machine_types:document.getElementById('ep-uat-machine-types')?[...document.getElementById('ep-uat-machine-types').selectedOptions].map(o=>o.value):null,
     voltage:document.getElementById('ep-voltage')?.value||null,
     plug_type:document.getElementById('ep-plug-type')?.value||null,
     power_requirements:document.getElementById('ep-power-requirements')?.value.trim()||null,
@@ -5443,7 +5455,7 @@ async function saveEditProj(id){
   await syncProjectFieldsToSingleSO(id,{
     address:document.getElementById('ep-address')?.value.trim()||'',
     naming_convention:document.getElementById('ep-naming')?.value.trim()||'',
-    form_factor:document.getElementById('ep-form-factor')?.value.trim()||'',
+    form_factor:document.getElementById('ep-form-factor')?[...document.getElementById('ep-form-factor').selectedOptions].map(o=>o.value).join(', '):'',
     odoo_url:document.getElementById('ep-odoo')?.value.trim()||'',
     ui_task_url:document.getElementById('ep-jira')?.value.trim()||'',
     qa_task_url:document.getElementById('ep-qa')?.value.trim()||'',
@@ -7182,6 +7194,62 @@ function restoreDocFormState(){
   }
 }
 
+// Best-effort mapping from the granular form-factor/product-type list
+// (getProductTypes(), ~19 SKU-level entries) to the 5 broad UAT machine
+// types the checklist templates are organized around. This is a heuristic,
+// not an authoritative mapping — surfaced as a dropdown the admin can
+// override rather than presented as certain, since e.g. "Stand-up TED" vs
+// "TED SU" naming doesn't map with full confidence.
+function formFactorToUATMachineTypes(formFactorStr){
+  const s=(formFactorStr||'').toLowerCase();
+  const types=new Set();
+  if(s.includes('sparkxl')||s.includes('spark xl'))types.add('Spark XL');
+  if(s.includes('companion'))types.add('Companion');
+  if(s.includes('locker'))types.add('Locker');
+  if(s.includes('sit-down ted')||s==='ted'||/\bted\b/.test(s)&&!s.includes('su')&&!s.includes('stand'))types.add('TED');
+  if(s.includes('stand-up ted')||s.includes('ted su'))types.add('TED SU');
+  return[...types];
+}
+function renderUATDocTab(){
+  const dp=projects.find(p=>p.id===selectedDocProjId);
+  if(!dp)return'<div class="empty-state">Select a project above.</div>';
+  const confirmed=Array.isArray(dp.uat_machine_types)&&dp.uat_machine_types.length>0;
+  const guessed=formFactorToUATMachineTypes(dp.form_factor);
+  const candidates=confirmed?dp.uat_machine_types:guessed;
+  if(!window._uatDocSelectedType||!candidates.includes(window._uatDocSelectedType))window._uatDocSelectedType=candidates[0]||UAT_MACHINE_TYPES[0];
+  if(!uatLoaded){loadUATAdmin().then(renderGenDocs);return'<div class="empty-state">Loading checklist templates…</div>';}
+  const template=uatTemplates.find(t=>t.machine_type===window._uatDocSelectedType&&t.active);
+  const sections=template?uatSections.filter(s=>s.template_id===template.id).sort((a,b)=>a.display_order-b.display_order):[];
+  return`<div style="padding:16px 0">
+    <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius);padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--gray-600)">
+      <b>This tab is the exporter, not the editor.</b> The PM completes UAT on the machine itself (mobile checklist runner — coming in Phase 2C). Once a session is completed, this tab will export the actual recorded answers, notes, and photos into the official workbook. Until then, this shows a live preview of the checklist that will be used, pulled from the same database the mobile app reads.
+    </div>
+    ${!confirmed?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:#92600a">
+      This project's UAT machine type hasn't been confirmed yet — showing a guess from Form Factor. <a href="#" onclick="event.preventDefault();openEditProj('${dp.id}')" style="color:#92600a;font-weight:600">Confirm it in Edit Project</a> so it's set once instead of re-guessed every time.
+    </div>`:''}
+    <div class="proj-select-row" style="margin-bottom:12px">
+      <label>Machine type</label>
+      <select onchange="window._uatDocSelectedType=this.value;renderGenDocs()" style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius)">
+        ${(candidates.length?candidates:UAT_MACHINE_TYPES).map(mt=>`<option value="${mt}"${mt===window._uatDocSelectedType?' selected':''}>${mt}</option>`).join('')}
+      </select>
+      ${confirmed?`<span style="font-size:11px;color:var(--success)">✓ Confirmed on this project</span>`:''}
+    </div>
+    ${template?`
+      <div style="font-size:12px;color:var(--gray-500);margin-bottom:10px">${template.name} · v${template.version} · ${sections.reduce((n,s)=>n+uatQuestions.filter(q=>q.section_id===s.id).length,0)} questions across ${sections.length} sections</div>
+      ${sections.map(s=>{
+        const qs=uatQuestions.filter(q=>q.section_id===s.id&&uatQuestionVisible(q,dp.id)).sort((a,b)=>a.display_order-b.display_order);
+        return`<div class="pp-card" style="margin-bottom:8px"><div class="pp-card-head"><span class="pp-card-title">${s.title}</span></div>
+          <div class="pp-card-body" style="font-size:12px;color:var(--gray-700)">
+            ${qs.map(q=>{
+              const exp=q.expected_field?uatExpectedValueDisplay(dp.id,q.expected_field):null;
+              return`<div style="padding:5px 0;border-bottom:1px solid var(--gray-50)">${q.question}${exp?`<span style="color:var(--gray-400)"> — Expected: ${exp.tracked?exp.text:'<i>'+exp.text+'</i>'}</span>`:''}</div>`;
+            }).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+    `:`<div class="empty-state">No active template for ${window._uatDocSelectedType} yet — build one in UAT checklists (Admin).</div>`}
+  </div>`;
+}
 function renderGenDocs(){
   saveDocFormState();
   const el=document.getElementById('tab-gendocs');
@@ -7222,10 +7290,11 @@ function renderGenDocs(){
             <button class="doc-tab${activeDocTab==='install'?' active':''}" onclick="saveDocFormState(true);activeDocTab='install';renderGenDocs()">🔧 Installation ticket</button>
             <button class="doc-tab${activeDocTab==='ui'?' active':''}" onclick="saveDocFormState(true);activeDocTab='ui';renderGenDocs()">🖥 UI request</button>
             <button class="doc-tab${activeDocTab==='qa'?' active':''}" onclick="saveDocFormState(true);activeDocTab='qa';renderGenDocs()">✅ QA task</button>
+            <button class="doc-tab${activeDocTab==='uat'?' active':''}" onclick="saveDocFormState(true);activeDocTab='uat';renderGenDocs()">📋 UAT checklist</button>
           </div>
           <button onclick="saveDocFormState(true);showToast('Form saved ✓')" style="font-size:12px;padding:6px 14px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);color:var(--gray-700);cursor:pointer;font-family:var(--font)">💾 Save form</button><button onclick="saveDocFormState();generateAllDocs()" style="font-size:12px;padding:6px 16px;border-radius:var(--radius);border:none;background:var(--black);color:white;cursor:pointer;font-family:var(--font);font-weight:600">⚡ Generate all three →</button>
         </div>
-        ${activeDocTab==='install'?renderInstallForm():activeDocTab==='ui'?renderUIForm():renderQAForm()}
+        ${activeDocTab==='install'?renderInstallForm():activeDocTab==='ui'?renderUIForm():activeDocTab==='qa'?renderQAForm():renderUATDocTab()}
       </div>
     </div>`;
   restoreDocFormState();
