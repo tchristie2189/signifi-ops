@@ -319,7 +319,43 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
   .briefing-header{background:#0f0f0f!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   .section{break-inside:avoid;}
 }
-@media(max-width:800px){.metrics-row{grid-template-columns:repeat(2,1fr);}.week-grid{grid-template-columns:1fr;}.intake-grid,.form-grid,.ms-intake-grid{grid-template-columns:1fr;}.glance-grid{grid-template-columns:1fr;}.header-inner{padding:0 1rem;}.page-body{padding:1rem 1rem 3rem;}}
+@media(max-width:800px){
+  .metrics-row{grid-template-columns:repeat(2,1fr)!important;}
+  .week-grid{grid-template-columns:1fr;}
+  .intake-grid,.form-grid,.ms-intake-grid{grid-template-columns:1fr;}
+  .glance-grid{grid-template-columns:1fr;}
+  .header-inner{padding:0 1rem;}
+  .page-body{padding:1rem 1rem 3rem;}
+
+  /* Project Page banner: stop the right-side button column from squeezing
+     into a sliver — stack the title block above a full-width, wrapped
+     button row instead. */
+  .pp-header{flex-wrap:wrap;padding:16px;}
+  .pp-header>div.no-print{align-items:stretch!important;flex-direction:row!important;flex-wrap:wrap;width:100%;gap:6px!important;}
+  .pp-header>div.no-print button{flex:1 1 auto;white-space:normal!important;}
+
+  /* Project Page two-column layout (Summary/Notes vs Quick Links) → single column */
+  .pp-grid{grid-template-columns:1fr!important;}
+
+  /* Overview page section header: title + action buttons wrap onto their own lines
+     instead of getting squeezed side-by-side */
+  .section-head{flex-wrap:wrap;gap:8px;}
+  .section-head>div{width:100%;}
+  .section-head>div:last-child{justify-content:flex-start!important;}
+
+  /* Top "Project / Config / PM / Sales" selector bar: wrap instead of overflowing */
+  .proj-sel-bar,.proj-select-row{flex-wrap:wrap;}
+  .proj-sel-bar select,.proj-select-row select{flex:1 1 140px;min-width:0;}
+  .proj-sel-bar>div{margin-left:0!important;width:100%;justify-content:flex-start!important;}
+
+  /* Prevent any residual fixed-width element from forcing horizontal page scroll */
+  body{overflow-x:hidden;}
+}
+@media(max-width:480px){
+  .metrics-row{grid-template-columns:repeat(2,1fr)!important;}
+  .pp-title{font-size:17px;}
+  .pp-meta{gap:8px;font-size:11px;}
+}
 /* Production tab breaks out to full viewport width — all other tabs keep the 1300px layout */
 body.production-view-active .page-body{max-width:none;width:100%;padding-left:28px;padding-right:28px;}
 body.production-view-active .header-inner{max-width:none;width:100%;padding-left:28px;padding-right:28px;}
