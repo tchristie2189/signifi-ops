@@ -29,6 +29,29 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
 .nav-item.active{background:#1e1e1e;color:white;}
 .nav-item-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
 .nav-sep{height:1px;background:#1e1e1e;margin:4px 0;}
+@media(min-width:1000px){
+  /* ── PERSISTENT SIDEBAR (desktop) ──────────────────────────
+     This reuses the exact same #nav-dropdown element/buttons that already
+     power the mobile dropdown menu — there is only one nav item list in the
+     whole app. At this breakpoint we just reposition it from "absolute
+     dropdown panel" to "fixed persistent sidebar." Nothing about mobile's
+     dropdown behavior changes; these rules are scoped to this media query only. */
+  .nav-dropdown{
+    display:flex!important;flex-direction:column;position:fixed;top:52px;left:0;bottom:0;
+    width:220px;border-radius:0;border:none;border-right:1px solid #222;
+    box-shadow:none;padding:10px 6px;z-index:150;transition:width .15s ease;
+  }
+  body.sidebar-collapsed .nav-dropdown{width:56px}
+  body.sidebar-collapsed .nav-item{overflow:hidden;white-space:nowrap}
+  body.sidebar-collapsed .nav-group-label{opacity:0;height:0;padding:0;overflow:hidden;margin:0}
+  #nav-more{display:block!important} /* "More" section stays permanently expanded in sidebar mode — no reason to hide items behind a second click when there's room */
+  #nav-more-toggle{display:none}
+  .page-body{margin-left:220px;transition:margin-left .15s ease}
+  body.sidebar-collapsed .page-body{margin-left:56px}
+  body.production-view-active .page-body{width:calc(100% - 220px)!important;margin-left:220px!important}
+  body.production-view-active.sidebar-collapsed .page-body{width:calc(100% - 56px)!important;margin-left:56px!important}
+  #sidebar-collapse-btn{display:flex!important}
+}
 .header-right{display:flex;align-items:center;gap:10px;}
 .user-chip{display:flex;align-items:center;gap:7px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:20px;padding:4px 10px 4px 6px;cursor:pointer;}
 .user-avatar{width:22px;height:22px;border-radius:50%;background:var(--red);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:white;flex-shrink:0;}
@@ -456,6 +479,9 @@ body.production-view-active .header-inner{max-width:none;width:100%;padding-left
             <button class="nav-item" id="ni-log" onclick="setTab('log')">🕓 Activity log</button>
             <button class="nav-item" id="ni-settings" onclick="setTab('settings')">⚙️ Settings</button>
           </div>
+          <button id="sidebar-collapse-btn" onclick="toggleSidebarCollapse()" title="Collapse navigation" style="display:none;align-items:center;justify-content:center;gap:6px;margin-top:auto;padding:8px;border-radius:var(--radius);border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-family:var(--font);font-size:11px">
+            <span id="sidebar-collapse-icon">◀</span><span id="sidebar-collapse-label">Collapse</span>
+          </button>
         </div>
       </div>
       <div class="header-right">
@@ -947,6 +973,27 @@ async function sweepCompletedKickoffs(){
 }
 
 // ── NAV DROPDOWN ───────────────────────────────────────────
+function toggleSidebarCollapse(){
+  const collapsed=document.body.classList.toggle('sidebar-collapsed');
+  localStorage.setItem('signifi_sidebar_collapsed',collapsed?'1':'0');
+  const icon=document.getElementById('sidebar-collapse-icon'),label=document.getElementById('sidebar-collapse-label'),btn=document.getElementById('sidebar-collapse-btn');
+  if(icon)icon.textContent=collapsed?'▶':'◀';
+  if(label)label.style.display=collapsed?'none':'inline';
+  if(btn)btn.title=collapsed?'Expand navigation':'Collapse navigation';
+}
+// Restore collapsed preference before first paint of the sidebar
+if(localStorage.getItem('signifi_sidebar_collapsed')==='1'){
+  document.body.classList.add('sidebar-collapsed');
+  const icon=document.getElementById('sidebar-collapse-icon'),label=document.getElementById('sidebar-collapse-label');
+  if(icon)icon.textContent='▶';
+  if(label)label.style.display='none';
+}
+// Role-gated nav: hide links the current user isn't permitted to use. Called
+// after role is known (post-login/post-loadAll) and again if roles change.
+function updateNavVisibility(){
+  const uatLink=document.getElementById('ni-uat');
+  if(uatLink)uatLink.style.display=isAdmin()?'':'none';
+}
 function toggleNav(e){e.stopPropagation();document.getElementById('nav-dropdown').classList.toggle('open');}
 document.addEventListener('click',()=>document.getElementById('nav-dropdown')?.classList.remove('open'));
 
@@ -993,6 +1040,8 @@ const UAT_MACHINE_TYPES=['Spark XL','Companion','Locker','TED','TED SU'];
 const UAT_ANSWER_TYPES=[{value:'pass_fail_na',label:'Pass / Fail / N/A'},{value:'text',label:'Text'},{value:'number',label:'Number'},{value:'photo_required',label:'Photo required'}];
 let uatTemplates=[],uatSections=[],uatQuestions=[];
 let uatLoaded=false,uatSelectedMachineType=UAT_MACHINE_TYPES[0],uatSelectedTemplateId=null;
+let uatAdvancedOpen=new Set();
+function uatToggleAdvanced(id){uatAdvancedOpen.has(id)?uatAdvancedOpen.delete(id):uatAdvancedOpen.add(id);renderUAT();}
 async function loadUATAdmin(force){
   if(uatLoaded&&!force)return;
   const[t,s,q]=await Promise.all([fetchAllRows('uat_templates'),fetchAllRows('uat_sections',{orderCol:'display_order'}),fetchAllRows('uat_questions',{orderCol:'display_order'})]);
@@ -1078,6 +1127,7 @@ async function loadAll(){
     if(currentUserRole==='PM'){roleBadgeEl.style.display='none';}
     else{roleBadgeEl.style.display='inline';roleBadgeEl.textContent=currentUserRole;roleBadgeEl.style.color=currentUserRole==='Admin'?'#fca5a5':'#93c5fd';roleBadgeEl.style.borderColor=currentUserRole==='Admin'?'#7f1d1d':'#1e3a5f';}
   }
+  updateNavVisibility();
   // Build deviation map: {project_id: {milestone_key: row}}
   milestoneDeviations={};
   (dev.data||[]).forEach(d=>{
@@ -5101,6 +5151,28 @@ async function saveIntake(){
 }
 function clearIntake(){document.querySelectorAll('#tab-intake input,#tab-intake select,#tab-intake textarea').forEach(e=>{e.value='';});}
 
+// ── CANONICAL PROJECT CONFIGURATION ─────────────────────────
+const PROJECT_CONFIG_OPTIONS={
+  voltage:['110V','220V'],
+  plug_type:['PT(B) - Power Plug','PT(D) - Power Plug','PT(E) - Power Plug','PT(F) - Power Plug','PT(G) - Power Plug','PT(H) - Power Plug','PT(I) - Power Plug','PT(J) - Power Plug','PT(K) - Power Plug','PT(L) - Power Plug','PT(M) - Power Plug','PT(N) - Power Plug','PT(O) - Power Plug'],
+  hosting:['Default Multi-Tenant Canada','Multi-Tenant EU','Multi-Tenant US','Dedicated'],
+  connectivity:['LAN','WiFi','LTE','N/A'],
+  authentication_types:['One Time-PIN','Badge','Barcode','Free-Vend','Integration'],
+  workflow_types:['Vending','Pick-up','Drop-off','Loan','Swap','E-Waste'],
+  languages:['English','French','Spanish','German','Japanese','Other']
+};
+function epSelect(id,options,current,placeholder='Select...'){
+  return`<select id="${id}" style="font-family:var(--font);font-size:12px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">${placeholder}</option>${options.map(o=>`<option value="${o.replace(/"/g,'&quot;')}"${current===o?' selected':''}>${o}</option>`).join('')}</select>`;
+}
+function epMulti(id,options,current=[]){
+  const selected=Array.isArray(current)?current:[];
+  return`<div id="${id}" style="display:flex;flex-wrap:wrap;gap:6px;padding:8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--gray-50)">${options.map((o,i)=>`<label style="display:flex;align-items:center;gap:5px;font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:14px;background:var(--white);cursor:pointer"><input type="checkbox" value="${o.replace(/"/g,'&quot;')}"${selected.includes(o)?' checked':''}>${o}</label>`).join('')}</div>`;
+}
+function epMultiValues(id){return[...document.querySelectorAll('#'+id+' input[type=checkbox]:checked')].map(x=>x.value);}
+function configList(v){return Array.isArray(v)&&v.length?v.join(', '):'— not configured —';}
+function projectConnectivitySummary(p){return[p.primary_connectivity?`Primary: ${p.primary_connectivity}`:'',p.backup_connectivity?`Backup: ${p.backup_connectivity}`:''].filter(Boolean).join(' | ');}
+function projectAuthenticationSummary(p){const parts=[];if(Array.isArray(p.authentication_types)&&p.authentication_types.length)parts.push(p.authentication_types.join(', '));if(p.badge_reader_type)parts.push('Badge reader: '+p.badge_reader_type);return parts.join(' | ');}
+
 // ── EDIT ───────────────────────────────────────────────────
 function openEditProj(id){
   pendingMsDeletes=new Set();
@@ -5148,6 +5220,22 @@ function openEditProj(id){
         <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${overviewConfig.naming_convention||''}</textarea></div>
         <div class="field full"><label>Installation address</label><input id="ep-address" value="${overviewConfig.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
         <div class="field full"><label>Configuration / Form factor</label><input id="ep-form-factor" value="${overviewConfig.form_factor||''}" placeholder="e.g. 18, Spark XL, Smart Companion"></div>
+        <div class="field full"><div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.06em;margin-top:6px;padding-top:10px;border-top:1px solid var(--gray-100)">Project configuration</div></div>
+        <div class="field"><label>Voltage</label>${epSelect('ep-voltage',PROJECT_CONFIG_OPTIONS.voltage,proj.voltage)}</div>
+        <div class="field"><label>Plug type</label>${epSelect('ep-plug-type',PROJECT_CONFIG_OPTIONS.plug_type,proj.plug_type)}</div>
+        <div class="field full"><label>Power requirements</label><textarea id="ep-power-requirements" placeholder="Any specific power requirements or notes" style="min-height:55px">${proj.power_requirements||''}</textarea></div>
+        <div class="field"><label>Hosting</label>${epSelect('ep-hosting',PROJECT_CONFIG_OPTIONS.hosting,proj.hosting)}</div>
+        <div class="field"></div>
+        <div class="field"><label>Primary connectivity</label>${epSelect('ep-primary-connectivity',PROJECT_CONFIG_OPTIONS.connectivity,proj.primary_connectivity)}</div>
+        <div class="field"><label>Backup connectivity</label>${epSelect('ep-backup-connectivity',PROJECT_CONFIG_OPTIONS.connectivity,proj.backup_connectivity)}</div>
+        <div class="field full"><label>Authentication type <span style="font-weight:400;color:var(--gray-400)">(select all that apply)</span></label>${epMulti('ep-authentication-types',PROJECT_CONFIG_OPTIONS.authentication_types,proj.authentication_types)}</div>
+        <div class="field full"><label>Badge reader type</label><input id="ep-badge-reader-type" value="${(proj.badge_reader_type||'').replace(/"/g,'&quot;')}" placeholder="Enter badge reader model/type"></div>
+        <div class="field"><label>Payment device required</label>${epSelect('ep-payment-device-required',['Yes','No'],proj.payment_device_required===true?'Yes':proj.payment_device_required===false?'No':'','Select Yes or No...')}</div>
+        <div class="field"></div>
+        <div class="field full"><label>Workflows <span style="font-weight:400;color:var(--gray-400)">(select all that apply)</span></label>${epMulti('ep-workflow-types',PROJECT_CONFIG_OPTIONS.workflow_types,proj.workflow_types)}</div>
+        <div class="field full"><label>Workflow notes</label><textarea id="ep-workflow-notes" placeholder="Workflow details, exceptions, or special handling" style="min-height:55px">${proj.workflow_notes||''}</textarea></div>
+        <div class="field full"><label>Languages <span style="font-weight:400;color:var(--gray-400)">(select all that apply)</span></label>${epMulti('ep-languages',PROJECT_CONFIG_OPTIONS.languages,proj.languages)}</div>
+        <div class="field full"><label>Language notes / Other language</label><textarea id="ep-language-notes" placeholder="Required when Other is selected; optional notes for standard languages" style="min-height:55px">${proj.language_notes||''}</textarea></div>
         <div class="field full"><label>Notes</label><textarea id="ep-notes" style="min-height:55px">${proj.notes||''}</textarea></div>
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">🔗 Links — auto-populate into Generate Docs</div>
@@ -5267,6 +5355,19 @@ async function saveEditProj(id){
     naming_convention:document.getElementById('ep-naming')?.value.trim()||null,
     address:document.getElementById('ep-address')?.value.trim()||null,
     form_factor:document.getElementById('ep-form-factor')?.value.trim()||null,
+    voltage:document.getElementById('ep-voltage')?.value||null,
+    plug_type:document.getElementById('ep-plug-type')?.value||null,
+    power_requirements:document.getElementById('ep-power-requirements')?.value.trim()||null,
+    hosting:document.getElementById('ep-hosting')?.value||null,
+    primary_connectivity:document.getElementById('ep-primary-connectivity')?.value||null,
+    backup_connectivity:document.getElementById('ep-backup-connectivity')?.value||null,
+    authentication_types:epMultiValues('ep-authentication-types'),
+    badge_reader_type:document.getElementById('ep-badge-reader-type')?.value.trim()||null,
+    payment_device_required:document.getElementById('ep-payment-device-required')?.value==='Yes'?true:document.getElementById('ep-payment-device-required')?.value==='No'?false:null,
+    workflow_types:epMultiValues('ep-workflow-types'),
+    workflow_notes:document.getElementById('ep-workflow-notes')?.value.trim()||null,
+    languages:epMultiValues('ep-languages'),
+    language_notes:document.getElementById('ep-language-notes')?.value.trim()||null,
     kickoff_deck_url:document.getElementById('ep-kickoff-deck')?.value.trim()||null,
     install_ticket_url:document.getElementById('ep-install-ticket')?.value.trim()||null,
     vinyl_odoo_url:document.getElementById('ep-vinyl-odoo')?.value.trim()||null,
@@ -7213,14 +7314,13 @@ function renderInstallForm(){
   const qaTaskUrl=getDocLink('QA Task');
   return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()" onfocusout="saveDocFormState(true)">
     <div class="doc-section-lbl">Additional unit configuration (appears at top of ticket)</div>
-    ${fld('if-auth','Authentication / payment device','e.g. Badge reader, Barcode scanner','full')}
-    ${fld('if-payconfig','Payment device configuration','','')}
-    ${fld('if-lang','Language','e.g. English','')}
-    ${fldSelect('if-ada','ADA keypad',['No','Yes'])}
-    ${fld('if-hosting','Hosting','e.g. Default Multi-Tenant','')}
-    ${fld('if-survey','IT site survey','e.g. Optconnect','')}
-    ${fld('if-voltage','Voltage','e.g. 110V','')}
-    ${fld('if-plug','Plug type','e.g. Type B','')}
+    ${pullField('Authentication',projectAuthenticationSummary(p),'edit via Project Overview → Edit')}
+    ${pullField('Payment device required',p.payment_device_required===true?'Yes':p.payment_device_required===false?'No':'','edit via Project Overview → Edit')}
+    ${pullField('Languages',configList(p.languages),'edit via Project Overview → Edit')}
+    ${pullField('Hosting',p.hosting||'','edit via Project Overview → Edit')}
+    ${pullField('Voltage',p.voltage||'','edit via Project Overview → Edit')}
+    ${pullField('Plug type',p.plug_type||'','edit via Project Overview → Edit')}
+    ${pullField('Power requirements',p.power_requirements||'','edit via Project Overview → Edit')}
     ${fld('if-orientation','Orientation','e.g. Per approved retail layout','full')}
     ${pullField('PM',p.pm||'','edit via Project Overview → Edit')}
     ${pullField('Sales',p.sales||'','edit via Project Overview → Edit')}
@@ -7239,7 +7339,7 @@ function renderInstallForm(){
     ${pullField('Channel Partner',p.channel_partner||'','edit via Project Overview → Edit')}
     ${pullField('End Client (CX)',p.client||'','edit via Project Overview → Edit')}
     <div class="doc-section-lbl">7. Network connectivity</div>
-    ${fld('if-connectivity','What is the network connectivity?','e.g. LAN Connectivity','full')}
+    ${pullField('Network connectivity',projectConnectivitySummary(p),'edit via Project Overview → Edit')}
     <div class="doc-section-lbl">8. Kiosk ID</div>
     ${pullField('Kiosk ID (Naming Convention)',naming,'edit via Project Page')}
     <div class="doc-section-lbl">9. QA Task URL</div>
@@ -7275,13 +7375,13 @@ function renderUIForm(){
     ${fld('uf-elevator','Vending unit elevator','e.g. Enhanced Quendra','')}
     ${fld('uf-screen','Screen size','e.g. 43"','')}
     <div class="doc-section-lbl">Configuration</div>
-    ${fld('uf-workflows','Smart workflows','e.g. Pick-up, Drop-off, Catalogue loan, Swap, Vending','full')}
-    ${fld('uf-auth','Authentication','e.g. Badge, Barcode scanner','')}
-    ${fld('uf-payment','Payment device','e.g. N/A','')}
-    ${fld('uf-lang','Language','e.g. English (Default)','')}
+    ${pullField('Smart workflows',configList(p.workflow_types),'edit via Project Overview → Edit')}
+    ${pullField('Authentication',projectAuthenticationSummary(p),'edit via Project Overview → Edit')}
+    ${pullField('Payment device required',p.payment_device_required===true?'Yes':p.payment_device_required===false?'No':'','edit via Project Overview → Edit')}
+    ${pullField('Languages',configList(p.languages),'edit via Project Overview → Edit')}
     ${fldSelect('uf-ada','ADA keypad',['No','Yes'])}
     ${fldSelect('uf-api','API integration',['No','Yes'])}
-    ${fld('uf-hosting','Hosting','e.g. Multi-Tenant Cloud environment in Canada','')}
+    ${pullField('Hosting',p.hosting||'','edit via Project Overview → Edit')}
     ${fld('uf-vision','Vision URL','e.g. linkedinITAM.signifivision.com','')}
     <div class="doc-section-lbl">Attachments & links</div>
     ${fld('uf-branding','Branding documents link','SharePoint URL','full')}
@@ -7315,12 +7415,12 @@ function renderQAForm(){
     ${fld('qf-address','Installation address','','full','text',address)}
     ${fld('qf-naming','Naming convention & locations','e.g. ALLIZ-BOURN-LON-SPXL','full','text',naming)}
     ${fld('qf-kiosk','Kiosk type / product','e.g. SparkXL','','text',formFactor)}
-    ${fld('qf-lang','Language','e.g. English and German','')}
-    ${fld('qf-hosting','Hosting','e.g. Default European Server','')}
-    ${fld('qf-connectivity','Internet connectivity','e.g. LAN (primary), Wifi (backup)','full')}
-    ${fld('qf-auth','Authentication / payment device','e.g. Barcode Scanner, Badge Reader - MiFare','full')}
+    ${pullField('Languages',configList(p.languages),'edit via Project Overview → Edit')}
+    ${pullField('Hosting',p.hosting||'','edit via Project Overview → Edit')}
+    ${pullField('Internet connectivity',projectConnectivitySummary(p),'edit via Project Overview → Edit')}
+    ${pullField('Authentication / payment device',[projectAuthenticationSummary(p),p.payment_device_required===true?'Payment device: Yes':p.payment_device_required===false?'Payment device: No':''].filter(Boolean).join(' | '),'edit via Project Overview → Edit')}
     <div class="doc-section-lbl">Workflows</div>
-    ${fld('qf-workflows','Workflows','e.g. Vending, Pick-up, Drop-off, Pre-approved vending','full')}
+    ${pullField('Workflows',configList(p.workflow_types)+(p.workflow_notes?' | Notes: '+p.workflow_notes:''),'edit via Project Overview → Edit')}
     <div class="doc-section-lbl">Links</div>
     ${fld('qf-jira-task','UI task link (Jira)','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Jira / UI Task'))}
     ${fld('qf-jira-product','Product template link (Jira)','https://signifisolutions.atlassian.net/...','full','text',getDocLink('Product Template'))}
@@ -7356,6 +7456,14 @@ function onDocProjSearch(val){
 function g(id){
   const el=document.getElementById(id);
   if(el)return el.value.trim();
+  const p=getDocProj();
+  const canonical={
+    'if-auth':projectAuthenticationSummary(p),'if-payconfig':p.payment_device_required===true?'Yes':p.payment_device_required===false?'No':'',
+    'if-lang':configList(p.languages),'if-hosting':p.hosting||'','if-voltage':p.voltage||'','if-plug':p.plug_type||'','if-connectivity':projectConnectivitySummary(p),
+    'uf-workflows':configList(p.workflow_types),'uf-auth':projectAuthenticationSummary(p),'uf-payment':p.payment_device_required===true?'Yes':p.payment_device_required===false?'No':'','uf-lang':configList(p.languages),'uf-hosting':p.hosting||'',
+    'qf-workflows':configList(p.workflow_types)+(p.workflow_notes?' | Notes: '+p.workflow_notes:''),'qf-auth':[projectAuthenticationSummary(p),p.payment_device_required===true?'Payment device: Yes':p.payment_device_required===false?'Payment device: No':''].filter(Boolean).join(' | '),'qf-lang':configList(p.languages),'qf-hosting':p.hosting||'','qf-connectivity':projectConnectivitySummary(p)
+  };
+  if(Object.prototype.hasOwnProperty.call(canonical,id))return canonical[id];
   // Auto-fill fields must come from the live project, not stale state
   if(AUTO_FILL_FIELDS.has(id))return'';
   // Manual fields — check saved state
@@ -7931,10 +8039,104 @@ async function trSave(){
     if(currentUserRole==='PM'){badge.style.display='none';}
     else{badge.style.display='inline';badge.textContent=currentUserRole;badge.style.color=currentUserRole==='Admin'?'#fca5a5':'#93c5fd';badge.style.borderColor=currentUserRole==='Admin'?'#7f1d1d':'#1e3a5f';}
   }
+  updateNavVisibility();
   const saved=document.getElementById('tr-saved');
   if(saved){saved.style.display='inline';setTimeout(()=>{saved.style.display='none';},2500);}
   showToast('Team roles saved ✓');
 }
+// ── PROJECT CONFIG MIGRATION (dry run only — no writes to `projects`) ──
+// Maps each canonical field to the Gen Docs tab field(s) it might already
+// have a value under. badge_reader_type/payment_device_type are deliberately
+// excluded — their legacy source is a single combined free-text field
+// ("Authentication / payment device") that can't be safely split. workflow_type
+// is excluded pending a decision on singular vs multi-value (legacy data is a
+// comma-separated list).
+const PROJ_CONFIG_FIELDS=[
+  {key:'voltage',label:'Voltage',type:'text',sources:{install:'if-voltage'}},
+  {key:'plug_type',label:'Plug type',type:'text',sources:{install:'if-plug'}},
+  {key:'hosting',label:'Hosting',type:'text',sources:{install:'if-hosting',ui:'uf-hosting',qa:'qf-hosting'}},
+  {key:'primary_connectivity',label:'Connectivity (manual review)',type:'text',sources:{install:'if-connectivity',qa:'qf-connectivity'}},
+  {key:'languages',label:'Languages',type:'multi',sources:{install:'if-lang',ui:'uf-lang',qa:'qf-lang'}},
+];
+let _configDryRunResult=null;
+function runConfigMigrationDryRun(){
+  const report={scanned:0,errors:0};
+  const perField={};
+  PROJ_CONFIG_FIELDS.forEach(f=>perField[f.key]={migrated:0,alreadySet:0,empty:0,conflicts:0,migratedSamples:[]});
+  const conflictRows=[];
+
+  projects.forEach(proj=>{
+    report.scanned++;
+    let state=null;
+    const raw=globalSections[proj.id]?.['gendoc_state'];
+    if(raw){try{state=JSON.parse(raw);}catch(e){report.errors++;}}
+    PROJ_CONFIG_FIELDS.forEach(f=>{
+      const canonicalVal=proj[f.key];
+      const canonicalSet=Array.isArray(canonicalVal)?canonicalVal.length>0:!!(canonicalVal&&String(canonicalVal).trim());
+      if(canonicalSet){perField[f.key].alreadySet++;return;}
+      if(!state){perField[f.key].empty++;return;}
+      const vals={};
+      Object.entries(f.sources).forEach(([tab,fieldId])=>{
+        const v=(state[tab]?.[fieldId]||'').trim();
+        if(v)vals[tab]=v;
+      });
+      if(!Object.keys(vals).length){perField[f.key].empty++;return;}
+      const normalize=v=>f.type==='multi'?v.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean).sort().join('|'):v.trim().toLowerCase();
+      const uniqueNorm=[...new Set(Object.values(vals).map(normalize))];
+      if(uniqueNorm.length===1){
+        perField[f.key].migrated++;
+        if(perField[f.key].migratedSamples.length<5)perField[f.key].migratedSamples.push({project:proj.name,so:proj.so_number,value:Object.values(vals)[0]});
+      } else {
+        perField[f.key].conflicts++;
+        conflictRows.push({project_id:proj.id,so_number:proj.so_number||'',field_name:f.key,source_values:vals});
+      }
+    });
+  });
+  _configDryRunResult={report,perField,conflictRows};
+  renderSettings();
+}
+async function saveConfigConflictsToReviewTable(){
+  if(!_configDryRunResult?.conflictRows?.length){showToast('Run the dry run first');return;}
+  const rows=_configDryRunResult.conflictRows.map(r=>({project_id:r.project_id,so_number:r.so_number,field_name:r.field_name,source_values:r.source_values}));
+  const{error}=await sb.from('project_config_migration_conflicts').insert(rows);
+  if(error){showToast('⚠ '+error.message);return;}
+  showToast(rows.length+' conflicts saved to review table ✓');
+}
+function configMigrationSection(){
+  if(!isAdmin())return'';
+  const r=_configDryRunResult;
+  return`<div style="padding-top:1.25rem;border-top:1px solid var(--gray-100);margin-top:1.25rem">
+    <div style="font-size:14px;font-weight:600;margin-bottom:4px">Project Configuration migration (dry run)</div>
+    <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">Read-only. Scans existing Gen Docs data to see what could migrate into the new canonical project fields — writes nothing to projects. Run this, review the results, then let's decide on the backfill execution together.</div>
+    <button class="btn btn-primary" onclick="runConfigMigrationDryRun()">▶ Run dry run</button>
+    ${r?`
+      <div style="margin-top:14px;font-size:12px;color:var(--gray-600)">Scanned ${r.report.scanned} projects${r.report.errors?` · ${r.report.errors} had unreadable Gen Docs state`:''}</div>
+      <table class="pp-table" style="width:100%;margin-top:8px">
+        <thead><tr><th>Field</th><th>Already set</th><th>Migratable (single/matching)</th><th>Conflicting</th><th>No legacy value</th></tr></thead>
+        <tbody>
+          ${PROJ_CONFIG_FIELDS.map(f=>`<tr>
+            <td>${f.label}</td>
+            <td>${r.perField[f.key].alreadySet}</td>
+            <td style="color:var(--success);font-weight:600">${r.perField[f.key].migrated}</td>
+            <td style="color:${r.perField[f.key].conflicts?'var(--red)':'var(--gray-400)'};font-weight:${r.perField[f.key].conflicts?'600':'400'}">${r.perField[f.key].conflicts}</td>
+            <td style="color:var(--gray-400)">${r.perField[f.key].empty}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      ${r.conflictRows.length?`
+        <div style="margin-top:14px;font-size:12px;font-weight:600;color:var(--red)">${r.conflictRows.length} conflicts found — nothing will be auto-migrated for these</div>
+        <div style="max-height:240px;overflow-y:auto;margin-top:6px;border:1px solid var(--gray-200);border-radius:var(--radius)">
+          <table class="pp-table" style="width:100%">
+            <thead><tr><th>Project</th><th>SO</th><th>Field</th><th>Conflicting values</th></tr></thead>
+            <tbody>${r.conflictRows.map(c=>`<tr><td>${(projects.find(p=>p.id===c.project_id)?.name)||''}</td><td>${c.so_number}</td><td>${c.field_name}</td><td>${Object.entries(c.source_values).map(([tab,v])=>`<b>${tab}</b>: ${v}`).join(' vs ')}</td></tr>`).join('')}</tbody>
+          </table>
+        </div>
+        <button class="btn" style="margin-top:8px" onclick="saveConfigConflictsToReviewTable()">💾 Save conflict list to review table</button>
+      `:'<div style="margin-top:10px;font-size:12px;color:var(--success)">No conflicts found.</div>'}
+    `:''}
+  </div>`;
+}
+
 function teamRolesSection(){
   const list=getTrWorking();
   return`<div style="padding-top:1.25rem;border-top:1px solid var(--gray-100);margin-top:1.25rem">
@@ -8177,6 +8379,62 @@ function openPushDatesModal(masterId,childId){}// placeholder - handled by openP
 // ═══════════════════════════════════════════════════════════
 // UAT MODULE — ADMIN TEMPLATE BUILDER (Phase 1)
 // ═══════════════════════════════════════════════════════════
+// ── UAT: expected-value resolver ────────────────────────────
+// Returns the project's actual value for a config field, or:
+//   null      = field IS tracked in Ops Hub but currently blank
+//   undefined = field is NOT tracked anywhere in Ops Hub yet
+// Only a handful of fields are genuinely clean project columns. A few more
+// exist, but only as loose per-tab text inside the Gen Docs module (not a
+// single source of truth — the same field can differ between the Install/UI/QA
+// tabs). The rest (badge reader type, payment device type, workflow type,
+// shipping/seismic kit, video loop, translation, screen presence, add-on
+// locker) have no data source anywhere in the app today — this returns
+// undefined for those rather than guessing or misusing an unrelated field
+// (e.g. badge_reader_url is a support-ticket link, NOT a badge reader model).
+const UAT_GENDOC_FIELD_MAP={};
+function getExpectedProjectValue(projectId,fieldKey){
+  const proj=projects.find(p=>p.id===projectId);
+  if(!proj)return undefined;
+  const directMap={form_factor:proj.form_factor,naming_convention:proj.naming_convention,product_type:proj.product_type,location:proj.location,so_number:proj.so_number,client:proj.client,voltage:proj.voltage,hosting:proj.hosting,plug_type:proj.plug_type,connectivity:projectConnectivitySummary(proj),primary_connectivity:proj.primary_connectivity,backup_connectivity:proj.backup_connectivity,authentication_types:proj.authentication_types,badge_reader_type:proj.badge_reader_type,payment_device_required:proj.payment_device_required,workflow_types:proj.workflow_types,workflow_notes:proj.workflow_notes,languages:proj.languages,language_notes:proj.language_notes,power_requirements:proj.power_requirements};
+  if(Object.prototype.hasOwnProperty.call(directMap,fieldKey))return directMap[fieldKey]||null;
+  const genKey=UAT_GENDOC_FIELD_MAP[fieldKey];
+  if(genKey){
+    const raw=globalSections[projectId]?.['gendoc_state'];
+    if(!raw)return undefined;
+    try{
+      const state=JSON.parse(raw);
+      const val=state.install?.[genKey];
+      return val?val:null;
+    }catch(e){return undefined;}
+  }
+  return undefined; // not tracked anywhere yet
+}
+function uatExpectedValueDisplay(projectId,fieldKey){
+  const val=getExpectedProjectValue(projectId,fieldKey);
+  if(val===undefined)return{text:'Not tracked in Ops Hub yet',tracked:false};
+  if(val===null||val==='')return{text:'Not set',tracked:true};
+  return{text:val,tracked:true};
+}
+// Conditional visibility — fails OPEN (shows the question) whenever the
+// condition field isn't tracked, since hiding a real inspection point due to
+// a data gap is worse than occasionally showing one that's not applicable.
+// Only actively hides when Ops Hub has explicit data saying the condition is false.
+function uatQuestionVisible(q,projectId){
+  if(!q.condition_field||!q.condition_operator)return true;
+  const val=getExpectedProjectValue(projectId,q.condition_field);
+  if(val===undefined||val===null)return true;
+  const s=String(val).trim().toLowerCase();
+  const isTruthy=['true','yes','y','1'].includes(s)||(!['false','no','none','n','0',''].includes(s)&&s.length>0);
+  switch(q.condition_operator){
+    case'not_empty':return s.length>0;
+    case'truthy':return isTruthy;
+    case'falsy':return!isTruthy;
+    case'equals':return s===(q.condition_value||'').trim().toLowerCase();
+    case'not_equals':return s!==(q.condition_value||'').trim().toLowerCase();
+    default:return true;
+  }
+}
+
 function renderUAT(){
   const el=document.getElementById('tab-uat');
   if(!el)return;
@@ -8221,14 +8479,29 @@ function renderUAT(){
         <button onclick="uatDeleteSection('${s.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:14px">✕ section</button>
       </div>
       <table class="pp-table" style="width:100%">
-        <thead><tr><th style="width:44%">Question</th><th style="width:22%">Answer type</th><th style="width:14%">Required</th><th></th></tr></thead>
+        <thead><tr><th style="width:40%">Question</th><th style="width:20%">Answer type</th><th style="width:10%">Required</th><th></th><th></th></tr></thead>
         <tbody>
           ${questions.map(q=>`<tr>
             <td><input value="${(q.question||'').replace(/"/g,'&quot;')}" placeholder="Question text..." onchange="uatUpdateQuestion('${q.id}','question',this.value)"></td>
             <td><select onchange="uatUpdateQuestion('${q.id}','answer_type',this.value)">${UAT_ANSWER_TYPES.map(a=>`<option value="${a.value}"${a.value===q.answer_type?' selected':''}>${a.label}</option>`).join('')}</select></td>
             <td style="text-align:center"><input type="checkbox" ${q.required?'checked':''} onchange="uatUpdateQuestion('${q.id}','required',this.checked)"></td>
+            <td><button onclick="uatToggleAdvanced('${q.id}')" style="background:none;border:1px solid var(--gray-200);border-radius:10px;padding:2px 8px;font-size:10px;color:var(--gray-500);cursor:pointer;font-family:var(--font)" title="Conditional visibility, expected value, help text">${q.condition_field||q.expected_field?'⚙ set':'⚙'}</button></td>
             <td class="pp-actions"><button class="pp-del" onclick="uatDeleteQuestion('${q.id}')">✕</button></td>
-          </tr>`).join('')}
+          </tr>
+          ${uatAdvancedOpen.has(q.id)?`<tr><td colspan="5" style="background:var(--gray-50);padding:10px">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:6px">
+              <div><label style="font-size:9px;color:var(--gray-500);text-transform:uppercase">Condition field</label><input value="${(q.condition_field||'').replace(/"/g,'&quot;')}" placeholder="e.g. badge_reader_type" onchange="uatUpdateQuestion('${q.id}','condition_field',this.value||null)" style="width:100%;font-size:11px;padding:4px 6px;border:1px solid var(--gray-300);border-radius:4px"></div>
+              <div><label style="font-size:9px;color:var(--gray-500);text-transform:uppercase">Operator</label><select onchange="uatUpdateQuestion('${q.id}','condition_operator',this.value||null)" style="width:100%;font-size:11px;padding:4px 6px;border:1px solid var(--gray-300);border-radius:4px"><option value="">— none —</option>${['not_empty','truthy','falsy','equals','not_equals'].map(op=>`<option value="${op}"${q.condition_operator===op?' selected':''}>${op}</option>`).join('')}</select></div>
+              <div><label style="font-size:9px;color:var(--gray-500);text-transform:uppercase">Compare value</label><input value="${(q.condition_value||'').replace(/"/g,'&quot;')}" placeholder="for equals/not_equals" onchange="uatUpdateQuestion('${q.id}','condition_value',this.value||null)" style="width:100%;font-size:11px;padding:4px 6px;border:1px solid var(--gray-300);border-radius:4px"></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 2fr;gap:8px;margin-bottom:6px">
+              <div><label style="font-size:9px;color:var(--gray-500);text-transform:uppercase">Expected-value field</label><input value="${(q.expected_field||'').replace(/"/g,'&quot;')}" placeholder="e.g. plug_type" onchange="uatUpdateQuestion('${q.id}','expected_field',this.value||null)" style="width:100%;font-size:11px;padding:4px 6px;border:1px solid var(--gray-300);border-radius:4px"></div>
+              <div><label style="font-size:9px;color:var(--gray-500);text-transform:uppercase">Help / instruction text</label><input value="${(q.help_text||'').replace(/"/g,'&quot;')}" placeholder="Optional guidance shown to the PM" onchange="uatUpdateQuestion('${q.id}','help_text',this.value||null)" style="width:100%;font-size:11px;padding:4px 6px;border:1px solid var(--gray-300);border-radius:4px"></div>
+            </div>
+            <label style="font-size:11px;margin-right:14px"><input type="checkbox" ${q.notes_required_on_fail?'checked':''} onchange="uatUpdateQuestion('${q.id}','notes_required_on_fail',this.checked)"> Notes required if this fails</label>
+            <label style="font-size:11px"><input type="checkbox" ${q.photo_allowed!==false?'checked':''} onchange="uatUpdateQuestion('${q.id}','photo_allowed',this.checked)"> Allow photo attachment</label>
+            <div style="font-size:10px;color:var(--gray-400);margin-top:6px">Fields not yet tracked in Ops Hub (badge reader type, payment device, workflow, shipping/seismic kit, video loop, translation, screen presence) will show the question rather than hide it — see the architecture note on data gaps.</div>
+          </td></tr>`:''}`).join('')}
         </tbody>
       </table>
       <button class="pp-add-btn" onclick="uatAddQuestion('${s.id}')">+ Add question</button>
@@ -8384,6 +8657,7 @@ function renderSettings(){
         ${peopleListSection('sales_list')}
         ${peopleListSection('am_list')}
         ${teamRolesSection()}
+        ${configMigrationSection()}
       </div>
     </div>
     ${migrationSection}
