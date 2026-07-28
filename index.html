@@ -999,11 +999,18 @@ if(localStorage.getItem('signifi_sidebar_collapsed')==='1'){
 // Role-gated nav: hide links the current user isn't permitted to use. Called
 // after role is known (post-login/post-loadAll) and again if roles change.
 function updateNavVisibility(){
-  const uatLink=document.getElementById('ni-uat');
-  if(uatLink)uatLink.style.display=isAdmin()?'':'none';
+  const uatLink = document.getElementById('ni-uat');
+  if (uatLink) uatLink.style.display = (isAdmin() || isPM()) ? '' : 'none';
 }
-function toggleNav(e){e.stopPropagation();document.getElementById('nav-dropdown').classList.toggle('open');}
-document.addEventListener('click',()=>document.getElementById('nav-dropdown')?.classList.remove('open'));
+
+function toggleNav(e){
+  e.stopPropagation();
+  document.getElementById('nav-dropdown').classList.toggle('open');
+}
+
+document.addEventListener('click', () =>
+  document.getElementById('nav-dropdown')?.classList.remove('open')
+);
 
 function setTab(tab){
   currentTab=tab;
