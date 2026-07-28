@@ -8476,10 +8476,14 @@ function openPushDatesModal(masterId,childId){}// placeholder - handled by openP
 // undefined for those rather than guessing or misusing an unrelated field
 // (e.g. badge_reader_url is a support-ticket link, NOT a badge reader model).
 const UAT_GENDOC_FIELD_MAP={};
-function getExpectedProjectValue(projectId,fieldKey){
+function getExpectedProjectValue(projectId,fieldKey,soTag){
   const proj=projects.find(p=>p.id===projectId);
   if(!proj)return undefined;
-  const directMap={form_factor:proj.form_factor,naming_convention:proj.naming_convention,product_type:proj.product_type,location:proj.location,so_number:proj.so_number,client:proj.client,voltage:proj.voltage,hosting:proj.hosting,plug_type:proj.plug_type,connectivity:projectConnectivitySummary(proj),primary_connectivity:proj.primary_connectivity,backup_connectivity:proj.backup_connectivity,authentication_types:proj.authentication_types,badge_reader_type:proj.badge_reader_type,payment_device_required:proj.payment_device_required,workflow_types:proj.workflow_types,workflow_notes:proj.workflow_notes,languages:proj.languages,language_notes:proj.language_notes,power_requirements:proj.power_requirements};
+  // naming_convention and address respect a selected SO override (multi-SO projects
+  // can have a different address/naming per SO via so_details) — falls back to the
+  // project-level value when no SO is selected/applicable.
+  const soCfg=getSOConfigSummary(proj,soTag||'');
+  const directMap={form_factor:proj.form_factor,naming_convention:soCfg.naming_convention,address:soCfg.address,product_type:proj.product_type,location:proj.location,so_number:proj.so_number,client:proj.client,voltage:proj.voltage,hosting:proj.hosting,plug_type:proj.plug_type,connectivity:projectConnectivitySummary(proj),primary_connectivity:proj.primary_connectivity,backup_connectivity:proj.backup_connectivity,authentication_types:proj.authentication_types,badge_reader_type:proj.badge_reader_type,payment_device_required:proj.payment_device_required,workflow_types:proj.workflow_types,workflow_notes:proj.workflow_notes,languages:proj.languages,language_notes:proj.language_notes,power_requirements:proj.power_requirements};
   if(Object.prototype.hasOwnProperty.call(directMap,fieldKey))return directMap[fieldKey]||null;
   const genKey=UAT_GENDOC_FIELD_MAP[fieldKey];
   if(genKey){
@@ -8503,9 +8507,9 @@ function uatExpectedValueDisplay(projectId,fieldKey){
 // condition field isn't tracked, since hiding a real inspection point due to
 // a data gap is worse than occasionally showing one that's not applicable.
 // Only actively hides when Ops Hub has explicit data saying the condition is false.
-function uatQuestionVisible(q,projectId){
+function uatQuestionVisible(q,projectId,soTag){
   if(!q.condition_field||!q.condition_operator)return true;
-  const val=getExpectedProjectValue(projectId,q.condition_field);
+  const val=getExpectedProjectValue(projectId,q.condition_field,soTag);
   if(val===undefined||val===null)return true;
   const s=String(val).trim().toLowerCase();
   const isTruthy=['true','yes','y','1'].includes(s)||(!['false','no','none','n','0',''].includes(s)&&s.length>0);
@@ -8521,6 +8525,7 @@ function uatQuestionVisible(q,projectId){
 
 let uatViewMode='run';
 let uatRunnerProjId=null,uatRunnerSessionId=null,uatRunnerQIdx=0,uatDetailSessionId=null;
+let uatRunnerSOTag=''; // selected SO for multi-SO projects — drives address/naming + which machines show
 let uatMachines=[],uatSessions=[],uatAnswers=[];
 function renderUAT(){
   const el=document.getElementById('tab-uat');
@@ -8543,6 +8548,9 @@ function renderUAT(){
 async function loadUATRunnerProject(projId){
   uatRunnerProjId=projId;
   uatRunnerSessionId=null;
+  const proj=projects.find(p=>p.id===projId);
+  const soList=(proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  uatRunnerSOTag=soList.length===1?soList[0]:''; // auto-set for single-SO projects; multi-SO asks below
   const[m,s]=await Promise.all([
     sb.from('uat_machines').select('*').eq('project_id',projId),
     sb.from('uat_sessions').select('*').eq('project_id',projId),
@@ -8557,17 +8565,20 @@ async function loadUATRunnerProject(projId){
   renderUAT();
 }
 function uatRunnerQuestionList(session){
+  const machine=uatMachines.find(m=>m.id===session.machine_id);
+  const soTag=machine?.so_tag||'';
   const sections=uatSections.filter(s=>s.template_id===session.template_id).sort((a,b)=>a.display_order-b.display_order);
   const list=[];
   sections.forEach(s=>{
-    uatQuestions.filter(q=>q.section_id===s.id&&uatQuestionVisible(q,session.project_id)).sort((a,b)=>a.display_order-b.display_order)
+    uatQuestions.filter(q=>q.section_id===s.id&&uatQuestionVisible(q,session.project_id,soTag)).sort((a,b)=>a.display_order-b.display_order)
       .forEach(q=>list.push({...q,sectionTitle:s.title}));
   });
   return list;
 }
+function uatSelectSOTag(soTag){uatRunnerSOTag=soTag;renderUAT();}
 async function uatAddMachine(machineType){
-  const existingCount=uatMachines.filter(m=>m.machine_type===machineType).length;
-  const{data,error}=await sb.from('uat_machines').insert({project_id:uatRunnerProjId,machine_type:machineType,machine_label:machineType+' #'+(existingCount+1),created_by:currentUserName}).select().single();
+  const existingCount=uatMachines.filter(m=>m.machine_type===machineType&&(m.so_tag||'')===uatRunnerSOTag).length;
+  const{data,error}=await sb.from('uat_machines').insert({project_id:uatRunnerProjId,so_tag:uatRunnerSOTag||null,machine_type:machineType,machine_label:machineType+' #'+(existingCount+1),created_by:currentUserName}).select().single();
   if(error){showToast('⚠ '+error.message);return;}
   uatMachines.push(data);
   renderUAT();
@@ -8783,11 +8794,13 @@ async function exportUATSessionExcel(sessionId){
   showToast('Building Excel…');
 
   const val=v=>v===undefined||v===null||v===''?'':Array.isArray(v)?v.join(', '):v;
-  const badgeReader=val(getExpectedProjectValue(proj.id,'badge_reader_type'));
-  const paymentMethod=val(getExpectedProjectValue(proj.id,'payment_device_type'));
-  const uiLanguage=val(getExpectedProjectValue(proj.id,'languages'));
-  const plugType=val(getExpectedProjectValue(proj.id,'plug_type'));
-  const connectivity=val(getExpectedProjectValue(proj.id,'connectivity'));
+  const soTag=machine.so_tag||'';
+  const soCfg=getSOConfigSummary(proj,soTag);
+  const badgeReader=val(getExpectedProjectValue(proj.id,'badge_reader_type',soTag));
+  const paymentMethod=val(getExpectedProjectValue(proj.id,'payment_device_type',soTag));
+  const uiLanguage=val(getExpectedProjectValue(proj.id,'languages',soTag));
+  const plugType=val(getExpectedProjectValue(proj.id,'plug_type',soTag));
+  const connectivity=val(getExpectedProjectValue(proj.id,'connectivity',soTag));
   const overallText=session.overall_result==='fail'?'Failed':session.overall_result==='pass_with_override'?'Pass (Override)':session.overall_result==='pass'?'Pass':'';
 
   const BLACK='FF1A1A1A',RED='FFE0293D',GREEN='FF16A34A',GREEN_BG='FFDCFCE7',RED_BG='FFFEE2E2',GRAY_BG='FFF5F5F5',WHITE='FFFFFFFF';
@@ -8830,11 +8843,13 @@ async function exportUATSessionExcel(sessionId){
     r++;
   };
   infoRow('Project Manager:',session.completed_by||session.created_by);
-  infoRow('SO:',proj.so_number);
+  infoRow('SO:',soTag||proj.so_number);
   infoRow('Customer / Channel:',proj.client);
+  infoRow('Address:',soCfg.address);
   infoRow('Form Factor:',proj.form_factor);
-  infoRow('Naming Convention:',machine.machine_label||proj.naming_convention);
+  infoRow('Naming Convention:',soCfg.naming_convention);
   infoRow('Machine Type:',machine.machine_type);
+  infoRow('Machine Label:',machine.machine_label);
   infoRow('Date Completed:',session.completed_date?session.completed_date.slice(0,10):'');
   infoRow('Badge Reader:',badgeReader);
   infoRow('Payment Method:',paymentMethod);
@@ -8946,14 +8961,14 @@ async function exportUATSessionExcel(sessionId){
   ws.mergeCells('C'+r+':E'+r);
 
   // ── Footer: SO, machine, generator credit, page numbers ─
-  ws.headerFooter.oddFooter=`&L${proj.so_number||''} — ${machine.machine_label}&CGenerated by Signifi Ops Hub&RPage &P of &N`;
+  ws.headerFooter.oddFooter=`&L${soTag||proj.so_number||''} — ${machine.machine_label}&CGenerated by Signifi Ops Hub&RPage &P of &N`;
 
   const buf=await wb.xlsx.writeBuffer();
   const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
   a.href=url;
-  a.download='UAT_'+(proj.so_number||proj.name||'project').replace(/[^\w-]/g,'_')+'_'+machine.machine_label.replace(/[^\w-]/g,'_')+'.xlsx';
+  a.download='UAT_'+(soTag||proj.so_number||proj.name||'project').replace(/[^\w-]/g,'_')+'_'+machine.machine_label.replace(/[^\w-]/g,'_')+'.xlsx';
   document.body.appendChild(a);a.click();document.body.removeChild(a);
   URL.revokeObjectURL(url);
   showToast('Excel exported ✓');
@@ -8980,13 +8995,40 @@ function renderUATRun(){
   }
   const proj=projects.find(p=>p.id===uatRunnerProjId);
   if(!proj){el.innerHTML=header;return;}
+  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  // Multi-SO project, no SO chosen yet — ask which SO this checklist run is for.
+  // Selecting one drives address/naming (via so_details) and scopes the machine list.
+  if(soList.length>1&&!uatRunnerSOTag){
+    el.innerHTML=header+`<div style="max-width:520px;padding:0 16px 24px">
+      <button onclick="uatRunnerProjId=null;renderUAT()" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-bottom:10px">← Change project</button>
+      <div style="font-size:15px;font-weight:600;margin-bottom:2px">${proj.name}</div>
+      <div style="font-size:12px;color:var(--gray-500);margin-bottom:14px">${proj.client||''}</div>
+      <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-bottom:8px">This project has multiple SOs — select one</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        ${soList.map(so=>{
+          const cfg=getSOConfigSummary(proj,so);
+          return`<div onclick="uatSelectSOTag('${so.replace(/'/g,"\\'")}')" style="padding:12px 14px;border:1px solid var(--gray-200);border-radius:var(--radius);cursor:pointer">
+            <div style="font-size:14px;font-weight:600;font-family:var(--mono)">${so}</div>
+            ${cfg.naming_convention?`<div style="font-size:11px;color:var(--gray-500);margin-top:2px">🏷 ${cfg.naming_convention}</div>`:''}
+            ${cfg.address?`<div style="font-size:11px;color:var(--gray-400);margin-top:2px">📍 ${cfg.address}</div>`:''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+    return;
+  }
+  const soCfg=getSOConfigSummary(proj,uatRunnerSOTag);
+  const scopedMachines=uatMachines.filter(m=>(m.so_tag||'')===uatRunnerSOTag);
   const confirmedTypes=Array.isArray(proj.uat_machine_types)&&proj.uat_machine_types.length?proj.uat_machine_types:formFactorToUATMachineTypes(proj.form_factor);
   el.innerHTML=header+`<div style="max-width:520px;padding:0 16px 24px">
     <button onclick="uatRunnerProjId=null;renderUAT()" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-bottom:10px">← Change project</button>
+    ${soList.length>1?`<button onclick="uatRunnerSOTag='';renderUAT()" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-bottom:10px;margin-left:14px">← Change SO</button>`:''}
     <div style="font-size:15px;font-weight:600;margin-bottom:2px">${proj.name}</div>
-    <div style="font-size:12px;color:var(--gray-500);margin-bottom:14px">${proj.so_number||''} · ${proj.client||''}</div>
+    <div style="font-size:12px;color:var(--gray-500);margin-bottom:2px">${uatRunnerSOTag||proj.so_number||''} · ${proj.client||''}</div>
+    ${soCfg.naming_convention?`<div style="font-size:11px;color:var(--gray-500);margin-bottom:2px">🏷 ${soCfg.naming_convention}</div>`:''}
+    ${soCfg.address?`<div style="font-size:11px;color:var(--gray-400);margin-bottom:14px">📍 ${soCfg.address}</div>`:'<div style="margin-bottom:14px"></div>'}
     <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-bottom:8px">Machines</div>
-    ${uatMachines.length?uatMachines.map(m=>{
+    ${scopedMachines.length?scopedMachines.map(m=>{
       const session=uatSessions.filter(s=>s.machine_id===m.id).sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||''))[0];
       const qCount=session?uatRunnerQuestionList(session).length:0;
       const answeredCount=session?uatRunnerQuestionList(session).filter(q=>uatAnswers.some(a=>a.session_id===session.id&&a.question_id===q.id&&a.answer)).length:0;
