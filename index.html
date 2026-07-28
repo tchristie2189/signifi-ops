@@ -8512,7 +8512,7 @@ function uatQuestionVisible(q,projectId){
 }
 
 let uatViewMode='run';
-let uatRunnerProjId=null,uatRunnerSessionId=null,uatRunnerQIdx=0;
+let uatRunnerProjId=null,uatRunnerSessionId=null,uatRunnerQIdx=0,uatDetailSessionId=null;
 let uatMachines=[],uatSessions=[],uatAnswers=[];
 function renderUAT(){
   const el=document.getElementById('tab-uat');
@@ -8674,7 +8674,11 @@ function renderUATCompletionReview(session,qList,machine,proj){
         ${failed.length?`<button onclick="uatCompleteSession('${session.id}',false)" style="padding:12px;border-radius:var(--radius);border:none;background:var(--red);color:white;cursor:pointer;font-size:14px;font-weight:600">Complete as Failed</button>
         <button onclick="uatPromptOverride('${session.id}')" style="padding:12px;border-radius:var(--radius);border:1px solid var(--black);background:white;cursor:pointer;font-size:14px;font-weight:600">Override result to Pass…</button>`
         :`<button onclick="uatCompleteSession('${session.id}',true)" style="padding:12px;border-radius:var(--radius);border:none;background:var(--success);color:white;cursor:pointer;font-size:14px;font-weight:600">✓ Complete UAT</button>`}
-      `:isAdmin()?`<button onclick="uatReopenSession('${session.id}')" style="padding:12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);cursor:pointer;font-size:14px">Reopen for editing (Admin)</button>`:''}
+      `:`<div style="display:flex;flex-direction:column;gap:8px">
+        <button onclick="uatDetailSessionId='${session.id}';renderUAT()" style="padding:12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);cursor:pointer;font-size:14px">📋 View full checklist</button>
+        <button onclick="exportUATSessionExcel('${session.id}')" style="padding:12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);cursor:pointer;font-size:14px">⬇ Export to Excel</button>
+        ${isAdmin()?`<button onclick="uatReopenSession('${session.id}')" style="padding:12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);cursor:pointer;font-size:14px">Reopen for editing (Admin)</button>`:''}
+      </div>`}
       <button onclick="uatRunnerSessionId=null;renderUAT()" style="padding:12px;border-radius:var(--radius);border:none;background:transparent;color:var(--gray-500);cursor:pointer;font-size:13px">← Back to machine list</button>
     </div>
   </div>`;
@@ -8720,9 +8724,115 @@ function renderUATSession(){
     </div>
   </div>`;
 }
+function renderUATSessionDetail(sessionId){
+  const session=uatSessions.find(s=>s.id===sessionId);
+  if(!session)return'<div class="empty-state">Session not found.</div>';
+  const machine=uatMachines.find(m=>m.id===session.machine_id);
+  const proj=projects.find(p=>p.id===session.project_id);
+  const qList=uatRunnerQuestionList(session);
+  const sectionTitles=[...new Set(qList.map(q=>q.sectionTitle))];
+  return`<div style="max-width:640px">
+    <button onclick="uatDetailSessionId=null;renderUAT()" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-bottom:12px">← Back</button>
+    <div style="font-size:18px;font-weight:700;margin-bottom:2px">${machine.machine_label} — Full checklist</div>
+    <div style="font-size:13px;color:var(--gray-500);margin-bottom:4px">${proj.so_number||''} · ${proj.client||''} · ${machine.machine_type}</div>
+    <div style="font-size:12px;color:var(--gray-600);margin-bottom:16px">
+      Result: <b style="color:${session.overall_result==='fail'?'var(--red)':'var(--success)'}">${session.overall_result==='fail'?'Failed':session.overall_result==='pass_with_override'?'Pass (Override)':'Pass'}</b>
+      · Completed by ${session.completed_by||'—'} on ${fmt(session.completed_date?session.completed_date.slice(0,10):'')}
+      ${session.override_reason?`<br>Override reason: ${session.override_reason} (by ${session.override_by})`:''}
+    </div>
+    <div style="margin-bottom:14px"><button onclick="exportUATSessionExcel('${session.id}')" style="font-size:12px;padding:7px 14px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);cursor:pointer">⬇ Export to Excel</button></div>
+    ${sectionTitles.map(title=>{
+      const qs=qList.filter(q=>q.sectionTitle===title);
+      return`<div class="pp-card" style="margin-bottom:10px"><div class="pp-card-head"><span class="pp-card-title">${title}</span></div>
+        <div class="pp-card-body">
+          ${qs.map(q=>{
+            const a=uatAnswers.find(x=>x.session_id===session.id&&x.question_id===q.id);
+            const chipColor=a?.answer==='fail'?'var(--red)':a?.answer==='pass'?'var(--success)':'var(--gray-400)';
+            const chipLabel=a?.answer==='fail'?'FAIL':a?.answer==='pass'?'PASS':a?.answer==='na'?'N/A':'—';
+            return`<div style="padding:8px 0;border-bottom:1px solid var(--gray-50);display:flex;gap:10px;align-items:flex-start">
+              <span style="font-size:10px;font-weight:700;color:${chipColor};border:1px solid ${chipColor};border-radius:4px;padding:2px 6px;flex-shrink:0;margin-top:1px">${chipLabel}</span>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:13px;color:var(--gray-800)">${q.question}</div>
+                ${a?.notes?`<div style="font-size:12px;color:var(--gray-500);margin-top:2px">Notes: ${a.notes.replace(/</g,'&lt;')}</div>`:''}
+                ${a?.photo_url?`<img src="${a.photo_url}" style="max-width:160px;border-radius:6px;margin-top:6px;display:block">`:''}
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+function exportUATSessionExcel(sessionId){
+  const session=uatSessions.find(s=>s.id===sessionId);
+  if(!session)return;
+  const machine=uatMachines.find(m=>m.id===session.machine_id);
+  const proj=projects.find(p=>p.id===session.project_id);
+  const qList=uatRunnerQuestionList(session);
+
+  // Header info block — mirrors the real PM UAT Checklist template's layout
+  // (label in col C, value in col E). Values pulled from canonical project
+  // fields where they exist; left blank (not guessed) where they don't.
+  const val=v=>v===undefined||v===null||v===''?'':Array.isArray(v)?v.join(', '):v;
+  const badgeReader=val(getExpectedProjectValue(proj.id,'badge_reader_type'));
+  const paymentMethod=val(getExpectedProjectValue(proj.id,'payment_device_type'));
+  const uiLanguage=val(getExpectedProjectValue(proj.id,'languages'));
+  const plugType=val(getExpectedProjectValue(proj.id,'plug_type'));
+  const connectivity=val(getExpectedProjectValue(proj.id,'connectivity'));
+
+  const rows=[];
+  const set=(r,c,v)=>{ if(!rows[r])rows[r]=[]; rows[r][c]=v; };
+  set(0,0,'PM UAT Checklist');
+  set(1,2,'Project Manager:'); set(1,4,session.completed_by||session.created_by||'');
+  set(2,2,'SO:'); set(2,4,proj.so_number||'');
+  set(3,2,'Customer / Channel:'); set(3,4,proj.client||'');
+  set(4,2,'Form Factor:'); set(4,4,proj.form_factor||'');
+  set(5,2,'Naming Convention:'); set(5,4,machine.machine_label||proj.naming_convention||'');
+  set(6,2,'Machine Type:'); set(6,4,machine.machine_type||'');
+  set(7,2,'Date completed:'); set(7,4,session.completed_date?session.completed_date.slice(0,10):'');
+  set(8,2,'Badge Reader:'); set(8,4,badgeReader);
+  set(9,2,'Payment Method:'); set(9,4,paymentMethod);
+  set(10,2,'UI Language:'); set(10,4,uiLanguage);
+  set(11,2,'Power / Plug Type:'); set(11,4,plugType);
+  set(12,2,'Internet Connectivity:'); set(12,4,connectivity);
+  set(13,2,'Overall Result:'); set(13,4,session.overall_result==='fail'?'Failed':session.overall_result==='pass_with_override'?'Pass (Override)':session.overall_result==='pass'?'Pass':'');
+  if(session.override_reason){set(14,2,'Override Reason:');set(14,4,session.override_reason+' (by '+session.override_by+')');}
+
+  const tableStart=rows.length+1;
+  set(tableStart,0,'S/N');set(tableStart,1,'Description');set(tableStart,2,'Yes');set(tableStart,3,'No');set(tableStart,4,'Remarks');
+  qList.forEach((q,i)=>{
+    const a=uatAnswers.find(x=>x.session_id===session.id&&x.question_id===q.id);
+    const r=tableStart+1+i;
+    set(r,0,i+1);
+    set(r,1,q.question);
+    set(r,2,a?.answer==='pass'?'X':'');
+    set(r,3,a?.answer==='fail'?'X':'');
+    set(r,4,(a?.answer==='na'?'N/A. ':'')+(a?.notes||''));
+  });
+  const specialRow=tableStart+1+qList.length+1;
+  set(specialRow,0,'Special Requirements:');
+  set(specialRow,1,proj.notes||'');
+  set(specialRow+2,4,'PM Signature:');
+  set(specialRow+5,4,'Quality Signature:');
+
+  const wb=XLSX.utils.book_new();
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:6},{wch:55},{wch:8},{wch:8},{wch:40}];
+  ws['!merges']=[
+    {s:{r:0,c:0},e:{r:0,c:4}}, // title
+    {s:{r:specialRow,c:1},e:{r:specialRow,c:4}}, // special requirements text
+  ];
+  XLSX.utils.book_append_sheet(wb,ws,machine.machine_type.slice(0,31));
+  XLSX.writeFile(wb,'UAT_'+(proj.so_number||proj.name||'project').replace(/[^\w-]/g,'_')+'_'+machine.machine_label.replace(/[^\w-]/g,'_')+'.xlsx');
+  showToast('Excel exported ✓');
+}
 function renderUATRun(){
   const el=document.getElementById('tab-uat');
   const header=`<div class="section" style="margin-bottom:14px"><div class="section-head"><div class="section-title">✅ UAT checklist</div>${isAdmin()?`<button onclick="uatViewMode='manage';renderUAT()" style="font-size:11px;padding:5px 12px;border-radius:14px;border:1px solid var(--gray-300);background:var(--white);cursor:pointer;font-family:var(--font)">⚙ Manage templates</button>`:''}</div></div>`;
+  if(uatDetailSessionId){
+    el.innerHTML=header+`<div style="padding:0 16px 24px">${renderUATSessionDetail(uatDetailSessionId)}</div>`;
+    return;
+  }
   if(uatRunnerSessionId){
     el.innerHTML=header+`<div style="padding:0 16px 24px">${renderUATSession()}</div>`;
     return;
