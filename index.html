@@ -47,8 +47,8 @@ body{font-family:var(--font);background:var(--gray-50);color:var(--black);min-he
   body.sidebar-collapsed .nav-group-label{opacity:0;height:0;padding:0;overflow:hidden;margin:0}
   #nav-more{display:block!important} /* "More" section stays permanently expanded in sidebar mode — no reason to hide items behind a second click when there's room */
   #nav-more-toggle{display:none}
-  .page-body{margin-left:220px;transition:margin-left .15s ease}
-  body.sidebar-collapsed .page-body{margin-left:56px}
+  .page-body{margin-left:220px!important;transition:margin-left .15s ease}
+  body.sidebar-collapsed .page-body{margin-left:56px!important}
   body.production-view-active .page-body{width:calc(100% - 220px)!important;margin-left:220px!important}
   body.production-view-active.sidebar-collapsed .page-body{width:calc(100% - 56px)!important;margin-left:56px!important}
   #sidebar-collapse-btn{display:flex!important}
