@@ -7,6 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <style>
 :root{--red:#C8102E;--red-light:#fdf0f2;--red-mid:#f5c2cb;--black:#0f0f0f;--gray-900:#1a1a1a;--gray-700:#3d3d3d;--gray-500:#6b6b6b;--gray-300:#c4c4c4;--gray-200:#e0e0e0;--gray-100:#f2f2f2;--gray-50:#f8f8f8;--white:#fff;--success:#1a7a4a;--success-bg:#eaf5ef;--warning:#8a5a00;--warning-bg:#fff8e6;--purple:#7c3aed;--purple-bg:#ede9fe;--blue:#2563eb;--blue-bg:#eff6ff;--font:'DM Sans',sans-serif;--mono:'DM Mono',monospace;--radius:6px;--radius-lg:10px;}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
@@ -8763,67 +8764,191 @@ function renderUATSessionDetail(sessionId){
     }).join('')}
   </div>`;
 }
-function exportUATSessionExcel(sessionId){
+// Signifi icon mark (black bg, matches the export header bar) — embedded so the
+// generated UAT Excel carries real branding, not just a colored bar.
+const UAT_LOGO_B64='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';
+async function exportUATSessionExcel(sessionId){
   const session=uatSessions.find(s=>s.id===sessionId);
   if(!session)return;
   const machine=uatMachines.find(m=>m.id===session.machine_id);
   const proj=projects.find(p=>p.id===session.project_id);
   const qList=uatRunnerQuestionList(session);
+  showToast('Building Excel…');
 
-  // Header info block — mirrors the real PM UAT Checklist template's layout
-  // (label in col C, value in col E). Values pulled from canonical project
-  // fields where they exist; left blank (not guessed) where they don't.
   const val=v=>v===undefined||v===null||v===''?'':Array.isArray(v)?v.join(', '):v;
   const badgeReader=val(getExpectedProjectValue(proj.id,'badge_reader_type'));
   const paymentMethod=val(getExpectedProjectValue(proj.id,'payment_device_type'));
   const uiLanguage=val(getExpectedProjectValue(proj.id,'languages'));
   const plugType=val(getExpectedProjectValue(proj.id,'plug_type'));
   const connectivity=val(getExpectedProjectValue(proj.id,'connectivity'));
+  const overallText=session.overall_result==='fail'?'Failed':session.overall_result==='pass_with_override'?'Pass (Override)':session.overall_result==='pass'?'Pass':'';
 
-  const rows=[];
-  const set=(r,c,v)=>{ if(!rows[r])rows[r]=[]; rows[r][c]=v; };
-  set(0,0,'PM UAT Checklist');
-  set(1,2,'Project Manager:'); set(1,4,session.completed_by||session.created_by||'');
-  set(2,2,'SO:'); set(2,4,proj.so_number||'');
-  set(3,2,'Customer / Channel:'); set(3,4,proj.client||'');
-  set(4,2,'Form Factor:'); set(4,4,proj.form_factor||'');
-  set(5,2,'Naming Convention:'); set(5,4,machine.machine_label||proj.naming_convention||'');
-  set(6,2,'Machine Type:'); set(6,4,machine.machine_type||'');
-  set(7,2,'Date completed:'); set(7,4,session.completed_date?session.completed_date.slice(0,10):'');
-  set(8,2,'Badge Reader:'); set(8,4,badgeReader);
-  set(9,2,'Payment Method:'); set(9,4,paymentMethod);
-  set(10,2,'UI Language:'); set(10,4,uiLanguage);
-  set(11,2,'Power / Plug Type:'); set(11,4,plugType);
-  set(12,2,'Internet Connectivity:'); set(12,4,connectivity);
-  set(13,2,'Overall Result:'); set(13,4,session.overall_result==='fail'?'Failed':session.overall_result==='pass_with_override'?'Pass (Override)':session.overall_result==='pass'?'Pass':'');
-  if(session.override_reason){set(14,2,'Override Reason:');set(14,4,session.override_reason+' (by '+session.override_by+')');}
-
-  const tableStart=rows.length+1;
-  set(tableStart,0,'S/N');set(tableStart,1,'Description');set(tableStart,2,'Yes');set(tableStart,3,'No');set(tableStart,4,'Remarks');
-  qList.forEach((q,i)=>{
-    const a=uatAnswers.find(x=>x.session_id===session.id&&x.question_id===q.id);
-    const r=tableStart+1+i;
-    set(r,0,i+1);
-    set(r,1,q.question);
-    set(r,2,a?.answer==='pass'?'X':'');
-    set(r,3,a?.answer==='fail'?'X':'');
-    set(r,4,(a?.answer==='na'?'N/A. ':'')+(a?.notes||''));
+  const BLACK='FF1A1A1A',RED='FFE0293D',GREEN='FF16A34A',GREEN_BG='FFDCFCE7',RED_BG='FFFEE2E2',GRAY_BG='FFF5F5F5',WHITE='FFFFFFFF';
+  const wb=new ExcelJS.Workbook();
+  wb.creator='Signifi Ops Hub';
+  wb.created=new Date();
+  const ws=wb.addWorksheet(machine.machine_type.slice(0,31),{
+    pageSetup:{fitToPage:true,fitToWidth:1,fitToHeight:0,orientation:'portrait',margins:{left:0.4,right:0.4,top:0.5,bottom:0.5,header:0.2,footer:0.2}},
+    views:[{state:'frozen',ySplit:0}], // set properly once header row index is known, below
   });
-  const specialRow=tableStart+1+qList.length+1;
-  set(specialRow,0,'Special Requirements:');
-  set(specialRow,1,proj.notes||'');
-  set(specialRow+2,4,'PM Signature:');
-  set(specialRow+5,4,'Quality Signature:');
+  ws.columns=[{width:6},{width:58},{width:9},{width:9},{width:38}];
 
-  const wb=XLSX.utils.book_new();
-  const ws=XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols']=[{wch:6},{wch:55},{wch:8},{wch:8},{wch:40}];
-  ws['!merges']=[
-    {s:{r:0,c:0},e:{r:0,c:4}}, // title
-    {s:{r:specialRow,c:1},e:{r:specialRow,c:4}}, // special requirements text
-  ];
-  XLSX.utils.book_append_sheet(wb,ws,machine.machine_type.slice(0,31));
-  XLSX.writeFile(wb,'UAT_'+(proj.so_number||proj.name||'project').replace(/[^\w-]/g,'_')+'_'+machine.machine_label.replace(/[^\w-]/g,'_')+'.xlsx');
+  // ── Branded title bar (with real logo) ──────────────────
+  ws.mergeCells('A1:E1');
+  const titleCell=ws.getCell('A1');
+  titleCell.value='                    PM UAT CHECKLIST';
+  titleCell.font={name:'Calibri',size:16,bold:true,color:{argb:WHITE}};
+  titleCell.alignment={vertical:'middle',horizontal:'left'};
+  titleCell.fill={type:'pattern',pattern:'solid',fgColor:{argb:BLACK}};
+  ws.getRow(1).height=30;
+  try{
+    const logoImgId=wb.addImage({base64:'data:image/png;base64,'+UAT_LOGO_B64,extension:'png'});
+    ws.addImage(logoImgId,{tl:{col:0.08,row:0.08},ext:{width:26,height:26}});
+  }catch(e){console.warn('UAT export: logo embed failed',e);}
+  ws.mergeCells('A2:E2');
+  const accentCell=ws.getCell('A2');
+  accentCell.fill={type:'pattern',pattern:'solid',fgColor:{argb:RED}};
+  ws.getRow(2).height=4;
+
+  let r=4;
+  const infoRow=(label,value)=>{
+    ws.getCell('B'+r).value=label;
+    ws.getCell('B'+r).font={bold:true,size:10,color:{argb:'FF555555'}};
+    ws.mergeCells('D'+r+':E'+r);
+    const vc=ws.getCell('D'+r);
+    vc.value=value||'';
+    vc.font={size:10,color:{argb:value?'FF111111':'FFBBBBBB'}};
+    vc.alignment={wrapText:true};
+    if(!value)vc.value='—';
+    r++;
+  };
+  infoRow('Project Manager:',session.completed_by||session.created_by);
+  infoRow('SO:',proj.so_number);
+  infoRow('Customer / Channel:',proj.client);
+  infoRow('Form Factor:',proj.form_factor);
+  infoRow('Naming Convention:',machine.machine_label||proj.naming_convention);
+  infoRow('Machine Type:',machine.machine_type);
+  infoRow('Date Completed:',session.completed_date?session.completed_date.slice(0,10):'');
+  infoRow('Badge Reader:',badgeReader);
+  infoRow('Payment Method:',paymentMethod);
+  infoRow('UI Language:',uiLanguage);
+  infoRow('Power / Plug Type:',plugType);
+  infoRow('Internet Connectivity:',connectivity);
+  r++;
+
+  // ── Overall result banner ──────────────────────────────
+  ws.mergeCells('B'+r+':E'+r);
+  const resultCell=ws.getCell('B'+r);
+  resultCell.value='OVERALL RESULT:   '+overallText.toUpperCase();
+  resultCell.font={bold:true,size:12,color:{argb:session.overall_result==='fail'?RED:GREEN}};
+  resultCell.fill={type:'pattern',pattern:'solid',fgColor:{argb:session.overall_result==='fail'?RED_BG:GREEN_BG}};
+  resultCell.alignment={vertical:'middle',indent:1};
+  ws.getRow(r).height=20;
+  r++;
+  if(session.override_reason){
+    ws.getCell('B'+r).value='Override Reason:';
+    ws.getCell('B'+r).font={bold:true,size:9,italic:true,color:{argb:'FF92600A'}};
+    ws.mergeCells('D'+r+':E'+r);
+    ws.getCell('D'+r).value=session.override_reason+' — by '+session.override_by;
+    ws.getCell('D'+r).font={size:9,italic:true,color:{argb:'FF92600A'}};
+    r++;
+  }
+  r++;
+
+  // ── Checklist table ─────────────────────────────────────
+  const tableHeaderRow=r;
+  ['S/N','Description','Yes','No','Remarks'].forEach((h,i)=>{
+    const c=ws.getCell(r,i+1);
+    c.value=h;
+    c.font={bold:true,size:10,color:{argb:WHITE}};
+    c.fill={type:'pattern',pattern:'solid',fgColor:{argb:BLACK}};
+    c.alignment={vertical:'middle',horizontal:i===1?'left':'center'};
+    c.border={top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}};
+  });
+  ws.getRow(r).height=18;
+  r++;
+  ws.views=[{state:'frozen',ySplit:tableHeaderRow}];
+
+  let passCount=0,failCount=0,naCount=0,uncheckedCount=0;
+  let lastSection=null;
+  qList.forEach((q,i)=>{
+    if(q.sectionTitle!==lastSection){
+      // Section divider row
+      ws.mergeCells('A'+r+':E'+r);
+      const secCell=ws.getCell('A'+r);
+      secCell.value=q.sectionTitle;
+      secCell.font={bold:true,size:9,color:{argb:'FF555555'}};
+      secCell.fill={type:'pattern',pattern:'solid',fgColor:{argb:GRAY_BG}};
+      secCell.border={top:{style:'thin',color:{argb:'FFDDDDDD'}},bottom:{style:'thin',color:{argb:'FFDDDDDD'}}};
+      r++;
+      lastSection=q.sectionTitle;
+    }
+    const a=uatAnswers.find(x=>x.session_id===session.id&&x.question_id===q.id);
+    const isFail=a?.answer==='fail';
+    const isPass=a?.answer==='pass';
+    const isNA=a?.answer==='na';
+    if(isPass)passCount++;else if(isFail)failCount++;else if(isNA)naCount++;else uncheckedCount++;
+    const rowFill=isFail?RED_BG:(i%2===0?WHITE:GRAY_BG);
+    const cells=[
+      ws.getCell('A'+r), ws.getCell('B'+r), ws.getCell('C'+r), ws.getCell('D'+r), ws.getCell('E'+r),
+    ];
+    cells.forEach(c=>{
+      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:rowFill}};
+      c.border={top:{style:'thin',color:{argb:'FFEEEEEE'}},bottom:{style:'thin',color:{argb:'FFEEEEEE'}},left:{style:'thin',color:{argb:'FFEEEEEE'}},right:{style:'thin',color:{argb:'FFEEEEEE'}}};
+      c.alignment={vertical:'middle',wrapText:true};
+    });
+    cells[0].value=i+1; cells[0].alignment={...cells[0].alignment,horizontal:'center'};
+    cells[1].value=q.question;
+    cells[2].value=isPass?'✓':''; cells[2].font={bold:true,size:12,color:{argb:GREEN}}; cells[2].alignment={...cells[2].alignment,horizontal:'center'};
+    cells[3].value=isFail?'✗':''; cells[3].font={bold:true,size:12,color:{argb:RED}}; cells[3].alignment={...cells[3].alignment,horizontal:'center'};
+    cells[4].value=(isNA?'N/A. ':'')+(a?.notes||'');
+    r++;
+  });
+
+  // ── Summary totals ──────────────────────────────────────
+  r++;
+  ws.mergeCells('A'+r+':E'+r);
+  const summaryCell=ws.getCell('A'+r);
+  summaryCell.value=`Summary — Total: ${qList.length}   Pass: ${passCount}   Fail: ${failCount}   N/A: ${naCount}${uncheckedCount?`   Unanswered: ${uncheckedCount}`:''}`;
+  summaryCell.font={bold:true,size:10};
+  summaryCell.fill={type:'pattern',pattern:'solid',fgColor:{argb:GRAY_BG}};
+  summaryCell.alignment={vertical:'middle',indent:1};
+  ws.getRow(r).height=18;
+  r+=2;
+
+  // ── Special requirements ────────────────────────────────
+  ws.getCell('A'+r).value='Special Requirements:';
+  ws.getCell('A'+r).font={bold:true,size:10};
+  r++;
+  ws.mergeCells('A'+r+':E'+(r+2));
+  const specCell=ws.getCell('A'+r);
+  specCell.value=proj.notes||'—';
+  specCell.alignment={wrapText:true,vertical:'top'};
+  specCell.border={top:{style:'thin',color:{argb:'FFDDDDDD'}},bottom:{style:'thin',color:{argb:'FFDDDDDD'}},left:{style:'thin',color:{argb:'FFDDDDDD'}},right:{style:'thin',color:{argb:'FFDDDDDD'}}};
+  r+=4;
+
+  // ── Signatures ───────────────────────────────────────────
+  ws.getCell('B'+r).value='PM Signature:';
+  ws.getCell('B'+r).font={bold:true,size:10};
+  ws.getCell('B'+r).border={bottom:{style:'thin'}};
+  ws.mergeCells('C'+r+':E'+r);
+  r+=2;
+  ws.getCell('B'+r).value='Quality Signature:';
+  ws.getCell('B'+r).font={bold:true,size:10};
+  ws.getCell('B'+r).border={bottom:{style:'thin'}};
+  ws.mergeCells('C'+r+':E'+r);
+
+  // ── Footer: SO, machine, generator credit, page numbers ─
+  ws.headerFooter.oddFooter=`&L${proj.so_number||''} — ${machine.machine_label}&CGenerated by Signifi Ops Hub&RPage &P of &N`;
+
+  const buf=await wb.xlsx.writeBuffer();
+  const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='UAT_'+(proj.so_number||proj.name||'project').replace(/[^\w-]/g,'_')+'_'+machine.machine_label.replace(/[^\w-]/g,'_')+'.xlsx';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  URL.revokeObjectURL(url);
   showToast('Excel exported ✓');
 }
 function renderUATRun(){
