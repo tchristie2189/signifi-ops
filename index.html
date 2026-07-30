@@ -463,6 +463,7 @@ body.production-view-active .header-inner{max-width:none;width:100%;padding-left
           <div class="nav-group-label">Schedules</div>
           <button class="nav-item" id="ni-vinyl" onclick="setTab('vinyl')"><span class="nav-item-dot" style="background:#2563eb"></span>Vinyl schedule</button>
           <button class="nav-item" id="ni-planogram" onclick="setTab('planogram')"><span class="nav-item-dot" style="background:#0891b2"></span>Planogram</button>
+          <button class="nav-item" id="ni-software" onclick="setTab('software')"><span class="nav-item-dot" style="background:#7c3aed"></span>Software</button>
           <div class="nav-sep"></div>
           <div class="nav-group-label">Tools</div>
           <button class="nav-item" id="ni-gendocs" onclick="setTab('gendocs')">📄 Generate docs</button>
@@ -521,6 +522,7 @@ body.production-view-active .header-inner{max-width:none;width:100%;padding-left
     <div id="tab-procurement" style="display:none"></div>
     <div id="tab-vinyl" style="display:none"></div>
     <div id="tab-planogram" style="display:none"></div>
+    <div id="tab-software" style="display:none"></div>
     <div id="tab-briefing" style="display:none"></div>
     <div id="tab-checkin" style="display:none"></div>
     <div id="tab-log" style="display:none"></div>
@@ -625,8 +627,10 @@ const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod'
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
 const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date','Print Day','Vacation'];
 const SHIP_STATUS_OPTS=['Pending','Scheduled','Picked up','Shipped','Delivered'];
+const SOFTWARE_WORK_TYPES=['New UI','Enhancement','Bug Fix','Integration','Configuration','Other'];
+const SOFTWARE_STATUS_OPTS=['Pending','Dev WIP','QA WIP','Bug Fix','Blocked','Complete'];
 
-let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={},extensionRequests=[];
+let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],softwareItems=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={},extensionRequests=[];
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
 // Milestones queued for deletion inside the "Edit project" modal — cleared/deleted
 // together on Save instead of hitting the DB (and reloading) on every single click.
@@ -657,9 +661,12 @@ function getUserRole(name){
 function isAdmin(){return currentUserRole==='Admin';}
 function isManagement(){return currentUserRole==='Management';}
 function isPM(){return currentUserRole==='PM';}
-let vinylFilter={status:'',search:'',dateFrom:'',dateTo:'',pm:''};
-let planFilter={status:'',search:'',dateFrom:'',dateTo:''};
-let deptFilter={shipping:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'},installation:{search:'',dateFrom:'',dateTo:'',sort:'date-asc'}};
+// STANDARD FILTER STATE — shape shared by every department page using the
+// standardized filter framework (Ops Hub Enhancement 3). Order matches the
+// spec: search, status, pm (reuses global pmFilter), priority, health,
+// customer, then department-specific filters appended by each page.
+function stdFilterDefaults(){return{search:'',status:'',priorityF:'',healthF:'',customer:'',dateFrom:'',dateTo:'',sort:'date-asc',workType:'',softwarePoc:''};}
+let deptFilter={shipping:stdFilterDefaults(),installation:stdFilterDefaults(),production:stdFilterDefaults(),quality:stdFilterDefaults(),vinyl:stdFilterDefaults(),planogram:stdFilterDefaults(),software:stdFilterDefaults()};
 let adHocRows={shipping:[],installation:[]}; // standalone entries not tied to a project
 let pmFilter='';
 let salesFilter='';
@@ -759,6 +766,67 @@ function getShippingStatus(proj,soTag){
   return getShippingStatusAuto(proj.id,soTag);
 }
 function shipStatusChipCls(s){return s==='Delivered'?'chip-done':s==='Shipped'?'chip-atrisk':s==='Scheduled'?'chip-active':'chip-future';}
+
+// ── CERTIFICATE OF INSURANCE (Ops Hub Enhancement 2) ────────────
+// Per-SO, not per-project — each SO can be a different physical location
+// with its own insurance requirement. Lives on so_details alongside
+// address/naming_convention/ticket URLs, resolved the same way those are
+// (getEffectiveSODetail). coi_required is set by the PM via the per-SO
+// Config modal on Project Page — Ops Hub is PM-only, no other department
+// works out of it. Status/date submitted/notes/document link are
+// Shipping-owned and edited exclusively from the Check-In app, where
+// Shipping actually does their daily work — this cell is read-only.
+const COI_STATUS_OPTS=['Not Started','Requested','In Progress','Submitted','Approved'];
+function getSOCOI(proj,soTag){return proj?getEffectiveSODetail(proj,soTag):null;}
+function coiRequiredSO(proj,soTag){const d=getSOCOI(proj,soTag);return!!(d&&d.coi_required==='yes');}
+function coiChipCls(s){return s==='Approved'?'chip-done':s==='Submitted'?'chip-active':(s==='In Progress'||s==='Requested')?'chip-atrisk':'chip-future';}
+function coiCell(proj,soTag){
+  if(!coiRequiredSO(proj,soTag))return'<td><span style="font-size:10px;color:var(--gray-400)">—</span></td>';
+  const st=getSOCOI(proj,soTag)?.coi_status||'Not Started';
+  return`<td><span class="status-chip ${coiChipCls(st)}" title="Set by Shipping in the Check-In app">${st}</span></td>`;
+}
+// Business-day helper for the Shipping Health escalation rule below —
+// counts only Mon–Fri between today and the target date.
+function businessDaysUntil(dateStr){
+  if(!dateStr)return null;
+  const target=new Date(dateStr+'T00:00:00');
+  const t=today();
+  if(target<t)return -1;
+  let count=0;const cur=new Date(t);
+  while(cur<target){
+    cur.setDate(cur.getDate()+1);
+    const dow=cur.getDay();
+    if(dow!==0&&dow!==6)count++;
+  }
+  return count;
+}
+// All SOs on a project that require a COI and aren't yet Approved — a
+// multi-SO project can have several locations each needing one.
+function coiRequiredUnapprovedSOs(proj){
+  if(!proj)return[];
+  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const tags=soList.length?soList:[''];
+  return tags.map(so=>({so,d:getEffectiveSODetail(proj,so||undefined)})).filter(x=>x.d&&x.d.coi_required==='yes'&&x.d.coi_status!=='Approved');
+}
+// Escalates Shipping Health only — production/QA/installation health are
+// untouched, per spec. Called from getStageHealth() for stageId==='shipping'.
+// Uses the project's general installation date (not split per-SO) — same
+// granularity getStageHealth already worked at before this change.
+function coiShippingHealthOverride(proj){
+  if(!coiRequiredUnapprovedSOs(proj).length)return null;
+  const installDate=getMsDate(proj.id,'installation');
+  if(!installDate)return null;
+  const d=daysDiff(installDate);
+  if(d<=1)return'red'; // installing today or tomorrow
+  const bDays=businessDaysUntil(installDate);
+  if(bDays!==null&&bDays<=5)return'amber';
+  return null;
+}
+function coiWarning(proj,soTag){
+  if(!coiRequiredSO(proj,soTag))return'';
+  if(getSOCOI(proj,soTag)?.coi_status==='Approved')return'';
+  return'<span title="Certificate of Insurance required before installation" style="font-size:10px;padding:1px 7px;border-radius:10px;background:var(--warning-bg);color:var(--warning);font-weight:700;white-space:nowrap">⚠ COI required</span>';
+}
 function shipStatusDropdown(projId,soTag,current){
   const s=current||'Pending';
   const soArg=soTag?`'${soTag}'`:'null';
@@ -838,6 +906,17 @@ function calcHealth(pid){
   // Color based on overdue/escalation situation
   const color=escalation>0?'#C8102E':overdue>0?'#d97706':score>=80?'#1a7a4a':score>=50?'#d97706':'#6b6b6b';
   return{score,done,total,remaining,overdue,atRisk,escalation,color};
+}
+// Buckets a project's computed health into red/yellow/green for the
+// standardized Health filter. Mirrors the same color logic calcHealth()
+// already uses for the health ring, so the filter and the visual indicator
+// can never disagree.
+function healthBucket(pid){
+  const h=calcHealth(pid);
+  if(!h)return'';
+  if(h.color==='#C8102E')return'red';
+  if(h.color==='#d97706')return'yellow';
+  return'green';
 }
 function healthRing(pid){
   const h=calcHealth(pid);
@@ -1037,7 +1116,7 @@ function renderTab(){
   // Safety net: keep the breakout class in sync even if currentTab was set
   // without going through setTab (palette, deep links, restores).
   document.body.classList.toggle('production-view-active',currentTab==='prodqueue');
-  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,prodqueue:renderProductionQueue,qaqueue:renderQaQueue,shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),procurement:renderProcurementCC,vinyl:renderVinyl,planogram:renderPlanogram,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity,uat:renderUAT};
+  const m={glance:renderGlance,pipeline:renderPipeline,overview:renderOverview,projpage:renderProjPage,week:renderWeek,prodqueue:renderProductionQueue,qaqueue:renderQaQueue,shipping:()=>renderDeptView('shipping'),installation:()=>renderDeptView('installation'),procurement:renderProcurementCC,vinyl:renderVinyl,planogram:renderPlanogram,software:renderSoftware,briefing:renderBriefing,checkin:renderCheckinOverview,log:renderLog,gendocs:renderGenDocs,templates:renderTemplates,intake:renderIntake,settings:renderSettings,insights:renderInsights,calendar:renderCalendar,readiness:renderReadiness,capacity:renderCapacity,uat:renderUAT};
   if(m[currentTab])m[currentTab]();
 }
 
@@ -1235,6 +1314,21 @@ async function loadAll(){
   });
 
   document.getElementById('hdate').textContent=new Date().toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+
+  // Software schedule (Ops Hub Enhancement 1) — table is empty until the
+  // migration is run, and fetchAllRows/PostgREST returns an error object
+  // (not a thrown exception) for a missing table, so this degrades to an
+  // empty list gracefully rather than breaking loadAll().
+  const swRes=await fetchAllRows('software_items',{orderCol:'created_at'});
+  softwareItems=(swRes.data||[]).map(v=>{
+    const p=projects.find(x=>x.id===v.project_id);
+    return{...v,jiraLinks:Array.isArray(v.jira_links)?v.jira_links:(v.jira_links?[v.jira_links]:[]),
+      targetFinish:v.target_finish||'',
+      softwarePoc:v.software_poc||'',
+      workType:v.work_type||'',
+      name:p?.name||v.name||'',so:p?.so_number||v.so||'',client:p?.client||v.client||'',pm:p?.pm||v.pm||''};
+  });
+
   // If the project page is currently open, refresh ppData before renderTab so
   // renderProjPageBody() has fresh team/links/sections without doing a second
   // async loadProjPage() call that would race and cause duplicate rows.
@@ -1339,11 +1433,21 @@ function getStageHealth(proj,stageId){
   if(!stage)return'neutral';
   const endKey=stage.endKey||stage.doneKey||stage.key;
   const endDate=pMs.find(m=>m.key===endKey)?.date;
+  // COI escalation only ever touches Shipping Health, and only ever makes
+  // it worse (never overrides an already-red status, never improves it).
+  if(stageId==='shipping'){
+    const override=coiShippingHealthOverride(proj);
+    if(override==='red')return'red';
+    if(override==='amber'&&!endDate)return'amber';
+  }
   if(!endDate)return'neutral';
   const d=daysDiff(endDate);
-  if(d<0)return'red';
-  if(d<=3)return'amber';
-  return'green';
+  let base=d<0?'red':d<=3?'amber':'green';
+  if(stageId==='shipping'){
+    const override=coiShippingHealthOverride(proj);
+    if(override==='amber'&&base==='green')base='amber';
+  }
+  return base;
 }
 
 let pipelineFilter='';
@@ -1352,7 +1456,7 @@ let pipelineShowComplete=false;
 
 function renderPipeline(){
   const el=document.getElementById('tab-pipeline');
-  const activeProjs=filterByPM(projects.filter(p=>p.status!=='complete'));
+  const activeProjs=filterByPM(projects.filter(p=>p.status!=='complete'&&p.status!=='software-active'));
 
   // Group projects by stage
   const stageMap={};
@@ -2982,6 +3086,7 @@ document.addEventListener('keydown',e=>{
 
 // ── AT A GLANCE ────────────────────────────────────────────
 let glanceFilter='active'; // 'active' or 'archived'
+let glanceSearch='';
 // Per-page hide completed state
 let hideCompleted={glance:false,overview:false,week:false,production:false,quality:false,shipping:false,installation:false,briefing:false,vinyl:false,planogram:false};
 let hideNoVinylDate=false;
@@ -3006,11 +3111,115 @@ function salesDropdown(renderFn){
 }
 function filterBySales(list){return salesFilter?list.filter(p=>p.sales===salesFilter):list;}
 
+// ── SHARED PROJECT PICKER (used by Project Page, Gen Docs, UAT checklist,
+// Project Overview) ──────────────────────────────────────────
+// One fuzzy matcher + one PM/Sales-filtered project list, so every "type to
+// search" project picker in the app behaves identically. Previously Project
+// Page, Gen Docs, and UAT each had their own near-identical (or, for Gen
+// Docs/UAT, not-quite-identical — they ignored the PM/Sales filter) version
+// of this logic.
+function matchProjectByPickerText(val,list){
+  if(!val||val.length<2)return null;
+  const vl=val.toLowerCase();
+  const pool=list||projects;
+  return pool.find(p=>{
+    const display=p.name+(p.so_number?' — '+p.so_number:'');
+    if(display.toLowerCase()===vl)return true;
+    if(p.name.toLowerCase()===vl)return true;
+    if(p.so_number&&val.includes(p.so_number))return true;
+    return false;
+  })||pool.find(p=>{
+    const display=p.name+(p.so_number?' — '+p.so_number:'');
+    return display.toLowerCase().startsWith(vl)||p.name.toLowerCase().startsWith(vl);
+  });
+}
+function pickerProjectList(){return filterBySales(filterByPM(projects)).sort((a,b)=>(a.name||'').localeCompare(b.name||''));}
+function projectSearchOptions(list){return(list||pickerProjectList()).map(p=>`<option value="${(p.name+(p.so_number?' — '+p.so_number:'')).replace(/"/g,'&quot;')}">`).join('');}
+
+// ── STANDARDIZED SEARCH & FILTER FRAMEWORK (Ops Hub Enhancement 3) ──
+// One reusable filter bar + apply function used by every department page.
+// Fixed order per spec: Search, Status, PM, Priority, Health, Customer,
+// then department-specific filters passed in via opts.extraHtml/extraApply.
+// PM reuses the existing global pmFilter/pmDropdown rather than forking a
+// second PM filter, per the DO NOT duplicate-logic guidance.
+function applyStdFilters(list,dept,opts={}){
+  const f=deptFilter[dept];
+  if(!f)return list;
+  let out=list;
+  if(f.search){
+    const q=f.search.toLowerCase();
+    out=out.filter(p=>((p.name||'')+' '+(p.so_number||'')+' '+(p.client||'')+' '+(p.pm||'')+' '+(p.location||'')).toLowerCase().includes(q));
+  }
+  if(f.status)out=out.filter(p=>(p.status||'active')===f.status);
+  if(f.priorityF)out=out.filter(p=>(p.priority||'')===f.priorityF);
+  if(f.healthF)out=out.filter(p=>healthBucket(p.id)===f.healthF);
+  if(f.customer)out=out.filter(p=>p.client===f.customer);
+  if(opts.dateKey){
+    if(f.dateFrom)out=out.filter(p=>{const d=getMsDate(p.id,opts.dateKey);return!d||d>=f.dateFrom;});
+    if(f.dateTo)out=out.filter(p=>{const d=getMsDate(p.id,opts.dateKey);return!d||d<=f.dateTo;});
+  }
+  if(opts.extraApply)out=opts.extraApply(out,f);
+  return out;
+}
+function stdFilterActiveCount(dept){
+  const f=deptFilter[dept];if(!f)return 0;
+  return Object.entries(f).filter(([k,v])=>k!=='sort'&&v).length+(pmFilter?1:0);
+}
+function clearStdFilters(dept,rerenderFn){
+  deptFilter[dept]=stdFilterDefaults();
+  pmFilter='';
+  if(rerenderFn)rerenderFn();
+}
+// customerOptions: sorted unique client list, computed from live projects
+// so it never goes stale as new customers are added.
+function customerOptionList(){return[...new Set(projects.map(p=>p.client).filter(Boolean))].sort();}
+function renderStdFilterBar(dept,opts={}){
+  const f=deptFilter[dept];
+  const rerender=opts.rerenderCall||`renderDeptView('${dept}')`;
+  const searchVal=(f.search||'').replace(/"/g,'&quot;');
+  const selStyle='font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)';
+  const opt=(val,label,cur)=>`<option value="${val}"${cur===val?' selected':''}>${label}</option>`;
+  let bar='<div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">';
+  bar+=`<input placeholder="Search..." style="${selStyle};width:190px" value="${searchVal}" id="sf-search-${dept}">`;
+  bar+=`<select style="${selStyle}" id="sf-status-${dept}">${opt('','All statuses',f.status)}${opt('active','Active',f.status)}${opt('on-hold','On hold',f.status)}${opt('complete','Complete',f.status)}</select>`;
+  bar+=pmDropdown(rerender);
+  bar+=`<select style="${selStyle}" id="sf-priority-${dept}">${opt('','All priorities',f.priorityF)}${opt('critical','Critical',f.priorityF)}${opt('high','High',f.priorityF)}</select>`;
+  bar+=`<select style="${selStyle}" id="sf-health-${dept}">${opt('','All health',f.healthF)}${opt('green','🟢 On track',f.healthF)}${opt('yellow','🟡 At risk',f.healthF)}${opt('red','🔴 Escalation',f.healthF)}</select>`;
+  bar+=`<select style="${selStyle}" id="sf-customer-${dept}">${opt('','All customers',f.customer)}${customerOptionList().map(c=>opt(c,c,f.customer)).join('')}</select>`;
+  if(opts.dateKey){
+    bar+=`<input type="date" style="${selStyle}" value="${f.dateFrom||''}" id="sf-from-${dept}"><span style="font-size:11px;color:var(--gray-500)">to</span><input type="date" style="${selStyle}" value="${f.dateTo||''}" id="sf-to-${dept}">`;
+  }
+  if(opts.extraHtml)bar+=opts.extraHtml;
+  const activeCount=stdFilterActiveCount(dept);
+  if(activeCount)bar+=`<button onclick="clearStdFilters('${dept}',()=>${rerender})" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer">✕ Clear filters</button>`;
+  if(opts.countLabel)bar+=`<span style="font-size:11px;color:var(--gray-500);margin-left:auto">${opts.countLabel}${activeCount?' (filtered)':''}</span>`;
+  bar+='</div>';
+  return bar;
+}
+// Attaches change handlers for the standardized bar. Call after innerHTML
+// has been written to the DOM (same pattern as the old attachEv in
+// renderDeptView).
+function attachStdFilterEvents(dept,rerenderFn){
+  const bind=(id,key,evt)=>{const el=document.getElementById(id);if(el)el[evt]=function(){deptFilter[dept][key]=this.value;rerenderFn();};};
+  bind('sf-search-'+dept,'search','oninput');
+  bind('sf-status-'+dept,'status','onchange');
+  bind('sf-priority-'+dept,'priorityF','onchange');
+  bind('sf-health-'+dept,'healthF','onchange');
+  bind('sf-customer-'+dept,'customer','onchange');
+  bind('sf-from-'+dept,'dateFrom','onchange');
+  bind('sf-to-'+dept,'dateTo','onchange');
+}
+
 // Helper — filters out completed projects based on per-page toggle
 function activeProjects(page){
   const hide=page?hideCompleted[page]:false;
-  let list=projects.filter(p=>p.status!=='complete'||!hide);
-  if(!hide)return projects;
+  // Software Active projects have finished installation but still have
+  // software work — they leave operational schedules entirely (Ops Hub
+  // Enhancement 1), not just when "hide completed" happens to be toggled on.
+  const opsSchedulePages=['production','quality','shipping','installation'];
+  const base=opsSchedulePages.includes(page)?projects.filter(p=>p.status!=='software-active'):projects;
+  let list=base.filter(p=>p.status!=='complete'||!hide);
+  if(!hide)return base;
   // For dept pages also filter out projects where the key milestone is done
   const stageKeyMap={
     production:'production-end',
@@ -3049,13 +3258,17 @@ function hideNoVinylDateBtn(){
 
 function renderGlance(){
   const el=document.getElementById('tab-glance');
-  const visibleProjects=projects.filter(p=>{
+  let visibleProjects=projects.filter(p=>{
     if(glanceFilter==='archived'?p.status!=='complete':p.status==='complete')return false;
     if(isChild(p))return false; // hide child projects — they show under their master
     if(pmFilter&&p.pm!==pmFilter)return false;
     if(salesFilter&&p.sales!==salesFilter)return false;
     return true;
   });
+  if(glanceSearch){
+    const q=glanceSearch.toLowerCase();
+    visibleProjects=visibleProjects.filter(p=>((p.name||'')+' '+(p.so_number||'')+' '+(p.client||'')+' '+(p.pm||'')).toLowerCase().includes(q));
+  }
   const allActive=projects.filter(p=>p.status!=='complete');
   const allArchived=projects.filter(p=>p.status==='complete');
   const overdue=milestones.filter(m=>isMilestoneOverdue(m)).length;
@@ -3129,12 +3342,15 @@ function renderGlance(){
     </div>`:'';
     // Archive/complete button
     const isComplete=p.status==='complete';
+    const isSoftwareActive=p.status==='software-active';
+    const isDone=isComplete||isSoftwareActive;
     return `<div class="glance-card" style="${isComplete?'opacity:0.75':''}${isChild(p)?'border-left:3px solid #7c3aed;':isMaster(p)?'border-left:3px solid #e22f4a;':''}">
       <div class="glance-card-head">
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <div class="glance-proj-name">${p.name}</div>
             ${isComplete?'<span style="font-size:10px;padding:1px 7px;border-radius:10px;background:var(--gray-100);color:var(--gray-500);font-weight:600">Complete</span>':''}
+            ${isSoftwareActive?'<span style="font-size:10px;padding:1px 7px;border-radius:10px;background:#ede9fe;color:#7c3aed;font-weight:600">💻 Software Active</span>':''}
             ${(()=>{
               const kids=getChildren(p.id);
               const soCount=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean).length;
@@ -3151,7 +3367,7 @@ function renderGlance(){
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
           ${h?healthRing(p.id):''}
           <button onclick="goToProjPage('${p.id}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)" title="Open project page">↗ Project page</button>
-          <button onclick="toggleArchive('${p.id}','${p.status}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)">${isComplete?'↩ Restore':'✓ Complete'}</button>
+          ${isDone?`<button onclick="toggleArchive('${p.id}','${p.status}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)">↩ Restore</button>`:`<button onclick="openCloseProjectModal('${p.id}')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--gray-200);background:transparent;color:var(--gray-500);cursor:pointer;font-family:var(--font)">✓ Complete</button>`}
 
         </div>
       </div>
@@ -3168,12 +3384,26 @@ function renderGlance(){
       <div class="metric"><div class="metric-label">This week</div><div class="metric-val">${thisWeek+adHocThisWeek}</div><div class="metric-sub">milestones due${adHocThisWeek?' <span style="font-size:10px;color:var(--blue)">(+'+adHocThisWeek+' ad hoc)</span>':''}</div></div>
       <div class="metric"><div class="metric-label">Needs attention</div><div class="metric-val ${(overdue+adHocOverdue)>0?'red':''}">${overdue+adHocOverdue}</div><div class="metric-sub">overdue items${adHocOverdue?' <span style="font-size:10px;color:var(--blue)">(+'+adHocOverdue+' ad hoc)</span>':''}</div></div>
     </div>
+    ${(()=>{
+      if(!softwareItems.length)return'';
+      const activeSw=new Set(softwareItems.filter(i=>i.status!=='Complete').map(i=>i.project_id)).size;
+      const inQaSw=softwareItems.filter(i=>i.status==='QA WIP').length;
+      const blockedSw=softwareItems.filter(i=>i.status==='Blocked').length;
+      const overdueSw=softwareItems.filter(i=>i.targetFinish&&i.status!=='Complete'&&daysDiff(i.targetFinish)<0).length;
+      return`<div class="metrics-row" style="grid-template-columns:repeat(4,1fr);margin-top:10px">
+        <div class="metric"><div class="metric-label">💻 Active software projects</div><div class="metric-val">${activeSw}</div><div class="metric-sub">in progress</div></div>
+        <div class="metric"><div class="metric-label">In QA</div><div class="metric-val ${inQaSw>0?'amber':''}">${inQaSw}</div><div class="metric-sub">software items</div></div>
+        <div class="metric"><div class="metric-label">Blocked</div><div class="metric-val ${blockedSw>0?'red':''}">${blockedSw}</div><div class="metric-sub">software items</div></div>
+        <div class="metric"><div class="metric-label">Overdue</div><div class="metric-val ${overdueSw>0?'red':''}">${overdueSw}</div><div class="metric-sub">past target finish</div></div>
+      </div>`;
+    })()}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <div class="filter-toggle">
           <button class="ftab${glanceFilter==='active'?' active':''}" onclick="glanceFilter='active';renderGlance()">Active (${allActive.length})</button>
           <button class="ftab${glanceFilter==='archived'?' active':''}" onclick="glanceFilter='archived';renderGlance()">Completed (${allArchived.length})</button>
         </div>
+        <input placeholder="🔍 Search name, SO, client, PM..." value="${(glanceSearch||'').replace(/"/g,'&quot;')}" oninput="glanceSearch=this.value;renderGlance()" style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:220px">
         <div style="display:flex;align-items:center;gap:6px">
 ${pmDropdown('renderGlance')}${salesDropdown('renderGlance')}
         </div>
@@ -3497,6 +3727,8 @@ function renderOverview(){
   const overviewProjects=filterBySales(filterByPM(activeProjects('overview')));
   const pillsHtml=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem;padding:10px 12px;background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);flex-wrap:wrap">
     <label style="font-size:10px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.05em;white-space:nowrap">Project</label>
+    <input list="ov-proj-list" placeholder="Type to search..." style="font-family:var(--font);font-size:12px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);width:170px" onchange="onOverviewProjSearch(this.value)">
+    <datalist id="ov-proj-list">${projectSearchOptions(overviewProjects)}</datalist>
     <select onchange="selProj(this.value)" style="font-family:var(--font);font-size:12px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);min-width:280px;flex:1">
       ${overviewProjects.map(p=>`<option value="${p.id}"${p.id===selectedProjId?' selected':''}>${p.name}${p.so_number?' — '+p.so_number:''}</option>`).join('')}
     </select>
@@ -3533,6 +3765,39 @@ function renderOverview(){
         </div>
       </div>
       ${(()=>{const c=getProjectCompletion(proj);if(c)return`<div style="padding:8px 14px;background:var(--success-bg);border-bottom:1px solid #cfe8da;font-size:11.5px;color:var(--success);font-weight:600">✓ Project complete — Installed${c.date?' '+fmt(c.date):''}</div>`;const b=getProjectBlocker(proj);if(!b)return'';return`<div style="padding:8px 14px;background:${b.overdue?'var(--red-light)':'var(--gray-50)'};border-bottom:1px solid var(--gray-100);font-size:11.5px;color:${b.overdue?'var(--red)':'var(--gray-600)'}">🔗 ${b.blockedStage.label} is blocked by ${b.blockingStage.label} · ${b.estimate}</div>`;})()}
+      ${(()=>{
+        const swItems=swSummaryFor(proj.id);
+        if(!swItems.length)return'';
+        if(swItems.length===1){
+          const sw=swItems[0];
+          const jira=(sw.jiraLinks||[]).filter(Boolean);
+          return`<div style="padding:10px 14px;background:#faf5ff;border-bottom:1px solid #ede9fe;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+            <span style="font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:.04em">💻 Software</span>
+            <span style="font-size:12px"><span style="color:var(--gray-500)">Status:</span> ${sw.status||'Pending'}</span>
+            <span style="font-size:12px"><span style="color:var(--gray-500)">POC:</span> ${sw.softwarePoc||'Unassigned'}</span>
+            <span style="font-size:12px"><span style="color:var(--gray-500)">Target finish:</span> ${sw.targetFinish?fmt(sw.targetFinish):'—'}</span>
+            ${jira.length?jira.map((u,i)=>`<a href="${u}" target="_blank" style="font-size:11px;color:var(--blue)">Jira ${i+1} ↗</a>`).join(''):''}
+            <button onclick="setTab('software')" style="margin-left:auto;font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid #ddd6fe;background:transparent;color:#7c3aed;cursor:pointer;font-family:var(--font)">Open Software schedule ↗</button>
+          </div>`;
+        }
+        // Multiple items — never collapse to just one. Show the count plus a
+        // per-item status breakdown so nothing is silently hidden.
+        const openCount=swItems.filter(i=>i.status!=='Complete').length;
+        return`<div style="padding:10px 14px;background:#faf5ff;border-bottom:1px solid #ede9fe">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+            <span style="font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:.04em">💻 Software — ${swItems.length} items (${openCount} open)</span>
+            <button onclick="setTab('software')" style="margin-left:auto;font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid #ddd6fe;background:transparent;color:#7c3aed;cursor:pointer;font-family:var(--font)">View all on Software schedule ↗</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            ${swItems.map(sw=>`<div style="font-size:11.5px;display:flex;gap:10px;flex-wrap:wrap">
+              <span style="font-weight:600;min-width:90px">${sw.workType||'Software item'}</span>
+              <span style="color:var(--gray-500)">${sw.status||'Pending'}</span>
+              <span style="color:var(--gray-500)">${sw.softwarePoc||'Unassigned'}</span>
+              <span style="color:var(--gray-500)">${sw.targetFinish?fmt(sw.targetFinish):'No target date'}</span>
+            </div>`).join('')}
+          </div>
+        </div>`;
+      })()}
       ${(()=>{
         // Diagnostic strip: total milestone count for this project + duplicate-label detection.
         // Lets you verify at a glance whether data is actually missing vs just further down the grid.
@@ -3660,6 +3925,10 @@ function goToProjPage(id){
 }
 
 function selProj(id){selectedProjId=id;renderOverview();}
+function onOverviewProjSearch(val){
+  const match=matchProjectByPickerText(val,filterBySales(filterByPM(activeProjects('overview'))));
+  if(match)selProj(match.id);
+}
 
 // ── WEEK ───────────────────────────────────────────────────
 function renderWeek(){
@@ -3844,7 +4113,7 @@ function renderDeptView(dept){
   const cfg={
     production:{title:'Production schedule',startKey:'production-start',endKey:'production-end',color:'#7c3aed',cols:['Project','SO','Client','PM','Prod start','Prod end','Duration','Status']},
     quality:{title:'Quality / QA schedule',startKey:'quality-start',endKey:'quality-end',color:'#d97706',cols:['Project','SO','Client','PM','QA start','QA end','Duration','Vinyl','UAT','Status']},
-    shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO','Client','PM','Pack & ship','Delivery','Status','Install Ticket','Notes','']},
+    shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO','Client','PM','Pack & ship','Delivery','Status','COI','Install Ticket','Notes','']},
     installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO','Client','PM','Training','Installation','Confirmed','Install Ticket','Status','Notes','']},
   };
   const c=cfg[dept];
@@ -3852,16 +4121,13 @@ function renderDeptView(dept){
   if(dept==='production'){ganttHtml=buildGantt(['production-start'],['production-end','quality-end'],getD=>[{s:getD('production-start'),e:getD('production-end'),bg:'#7c3aed',lbl:'Build'},{s:getD('quality-start'),e:getD('quality-end'),bg:'#d97706',lbl:'QA'},{s:getD('shipping'),e:getD('shipping'),bg:'#059669',lbl:'Ship'},{s:getD('installation'),e:getD('installation'),bg:'#db2777',lbl:'Install'}],'Production',[{c:'#7c3aed',l:'Build'},{c:'#d97706',l:'QA'},{c:'#059669',l:'Ship'},{c:'#db2777',l:'Install'}]);}
   else if(dept==='quality'){ganttHtml=buildGantt(['quality-start'],['quality-end','uat'],getD=>[{s:getD('quality-start'),e:getD('quality-end'),bg:'#d97706',lbl:'QA'},{s:getD('vinyl'),e:getD('vinyl'),bg:'#2563eb',lbl:'Vinyl'},{s:getD('uat'),e:getD('uat'),bg:'#16a34a',lbl:'UAT'}],'Quality / QA',[{c:'#d97706',l:'QA'},{c:'#2563eb',l:'Vinyl'},{c:'#16a34a',l:'UAT'}]);}
 
-  const hasFilter=dept==='shipping'||dept==='installation';
+  const hasFilter=dept==='shipping'||dept==='installation'||dept==='quality';
+  const hasAdHoc=dept==='shipping'||dept==='installation';
   const f=hasFilter?deptFilter[dept]:null;
-  const mainKey=dept==='shipping'?'shipping':'installation';
+  const mainKey=c.startKey;
 
   let filteredProjects=filterBySales(filterByPM(activeProjects(dept)));
-  if(hasFilter&&f){
-    if(f.search){const q=f.search.toLowerCase();filteredProjects=filteredProjects.filter(p=>(p.name||'').toLowerCase().includes(q)||(p.so_number||'').toLowerCase().includes(q)||(p.client||'').toLowerCase().includes(q));}
-    if(f.dateFrom){filteredProjects=filteredProjects.filter(p=>{const d=getMsDate(p.id,mainKey);return!d||d>=f.dateFrom;});}
-    if(f.dateTo){filteredProjects=filteredProjects.filter(p=>{const d=getMsDate(p.id,mainKey);return!d||d<=f.dateTo;});}
-  }
+  if(hasFilter){filteredProjects=applyStdFilters(filteredProjects,dept,{dateKey:mainKey});}
   if(!hasFilter){filteredProjects=activeProjects(dept);}
 
   // Build all data rows as objects for unified sorting
@@ -3875,7 +4141,7 @@ function renderDeptView(dept){
       const sTicketUrl=getSOConfigSummary(p,'').install_ticket_url||'';
       const sTicketCell=sTicketUrl?'<a href="'+sTicketUrl+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
       extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDate(p.id,'delivery'))+'</td>';
-      extraAfterStatus='<td class="date-cell">'+sTicketCell+'</td>'+deptNotesCell(p.id,'notes_shipping');
+      extraAfterStatus=coiCell(p)+'<td class="date-cell">'+sTicketCell+'</td>'+deptNotesCell(p.id,'notes_shipping');
     }
     else if(dept==='installation'){
       const trainMs=milestones.find(m=>m.project_id===p.id&&m.key==='training');
@@ -3889,7 +4155,7 @@ function renderDeptView(dept){
       extraAfterStatus=deptNotesCell(p.id,'notes_install');
     }
     const statusCell=dept==='shipping'?'<td>'+shipStatusDropdown(p.id,null,getShippingStatus(p,null))+'</td>':'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>';
-    const html='<tr><td style="font-weight:500">'+p.name+'<button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+statusCell+extraAfterStatus+'</tr>';
+    const html='<tr><td style="font-weight:500">'+p.name+(dept==='shipping'?' '+coiWarning(p):'')+'<button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">'+truncateSO(p.so_number)+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+statusCell+extraAfterStatus+'</tr>';
     return{_d:sd||'',html};
   };
 
@@ -3901,7 +4167,8 @@ function renderDeptView(dept){
       const shipTicket=r.install_ticket_url||'';
       const shipTicketCell=shipTicket?'<a href="'+shipTicket+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
       extra='<td class="date-cell">'+fmt(r.shipDate||r.ship_date)+'</td><td class="date-cell">'+fmt(r.deliveryDate||r.delivery_date)+'</td>';
-      extraAfterStatus='<td class="date-cell">'+shipTicketCell+'</td>'+deptNotesCell(r.project_id||'','notes_shipping');
+      const linkedProj=r.project_id?projects.find(p=>p.id===r.project_id):null;
+      extraAfterStatus=coiCell(linkedProj,r.so)+'<td class="date-cell">'+shipTicketCell+'</td>'+deptNotesCell(r.project_id||'','notes_shipping');
     }
     else if(dept==='installation'){
       const linkedProj=r.project_id?projects.find(p=>p.id===r.project_id):null;
@@ -3940,10 +4207,10 @@ function renderDeptView(dept){
       let extra='';
       if(dept==='production'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td>';}
       else if(dept==='quality'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'vinyl'))+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'uat'))+'</td>';}
-      else if(dept==='shipping'){const sTicketUrl=getSOConfigSummary(p,so).install_ticket_url||'';const sTicketCell=sTicketUrl?'<a href="'+sTicketUrl+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'delivery'))+'</td>';extraAfterStatus='<td class="date-cell">'+sTicketCell+'</td>';}
+      else if(dept==='shipping'){const sTicketUrl=getSOConfigSummary(p,so).install_ticket_url||'';const sTicketCell=sTicketUrl?'<a href="'+sTicketUrl+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'delivery'))+'</td>';extraAfterStatus=coiCell(p,so)+'<td class="date-cell">'+sTicketCell+'</td>';}
       else if(dept==='installation'){const trainMs=soMs.find(m=>m.key==='training');const instMs=soMs.find(m=>m.key==='installation');const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)">`:'—';const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)">`:'—';const confirmed=p.install_date_confirmed?`<span style="font-size:11px;color:var(--success);font-weight:600">✓ ${fmt(p.install_date_confirmed)}</span>`:'<span style="font-size:10px;color:var(--gray-400)">Pending</span>';const ticketUrl=getSOConfigSummary(p,so).install_ticket_url||'';const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>`:'-';extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';}
       const soStatusCell=dept==='shipping'?'<td>'+shipStatusDropdown(p.id,so,getShippingStatus(p,so))+'</td>':'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>';
-      const html='<tr><td style="font-weight:500">'+p.name+' <span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:700">'+so+'</span><button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--red);font-weight:600">'+so+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+soStatusCell+extraAfterStatus+'</tr>';
+      const html='<tr><td style="font-weight:500">'+p.name+(dept==='shipping'?' '+coiWarning(p,so):'')+' <span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:700">'+so+'</span><button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--red);font-weight:600">'+so+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+soStatusCell+extraAfterStatus+'</tr>';
       return{_d:sd||'',html};
     });
   });
@@ -3979,30 +4246,51 @@ function renderDeptView(dept){
 
   const tbody=allItems.map(r=>r.html).join('')||'<tr><td colspan="99" style="text-align:center;padding:2rem;color:var(--gray-500)">No projects yet.</td></tr>';
 
-  // Filter bar (shipping/installation only) — built via DOM-safe string
-  const activeFilters=hasFilter&&f?[f.search,f.dateFrom,f.dateTo].filter(Boolean).length:0;
-  let filterBar='';
-  if(hasFilter){
-    const searchVal=(f.search||'').replace(/"/g,'&quot;');
-    filterBar='<div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">'+
-      '<input placeholder="Search..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:200px" value="'+searchVal+'" id="df-search-'+dept+'">'+
-      '<input type="date" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="'+(f.dateFrom||'')+'" id="df-from-'+dept+'">'+
-      '<span style="font-size:11px;color:var(--gray-500)">to</span>'+
-      '<input type="date" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="'+(f.dateTo||'')+'" id="df-to-'+dept+'">'+
-      '<select style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" id="df-sort-'+dept+'">'+
-      '<option value="date-asc"'+(f.sort==='date-asc'?' selected':'')+'>Date ↑</option>'+
-      '<option value="date-desc"'+(f.sort==='date-desc'?' selected':'')+'>Date ↓</option></select>'+
-      (activeFilters?'<button onclick="deptFilterClear(&quot;'+dept+'&quot;)" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer">✕ Clear</button>':'')+
-      '<span style="font-size:11px;color:var(--gray-500);margin-left:auto">'+filteredProjects.length+' projects + '+adHoc.length+' ad hoc'+(activeFilters?' (filtered)':'')+'</span></div>';
+  // Standardized filter bar (Enhancement 3) — shipping/installation only
+  // for now; other schedule pages adopt this in the next phase. The sort
+  // dropdown is department-specific, so it's passed in as extraHtml per the
+  // "department filters always appear last" rule.
+  const sortSel='<select style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" id="df-sort-'+dept+'">'+
+    '<option value="date-asc"'+(f&&f.sort==='date-asc'?' selected':'')+'>Date ↑</option>'+
+    '<option value="date-desc"'+(f&&f.sort==='date-desc'?' selected':'')+'>Date ↓</option></select>';
+  const filterBar=hasFilter?renderStdFilterBar(dept,{
+    dateKey:mainKey,
+    extraHtml:sortSel,
+    rerenderCall:"renderDeptView('"+dept+"')",
+    countLabel:filteredProjects.length+' projects'+(hasAdHoc?' + '+adHoc.length+' ad hoc':'')
+  }):'';
+
+  const addBtn=hasAdHoc?'<div class="actions-row"><button class="btn-add" onclick="openAdHocModal(&quot;'+dept+'&quot;)">+ Add '+(dept==='shipping'?'shipment':'installation')+'</button></div>':'';
+
+  // Shipping Alert widget (Ops Hub Enhancement 2) — only for the Shipping
+  // page, and only shown once at least one SO actually requires a COI.
+  // Counts SOs, not projects — a multi-SO project can have several
+  // locations each independently needing one.
+  let coiAlertWidget='';
+  if(dept==='shipping'){
+    const activeProjIds=new Set(projects.filter(p=>p.status!=='complete').map(p=>p.id));
+    const coiSOs=soDetails.filter(d=>d.coi_required==='yes'&&activeProjIds.has(d.project_id));
+    if(coiSOs.length){
+      const pending=coiSOs.filter(d=>d.coi_status!=='Approved').length;
+      const overdue=coiSOs.filter(d=>{
+        if(d.coi_status==='Approved')return false;
+        const proj=projects.find(p=>p.id===d.project_id);
+        const installDate=proj?getMsDate(proj.id,'installation'):null;
+        return installDate&&daysDiff(installDate)<0;
+      }).length;
+      coiAlertWidget='<div class="metrics-row" style="grid-template-columns:repeat(3,1fr);padding:12px 16px 0">'+
+        '<div class="metric"><div class="metric-label">SOs requiring COI</div><div class="metric-val">'+coiSOs.length+'</div></div>'+
+        '<div class="metric"><div class="metric-label">Pending</div><div class="metric-val '+(pending>0?'amber':'')+'">'+pending+'</div></div>'+
+        '<div class="metric"><div class="metric-label">Overdue</div><div class="metric-val '+(overdue>0?'red':'')+'">'+overdue+'</div></div>'+
+        '</div>';
+    }
   }
 
-  const addBtn=hasFilter?'<div class="actions-row"><button class="btn-add" onclick="openAdHocModal(&quot;'+dept+'&quot;)">+ Add '+(dept==='shipping'?'shipment':'installation')+'</button></div>':'';
-
-  el.innerHTML=ganttHtml+
+  el.innerHTML=ganttHtml+coiAlertWidget+
     '<div class="section">'+
     '<div class="section-head">'+
     '<div class="section-title" style="border-left:3px solid '+c.color+';padding-left:8px">'+c.title+'</div>'+
-    '<div style="display:flex;gap:7px;align-items:center">'+pmDropdown("renderDeptView('"+dept+"')") + hideCompletedBtn(dept)+'<button class="btn-export" onclick="exportToExcel()">&#8675; Excel</button></div>'+
+    '<div style="display:flex;gap:7px;align-items:center">'+hideCompletedBtn(dept)+'<button class="btn-export" onclick="exportToExcel()">&#8675; Excel</button></div>'+
     '</div>'+filterBar+
     '<div class="dept-table-wrap"><table class="dept-table"><thead><tr>'+
     c.cols.map(col=>'<th>'+col+'</th>').join('')+
@@ -4010,25 +4298,77 @@ function renderDeptView(dept){
 
   // Attach filter events after render
   if(hasFilter){
-    const attachEv=(id,key,handler)=>{const el2=document.getElementById(id);if(el2)el2[handler]=function(){deptFilter[dept][key]=this.value;renderDeptView(dept);};};
-    attachEv('df-search-'+dept,'search','oninput');
-    attachEv('df-from-'+dept,'dateFrom','onchange');
-    attachEv('df-to-'+dept,'dateTo','onchange');
-    attachEv('df-sort-'+dept,'sort','onchange');
+    attachStdFilterEvents(dept,()=>renderDeptView(dept));
+    const sortEl=document.getElementById('df-sort-'+dept);
+    if(sortEl)sortEl.onchange=function(){deptFilter[dept].sort=this.value;renderDeptView(dept);};
   }
 }
-function deptFilterClear(dept){deptFilter[dept]={search:'',dateFrom:'',dateTo:'',sort:'date-asc'};renderDeptView(dept);}
+// Kept as a thin wrapper — some older onclick handlers elsewhere may still
+// reference deptFilterClear by name.
+function deptFilterClear(dept){clearStdFilters(dept,()=>renderDeptView(dept));}
 
-// ── VINYL ──────────────────────────────────────────────────
-function applyVinylFilter(data){
-  return data.filter(item=>{
-    if(vinylFilter.status&&item.status!==vinylFilter.status)return false;
-    if(vinylFilter.pm&&(item.pm||'')!==vinylFilter.pm)return false;
-    if(vinylFilter.search){const q=vinylFilter.search.toLowerCase();if(!(item.name||'').toLowerCase().includes(q)&&!(item.so||'').toLowerCase().includes(q)&&!(item.client||'').toLowerCase().includes(q))return false;}
-    if(vinylFilter.dateFrom&&item.date&&item.date<vinylFilter.dateFrom)return false;
-    if(vinylFilter.dateTo&&item.date&&item.date>vinylFilter.dateTo)return false;
+// ── SCHEDULE-ITEM PAGES (Vinyl, Planogram, future schedule pages) ──
+// These pages iterate schedule rows, not projects, so they get their own
+// small adapter on top of the same deptFilter state / clear / customer-list
+// helpers rather than reusing renderStdFilterBar's project-status dropdown,
+// whose Active/On hold/Complete options don't match a row's own status
+// vocabulary (Scheduled, Print Day, Vacation, etc.).
+function linkedProjectOf(item){return item.project_id?projects.find(p=>p.id===item.project_id):null;}
+function planLinkedProj(item){return linkedProjectOf(item);}
+// Replaces the old applyVinylFilter/applyPlanFilter, which duplicated the
+// same four checks. Priority/Health/Customer are resolved through the
+// row's linked project since the row itself doesn't carry those fields.
+function applyScheduleFilters(list,dept){
+  const f=deptFilter[dept];
+  if(!f)return list;
+  return list.filter(item=>{
+    if(f.status&&item.status!==f.status)return false;
+    if(f.search){
+      const q=f.search.toLowerCase();
+      const proj=linkedProjectOf(item);
+      const hay=((item.name||'')+' '+(item.so||'')+' '+(item.client||'')+' '+(proj?.form_factor||'')).toLowerCase();
+      if(!hay.includes(q))return false;
+    }
+    if(f.dateFrom&&item.date&&item.date<f.dateFrom)return false;
+    if(f.dateTo&&item.date&&item.date>f.dateTo)return false;
+    if(f.priorityF||f.healthF||f.customer){
+      const proj=linkedProjectOf(item);
+      if(!proj)return false;
+      if(f.priorityF&&(proj.priority||'')!==f.priorityF)return false;
+      if(f.healthF&&healthBucket(proj.id)!==f.healthF)return false;
+      if(f.customer&&proj.client!==f.customer)return false;
+    }
     return true;
   });
+}
+function renderScheduleFilterBar(dept,opts={}){
+  const f=deptFilter[dept];
+  const selStyle='font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)';
+  const searchVal=(f.search||'').replace(/"/g,'&quot;');
+  const opt=(val,label,cur)=>`<option value="${val}"${cur===val?' selected':''}>${label}</option>`;
+  let bar='<div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">';
+  bar+=`<input placeholder="${opts.searchPlaceholder||'Search...'}" style="${selStyle};width:220px" value="${searchVal}" id="sf-search-${dept}">`;
+  bar+=`<select style="${selStyle}" id="sf-status-${dept}"><option value="">All statuses</option>${(opts.statusOptions||[]).map(s=>opt(s,s,f.status)).join('')}</select>`;
+  bar+=`<select style="${selStyle}" id="sf-priority-${dept}">${opt('','All priorities',f.priorityF)}${opt('critical','Critical',f.priorityF)}${opt('high','High',f.priorityF)}</select>`;
+  bar+=`<select style="${selStyle}" id="sf-health-${dept}">${opt('','All health',f.healthF)}${opt('green','🟢 On track',f.healthF)}${opt('yellow','🟡 At risk',f.healthF)}${opt('red','🔴 Escalation',f.healthF)}</select>`;
+  bar+=`<select style="${selStyle}" id="sf-customer-${dept}">${opt('','All customers',f.customer)}${customerOptionList().map(c=>opt(c,c,f.customer)).join('')}</select>`;
+  bar+=`<input type="date" title="Date from" style="${selStyle}" value="${f.dateFrom||''}" id="sf-from-${dept}"><span style="font-size:11px;color:var(--gray-500)">to</span><input type="date" title="Date to" style="${selStyle}" value="${f.dateTo||''}" id="sf-to-${dept}">`;
+  if(opts.extraHtml)bar+=opts.extraHtml;
+  const activeCount=stdFilterActiveCount(dept);
+  if(activeCount)bar+=`<button onclick="clearStdFilters('${dept}',()=>${opts.rerenderCall})" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer">✕ Clear filters</button>`;
+  if(opts.countLabel)bar+=`<span style="font-size:11px;color:var(--gray-500);margin-left:auto">${opts.countLabel}${activeCount?' (filtered)':''}</span>`;
+  bar+='</div>';
+  return bar;
+}
+function attachScheduleFilterEvents(dept,rerenderFn){
+  const bind=(id,key,evt)=>{const el=document.getElementById(id);if(el)el[evt]=function(){deptFilter[dept][key]=this.value;rerenderFn();};};
+  bind('sf-search-'+dept,'search','oninput');
+  bind('sf-status-'+dept,'status','onchange');
+  bind('sf-priority-'+dept,'priorityF','onchange');
+  bind('sf-health-'+dept,'healthF','onchange');
+  bind('sf-customer-'+dept,'customer','onchange');
+  bind('sf-from-'+dept,'dateFrom','onchange');
+  bind('sf-to-'+dept,'dateTo','onchange');
 }
 function renderVinyl(){
   const el=document.getElementById('tab-vinyl');
@@ -4036,13 +4376,14 @@ function renderVinyl(){
   const source=vinylBase.filter(v=>{
     const p=projects.find(x=>x.id===v.project_id);
     if(!p)return!pmFilter&&!salesFilter;
+    if(p.status==='software-active')return false;
     if(pmFilter&&p.pm!==pmFilter)return false;
     if(salesFilter&&p.sales!==salesFilter)return false;
     // If project has children, skip master — show children instead
     if(isMaster(p)){const kids=getChildren(p.id);if(kids.length)return vinylSchedule.some(vv=>kids.some(c=>c.id===vv.project_id))===false||false;}
     return true;
   });
-  let filtered=applyVinylFilter(source);
+  let filtered=applyScheduleFilters(source,'vinyl');
   if(hideNoVinylDate)filtered=filtered.filter(v=>v.date);
   // Rows with no vinyl date always sink to the bottom, regardless of which
   // column was last sorted — a blank date shouldn't compete for a position
@@ -4053,7 +4394,6 @@ function renderVinyl(){
     if(!aBlank&&bBlank)return -1;
     return 0; // preserve existing relative order otherwise (stable sort)
   });
-  const activeFilters=[vinylFilter.status,vinylFilter.search,vinylFilter.dateFrom,vinylFilter.dateTo].filter(Boolean).length;
   const rows=filtered.map((item,i)=>{
     const origIdx=vinylSchedule.indexOf(item);
     const readStyle='font-size:12px;color:var(--gray-700);padding:4px 2px;';
@@ -4072,21 +4412,15 @@ function renderVinyl(){
       <td><button onclick="removeSchedRow('vinyl',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove row">✕</button></td>
     </tr>`;
   }).join('');
+  const filterBar=renderScheduleFilterBar('vinyl',{
+    statusOptions:STATUS_OPTS,
+    searchPlaceholder:'🔍 Search name, SO, client...',
+    rerenderCall:'renderVinyl()',
+    countLabel:filtered.length+' of '+source.length+' rows'
+  });
   el.innerHTML=`<div class="section">
     <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderVinyl')}${salesDropdown('renderVinyl')}${hideCompletedBtn('vinyl')}${hideNoVinylDateBtn()}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
-    <!-- FILTER BAR -->
-    <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
-      <input placeholder="🔍 Search name, SO, client..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:210px" value="${vinylFilter.search}" oninput="vinylFilter.search=this.value;renderVinyl()">
-      <select style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" onchange="vinylFilter.status=this.value;renderVinyl()">
-        <option value="">All statuses</option>
-        ${STATUS_OPTS.map(s=>`<option value="${s}"${vinylFilter.status===s?' selected':''}>${s}</option>`).join('')}
-      </select>
-      <input type="date" title="Vinyl date from" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${vinylFilter.dateFrom}" onchange="vinylFilter.dateFrom=this.value;renderVinyl()">
-      <span style="font-size:11px;color:var(--gray-500)">to</span>
-      <input type="date" title="Vinyl date to" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${vinylFilter.dateTo}" onchange="vinylFilter.dateTo=this.value;renderVinyl()">
-      ${activeFilters?`<button onclick="vinylFilter={status:'',search:'',dateFrom:'',dateTo:''};renderVinyl()" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear filters</button>`:''}
-      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filtered.length} of ${source.length} rows${activeFilters?' (filtered)':''}</span>
-    </div>
+    ${filterBar}
     <div style="overflow-x:auto"><table class="sched-table"><thead><tr>
       <th style="width:28px"></th><th style="width:32px">#</th>
       <th onclick="sortVinyl('so')" style="cursor:pointer">SO ↕</th>
@@ -4101,34 +4435,25 @@ function renderVinyl(){
     </tr></thead><tbody>${rows||'<tr><td colspan="12" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
     <div class="actions-row"><button class="btn-add" onclick="addSchedRow('vinyl')">+ Add vinyl job</button><button onclick="syncVinylFromProjects()" style="font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--blue);background:var(--blue-bg);color:var(--blue);cursor:pointer;font-family:var(--font);font-weight:500;margin-left:8px">↻ Sync from projects</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
   </div>`;
+  attachScheduleFilterEvents('vinyl',renderVinyl);
 }
 function sortVinyl(key){
   vinylSchedule.sort((a,b)=>{const av=a[key]||'';const bv=b[key]||'';return av.localeCompare(bv);});
   renderVinyl();showToast('Sorted by '+key);
 }
-function applyPlanFilter(data){
-  return data.filter(item=>{
-    if(planFilter.status&&item.status!==planFilter.status)return false;
-    if(planFilter.search){const q=planFilter.search.toLowerCase();if(!(item.name||'').toLowerCase().includes(q)&&!(item.so||'').toLowerCase().includes(q)&&!(item.client||'').toLowerCase().includes(q)&&!(planLinkedProj(item)?.form_factor||'').toLowerCase().includes(q))return false;}
-    if(planFilter.dateFrom&&item.date&&item.date<planFilter.dateFrom)return false;
-    if(planFilter.dateTo&&item.date&&item.date>planFilter.dateTo)return false;
-    return true;
-  });
-}
-function planLinkedProj(item){return item.project_id?projects.find(p=>p.id===item.project_id):null;}
 function renderPlanogram(){
   const el=document.getElementById('tab-planogram');
   const planBase=hideCompleted['planogram']?planogramSchedule.filter(v=>v.status!=='Complete'):planogramSchedule;
   const source=planBase.filter(v=>{
     const p=projects.find(x=>x.id===v.project_id);
     if(!p)return!pmFilter&&!salesFilter;
+    if(p.status==='software-active')return false;
     if(pmFilter&&p.pm!==pmFilter)return false;
     if(salesFilter&&p.sales!==salesFilter)return false;
     if(isMaster(p)){const kids=getChildren(p.id);if(kids.length)return planogramSchedule.some(vv=>kids.some(c=>c.id===vv.project_id))===false||false;}
     return true;
   });
-  const filtered=applyPlanFilter(source);
-  const activeFilters=[planFilter.status,planFilter.search,planFilter.dateFrom,planFilter.dateTo].filter(Boolean).length;
+  const filtered=applyScheduleFilters(source,'planogram');
   const rows=filtered.map((item,i)=>{
     const origIdx=planogramSchedule.indexOf(item);
     const readStyle='font-size:12px;color:var(--gray-700);padding:4px 2px;';
@@ -4155,21 +4480,15 @@ function renderPlanogram(){
       </td>
     </tr>`;
   }).join('');
+  const filterBar=renderScheduleFilterBar('planogram',{
+    statusOptions:STATUS_OPTS,
+    searchPlaceholder:'🔍 Search name, SO, client, machine...',
+    rerenderCall:'renderPlanogram()',
+    countLabel:filtered.length+' of '+source.length+' rows'
+  });
   el.innerHTML=`<div class="section">
     <div class="section-head"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderPlanogram')}${salesDropdown('renderPlanogram')}${hideCompletedBtn('planogram')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
-    <!-- FILTER BAR -->
-    <div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
-      <input placeholder="🔍 Search name, SO, client, machine..." style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);width:230px" value="${planFilter.search}" oninput="planFilter.search=this.value;renderPlanogram()">
-      <select style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" onchange="planFilter.status=this.value;renderPlanogram()">
-        <option value="">All statuses</option>
-        ${STATUS_OPTS.map(s=>`<option value="${s}"${planFilter.status===s?' selected':''}>${s}</option>`).join('')}
-      </select>
-      <input type="date" title="Date from" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${planFilter.dateFrom}" onchange="planFilter.dateFrom=this.value;renderPlanogram()">
-      <span style="font-size:11px;color:var(--gray-500)">to</span>
-      <input type="date" title="Date to" style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" value="${planFilter.dateTo}" onchange="planFilter.dateTo=this.value;renderPlanogram()">
-      ${activeFilters?`<button onclick="planFilter={status:'',search:'',dateFrom:'',dateTo:''};renderPlanogram()" style="font-size:11px;padding:5px 10px;border-radius:var(--radius);border:1px solid var(--red-mid);background:var(--red-light);color:var(--red);cursor:pointer;font-family:var(--font)">✕ Clear filters</button>`:''}
-      <span style="font-size:11px;color:var(--gray-500);margin-left:auto">${filtered.length} of ${source.length} rows${activeFilters?' (filtered)':''}</span>
-    </div>
+    ${filterBar}
     <div style="overflow-x:auto"><table class="sched-table"><thead><tr>
       <th style="width:28px"></th><th style="width:32px">#</th>
       <th onclick="sortPlan('so')" style="cursor:pointer">SO ↕</th>
@@ -4185,10 +4504,124 @@ function renderPlanogram(){
     </tr></thead><tbody>${rows||'<tr><td colspan="12" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
     <div class="actions-row"><button class="btn-add" onclick="addSchedRow('planogram')">+ Add planogram</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
   </div>`;
+  attachScheduleFilterEvents('planogram',renderPlanogram);
 }
 function sortPlan(key){
   planogramSchedule.sort((a,b)=>{const av=a[key]||'';const bv=b[key]||'';return av.localeCompare(bv);});
   renderPlanogram();showToast('Sorted by '+key);
+}
+
+// ── SOFTWARE SCHEDULE (Ops Hub Enhancement 1) ──────────────────
+// Same layout/styling convention as Vinyl/Planogram/Shipping. Rows are
+// opt-in (via "Move to Software" on a project, or manually added here) —
+// unlike Vinyl/Planogram, there's no auto-generated row per project, since
+// most projects never touch software work after installation.
+function swSummaryFor(projId){return softwareItems.filter(i=>i.project_id===projId);}
+function renderSoftware(){
+  const el=document.getElementById('tab-software');
+  if(!el)return;
+  const source=softwareItems.filter(item=>{
+    if(pmFilter&&item.pm!==pmFilter)return false;
+    if(salesFilter){const p=linkedProjectOf(item);if(!p||p.sales!==salesFilter)return false;}
+    return true;
+  });
+  const filtered=applyScheduleFilters(source,'software').filter(item=>{
+    const f=deptFilter.software;
+    if(f.workType&&item.workType!==f.workType)return false;
+    if(f.softwarePoc&&item.softwarePoc!==f.softwarePoc)return false;
+    return true;
+  });
+  const pocList=[...new Set(softwareItems.map(i=>i.softwarePoc).filter(Boolean))].sort();
+  const extraHtml=`<select style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" id="sf-worktype-software">
+      <option value="">All work types</option>${SOFTWARE_WORK_TYPES.map(w=>`<option value="${w}"${deptFilter.software.workType===w?' selected':''}>${w}</option>`).join('')}
+    </select>
+    <select style="font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)" id="sf-poc-software">
+      <option value="">All Software POCs</option>${pocList.map(p=>`<option value="${p}"${deptFilter.software.softwarePoc===p?' selected':''}>${p}</option>`).join('')}
+    </select>`;
+  const filterBar=renderScheduleFilterBar('software',{
+    statusOptions:SOFTWARE_STATUS_OPTS,
+    searchPlaceholder:'🔍 Search name, SO, client...',
+    rerenderCall:'renderSoftware()',
+    countLabel:filtered.length+' of '+source.length+' items',
+    extraHtml
+  });
+  const rows=filtered.map(item=>{
+    const jira=(item.jiraLinks||[]).filter(Boolean);
+    const jiraCell=jira.length?jira.map((u,i)=>`<a href="${u}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;display:block">Ticket ${i+1} ↗</a>`).join(''):'<span style="font-size:10px;color:var(--gray-400)">—</span>';
+    return`<tr>
+      <td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">${item.so||'—'}</td>
+      <td>${item.client||'—'}</td>
+      <td style="font-size:11px;color:var(--gray-500)">${item.pm||'—'}</td>
+      <td><input class="sched-input" style="width:110px" value="${(item.softwarePoc||'').replace(/"/g,'&quot;')}" placeholder="Owner" onchange="sw('${item.id}','softwarePoc',this.value)"></td>
+      <td><select class="sched-select" onchange="sw('${item.id}','workType',this.value)">${SOFTWARE_WORK_TYPES.map(w=>`<option${w===item.workType?' selected':''}>${w}</option>`).join('')}</select></td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${item.targetFinish||''}" onchange="sw('${item.id}','targetFinish',this.value)"></td>
+      <td><select class="sched-select" onchange="sw('${item.id}','status',this.value)">${SOFTWARE_STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
+      <td>${jiraCell}<button onclick="openAddJiraLink('${item.id}')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-top:2px">+ Add link</button></td>
+      <td><button onclick="removeSoftwareItem('${item.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove">✕</button></td>
+    </tr>`;
+  }).join('');
+  el.innerHTML=`<div class="section">
+    <div class="section-head"><div class="section-title" style="border-left:3px solid #7c3aed;padding-left:8px">Software schedule</div><div style="display:flex;gap:7px;align-items:center"><button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
+    ${filterBar}
+    <div style="overflow-x:auto"><table class="sched-table"><thead><tr>
+      <th>SO</th><th>Customer</th><th>PM</th><th>Software POC</th><th>Work Type</th><th>Target Finish</th><th>Current Status</th><th>Jira Ticket(s)</th><th style="width:28px"></th>
+    </tr></thead><tbody>${rows||'<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--gray-500)">No software work tracked yet. Move a project to Software from its status menu, or add one manually.</td></tr>'}</tbody></table></div>
+    <div class="actions-row"><button class="btn-add" onclick="addSoftwareItemModal()">+ Add software item</button></div>
+  </div>`;
+  attachScheduleFilterEvents('software',renderSoftware);
+  const bindExtra=(id,key)=>{const e=document.getElementById(id);if(e)e.onchange=function(){deptFilter.software[key]=this.value;renderSoftware();};};
+  bindExtra('sf-worktype-software','workType');
+  bindExtra('sf-poc-software','softwarePoc');
+}
+// Per-field autosave, mirroring ps2()'s pattern for Planogram.
+function sw(itemId,k,v){
+  const item=softwareItems.find(x=>x.id===itemId);
+  if(!item)return;
+  item[k]=v;
+  const colMap={softwarePoc:'software_poc',workType:'work_type',targetFinish:'target_finish',status:'status',notes:'notes'};
+  const col=colMap[k]||k;
+  sb.from('software_items').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',itemId).then(({error})=>{if(error)console.warn('sw save error',error);else showToast('Saved ✓');});
+}
+function openAddJiraLink(itemId){
+  const url=prompt('Paste the Jira link:');
+  if(!url)return;
+  const item=softwareItems.find(x=>x.id===itemId);
+  if(!item)return;
+  item.jiraLinks=[...(item.jiraLinks||[]),url];
+  sb.from('software_items').update({jira_links:item.jiraLinks,updated_at:new Date().toISOString()}).eq('id',itemId).then(({error})=>{if(error){console.warn('jira link save error',error);return;}renderSoftware();});
+}
+function addSoftwareItemModal(preselectProjId){
+  const projOpts=pickerProjectList().map(p=>`<option value="${p.id}"${p.id===preselectProjId?' selected':''}>${p.name}${p.so_number?' — '+p.so_number:''}</option>`).join('');
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:480px" onclick="event.stopPropagation()">
+      <div class="modal-head"><span class="modal-title">Add software item</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field full"><label>Project</label><select id="asi-proj"><option value="">Select project...</option>${projOpts}</select></div>
+          <div class="field"><label>Software POC</label><input id="asi-poc" placeholder="Owner name"></div>
+          <div class="field"><label>Work type</label><select id="asi-worktype">${SOFTWARE_WORK_TYPES.map(w=>`<option>${w}</option>`).join('')}</select></div>
+          <div class="field"><label>Target finish</label><input type="date" id="asi-target"></div>
+          <div class="field"><label>Status</label><select id="asi-status">${SOFTWARE_STATUS_OPTS.map(s=>`<option>${s}</option>`).join('')}</select></div>
+        </div>
+      </div>
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveSoftwareItem()">Add</button></div>
+    </div>
+  </div>`;
+}
+async function saveSoftwareItem(){
+  const projId=document.getElementById('asi-proj')?.value;
+  if(!projId){alert('Please select a project.');return;}
+  const base={project_id:projId,software_poc:document.getElementById('asi-poc')?.value.trim()||'',work_type:document.getElementById('asi-worktype')?.value||'',target_finish:document.getElementById('asi-target')?.value||null,status:document.getElementById('asi-status')?.value||'Pending',jira_links:[]};
+  const{error}=await sb.from('software_items').insert(base);
+  if(error){alert('Error: '+error.message);return;}
+  closeModal();showToast('Added and saved ✓');await loadAll();
+}
+async function removeSoftwareItem(itemId){
+  if(!confirm('Remove this software item?'))return;
+  await sb.from('software_items').delete().eq('id',itemId);
+  softwareItems=softwareItems.filter(x=>x.id!==itemId);
+  renderSoftware();showToast('Removed');
 }
 async function syncVinylFromProjects(){
   // SAFE: this function ONLY inserts — it never deletes, updates, or touches
@@ -5231,7 +5664,7 @@ function openEditProj(id){
         <div class="field"><label>Sales</label><input id="ep-sales" list="ep-sales-list" value="${proj.sales||''}" placeholder="Sales contact"><datalist id="ep-sales-list">${getSalesList().map(s=>`<option>${s}</option>`).join('')}</datalist></div>
         <div class="field"><label>Account Manager</label><input id="ep-am" list="ep-am-list" value="${proj.account_manager||''}" placeholder="Account Manager"><datalist id="ep-am-list">${getAMList().map(a=>`<option>${a}</option>`).join('')}</datalist></div>
         <div class="field"><label>Location <span style="font-weight:400;font-size:10px;color:var(--gray-400)">(City, Province, Country)</span></label><input id="ep-location" value="${(proj.location||'').replace(/"/g,'&quot;')}" placeholder="e.g. Toronto, ON, Canada"></div>
-        <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
+        <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="software-active"${proj.status==='software-active'?' selected':''}>Software Active</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
         <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${overviewConfig.naming_convention||''}</textarea></div>
         <div class="field full"><label>Installation address</label><input id="ep-address" value="${overviewConfig.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
         <div class="field full"><label>Configuration / Form factor <span style="font-size:10px;color:var(--gray-400);font-weight:400">— select all that apply (same list used in per-SO Configuration)</span></label>
@@ -5970,19 +6403,7 @@ function renderProjPage(){
 }
 
 function onProjPageSearch(val){
-  if(!val||val.length<2)return;
-  // Match by full display string or partial name — handles projects with dashes in names
-  const vl=val.toLowerCase();
-  const match=projects.find(p=>{
-    const display=p.name+(p.so_number?' — '+p.so_number:'');
-    if(display.toLowerCase()===vl)return true;
-    if(p.name.toLowerCase()===vl)return true;
-    if(p.so_number&&val.includes(p.so_number))return true;
-    return false;
-  })||projects.find(p=>{ // fallback: starts-with match
-    const display=p.name+(p.so_number?' — '+p.so_number:'');
-    return display.toLowerCase().startsWith(vl)||p.name.toLowerCase().startsWith(vl);
-  });
+  const match=matchProjectByPickerText(val,pickerProjectList());
   if(match&&match.id!==ppProjId){
     switchProjPage(match.id);
     document.getElementById('pp-proj-search').blur();
@@ -6736,6 +7157,7 @@ function openSOConfigModal(projId,so){
   const odooUrl=saved?.odoo_url||proj.odoo_url||'';
   const installUrl=saved?.install_ticket_url||proj.install_ticket_url||'';
   const uiUrl=saved?.ui_task_url||proj.ui_task_url||'';
+  const coiRequiredVal=saved?.coi_required==='yes'?'yes':'no';
   const types=getProductTypes();
   const selectedTypes=formFactor.split(',').map(s=>s.trim()).filter(Boolean);
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:480px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
@@ -6747,6 +7169,9 @@ function openSOConfigModal(projId,so){
           ${types.map(t=>`<option${selectedTypes.includes(t)?' selected':''}>${t}</option>`).join('')}
         </select>
         <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
+      </div>
+      <div class="field full" style="margin-bottom:12px"><label>COI Required <span style="font-size:10px;color:var(--gray-400);font-weight:400">— this SO's location, not the whole project</span></label>
+        <select id="soc-coi-required"><option value="no"${coiRequiredVal==='no'?' selected':''}>No</option><option value="yes"${coiRequiredVal==='yes'?' selected':''}>Yes</option></select>
       </div>
       <div class="field full" style="margin-bottom:10px"><label>QA Task URL</label>
         <div style="display:flex;gap:6px;align-items:center">
@@ -6783,8 +7208,9 @@ async function saveSOConfig(projId,so){
   const odooUrl=document.getElementById('soc-odoo').value.trim();
   const installUrl=document.getElementById('soc-install').value.trim();
   const uiUrl=document.getElementById('soc-ui').value.trim();
+  const coiRequiredVal=document.getElementById('soc-coi-required')?.value||'no';
   const existing=soDetails.find(d=>d.project_id===projId&&d.so_tag===so);
-  const updates={form_factor:formFactor,qa_task_url:qaUrl,odoo_url:odooUrl,install_ticket_url:installUrl,ui_task_url:uiUrl};
+  const updates={form_factor:formFactor,qa_task_url:qaUrl,odoo_url:odooUrl,install_ticket_url:installUrl,ui_task_url:uiUrl,coi_required:coiRequiredVal};
   if(existing){
     await sb.from('so_details').update({...updates,updated_at:new Date().toISOString()}).eq('id',existing.id);
     Object.assign(existing,updates);
@@ -7288,7 +7714,8 @@ function renderUATDocTab(){
 function renderGenDocs(){
   saveDocFormState();
   const el=document.getElementById('tab-gendocs');
-  const projOpts=projects.map(p=>`<option value="${p.id}"${p.id===selectedDocProjId?' selected':''}>${p.name} — ${p.so_number||'No SO'}</option>`).join('');
+  const gdProjList=pickerProjectList();
+  const projOpts=gdProjList.map(p=>`<option value="${p.id}"${p.id===selectedDocProjId?' selected':''}>${p.name} — ${p.so_number||'No SO'}</option>`).join('');
   el.innerHTML=`
     <div class="section">
       <div class="section-head"><div class="section-title">📄 Generate documents</div><div class="section-meta">Fill in once → get all three docs instantly</div></div>
@@ -7298,12 +7725,13 @@ function renderGenDocs(){
           <input list="gd-proj-list" id="gd-proj-search" placeholder="Type to search..." value="${selectedDocProjId?projects.find(p=>p.id===selectedDocProjId)?.name||'':''}"
             style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);flex:1;min-width:0"
             oninput="onDocProjSearch(this.value)">
-          <datalist id="gd-proj-list">${projects.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(p=>'<option value="'+(p.name+(p.so_number?' — '+p.so_number:'')).replace(/"/g,'&quot;')+'">' ).join('')}</datalist>
+          <datalist id="gd-proj-list">${projectSearchOptions(gdProjList)}</datalist>
           <select style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);max-width:260px"
             onchange="selectedDocProjId=this.value;selectedDocSO='';loadDocState(this.value).then(()=>renderGenDocs())">
             <option value="">Select project...</option>
             ${projOpts}
           </select>
+          ${pmDropdown('renderGenDocs')}${salesDropdown('renderGenDocs')}
           ${selectedDocProjId?`<span style="font-size:11px;color:var(--success);white-space:nowrap">✓ Auto-filled</span>`:''}
         </div>
         ${(()=>{
@@ -7543,15 +7971,7 @@ function renderQAForm(){
 }
 
 function onDocProjSearch(val){
-  if(!val||val.length<2)return;
-  const vl=val.toLowerCase();
-  const match=projects.find(p=>{
-    const display=p.name+(p.so_number?' — '+p.so_number:'');
-    return display.toLowerCase()===vl||p.name.toLowerCase()===vl||(p.so_number&&val.includes(p.so_number));
-  })||projects.find(p=>{
-    const display=p.name+(p.so_number?' — '+p.so_number:'');
-    return display.toLowerCase().startsWith(vl)||p.name.toLowerCase().startsWith(vl);
-  });
+  const match=matchProjectByPickerText(val,pickerProjectList());
   if(match&&match.id!==selectedDocProjId){
     selectedDocProjId=match.id;
     loadDocState(match.id).then(()=>renderGenDocs());
@@ -8565,6 +8985,10 @@ function renderUAT(){
 // session start/resume, one-question-at-a-time mobile-first flow,
 // autosave, photos, and the completion review + override.
 // ═══════════════════════════════════════════════════════════
+function uatOnProjSearch(val){
+  const match=matchProjectByPickerText(val,pickerProjectList());
+  if(match)loadUATRunnerProject(match.id);
+}
 async function loadUATRunnerProject(projId){
   uatRunnerProjId=projId;
   uatRunnerSessionId=null;
@@ -9006,8 +9430,9 @@ function renderUATRun(){
   if(!uatRunnerProjId){
     el.innerHTML=header+`<div class="section"><div class="section-head"><div class="section-title" style="font-size:12px">Select a project</div></div>
       <div style="padding:14px">
-        <input list="uat-run-proj-list" placeholder="Type to search..." style="width:100%;max-width:420px;font-family:var(--font);font-size:13px;padding:9px 12px;border:1px solid var(--gray-300);border-radius:var(--radius)" onchange="const p=projects.find(x=>(x.name+' — '+(x.so_number||'')).trim()===this.value);if(p)loadUATRunnerProject(p.id);">
-        <datalist id="uat-run-proj-list">${projects.map(p=>`<option value="${(p.name+' — '+(p.so_number||'')).replace(/"/g,'&quot;')}">`).join('')}</datalist>
+        <input list="uat-run-proj-list" placeholder="Type to search..." style="width:100%;max-width:420px;font-family:var(--font);font-size:13px;padding:9px 12px;border:1px solid var(--gray-300);border-radius:var(--radius)" onchange="uatOnProjSearch(this.value)">
+        <datalist id="uat-run-proj-list">${projectSearchOptions(pickerProjectList())}</datalist>
+        <div style="margin-top:8px;display:flex;gap:6px">${pmDropdown('renderUAT')}${salesDropdown('renderUAT')}</div>
       </div>
     </div>`;
     return;
@@ -9639,7 +10064,10 @@ function toggleNotes(id){
 
 // ── ARCHIVE / COMPLETE ─────────────────────────────────────
 async function toggleArchive(id,currentStatus){
-  const newStatus=currentStatus==='complete'?'active':'complete';
+  // Restore applies to both 'complete' and 'software-active' — either one
+  // goes back to 'active'. Only a currently-active project can be marked done.
+  const isDone=currentStatus==='complete'||currentStatus==='software-active';
+  const newStatus=isDone?'active':'complete';
   if(!confirm(`${newStatus==='complete'?'Mark this project complete':'Restore this project to active'}?`))return;
   const{error}=await sb.from('projects').update({status:newStatus,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',id);
   if(error){alert('Error: '+error.message);return;}
@@ -9648,6 +10076,58 @@ async function toggleArchive(id,currentStatus){
   if(newStatus==='complete')fireConfetti();
   showToast(newStatus==='complete'?'🎉 Project complete!':'Project restored ✓');
   await loadAll();
+}
+
+// ── CLOSE PROJECT vs MOVE TO SOFTWARE (Ops Hub Enhancement 1) ──
+// Replaces the old single "mark complete" action with a choice, since
+// installation finishing doesn't always mean the project is fully done —
+// software work often continues after.
+function openCloseProjectModal(id){
+  const proj=projects.find(p=>p.id===id);
+  if(!proj)return;
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:440px" onclick="event.stopPropagation()">
+      <div class="modal-head"><span class="modal-title">Close ${proj.name}?</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div class="modal-body">
+        <div style="font-size:12px;color:var(--gray-600);margin-bottom:14px">Is all work — including any software work — actually finished, or does software work continue after this?</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button onclick="confirmCloseProject('${id}')" style="text-align:left;padding:12px 14px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);cursor:pointer;font-family:var(--font)">
+            <div style="font-weight:600;font-size:13px">✓ Close project</div>
+            <div style="font-size:11px;color:var(--gray-500);margin-top:2px">All operational and software work is complete.</div>
+          </button>
+          <button onclick="confirmMoveToSoftware('${id}')" style="text-align:left;padding:12px 14px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);cursor:pointer;font-family:var(--font)">
+            <div style="font-weight:600;font-size:13px">💻 Move to Software</div>
+            <div style="font-size:11px;color:var(--gray-500);margin-top:2px">Installation is done, but software work remains. Leaves operational schedules and appears on the Software Schedule instead.</div>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+// Deliberately doesn't call toggleArchive() — the modal choice above already
+// IS the confirmation, so a second window.confirm() would be redundant.
+async function confirmCloseProject(id){
+  closeModal();
+  const currentStatus=(projects.find(p=>p.id===id)||{}).status;
+  const{error}=await sb.from('projects').update({status:'complete',changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',id);
+  if(error){alert('Error: '+error.message);return;}
+  const proj=projects.find(p=>p.id===id);
+  await logActivity('marked complete',proj?.name||'',proj?.so_number||'',id,currentStatus,'complete');
+  fireConfetti();
+  showToast('🎉 Project complete!');
+  await loadAll();
+}
+async function confirmMoveToSoftware(id){
+  closeModal();
+  const currentStatus=(projects.find(p=>p.id===id)||{}).status;
+  const{error}=await sb.from('projects').update({status:'software-active',changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',id);
+  if(error){alert('Error: '+error.message);return;}
+  const proj=projects.find(p=>p.id===id);
+  await logActivity('moved to software',proj?.name||'',proj?.so_number||'',id,currentStatus,'software-active');
+  showToast('Moved to Software ✓');
+  await loadAll();
+  addSoftwareItemModal(id); // prompt to fill in POC/work type right away
 }
 
 function fireConfetti(){
