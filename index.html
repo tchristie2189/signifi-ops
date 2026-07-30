@@ -5445,6 +5445,26 @@ async function saveEditProj(id){
   const untaggedCount=projMsForSoCheck.filter(m=>!m.so_tag).length;
   const isFullySplit=existingTags.length>0&&untaggedCount===0;
   const brandNewSOs=newSoList.filter(so=>!existingTags.includes(so));
+  // REMOVED SOs — the mirror image of the auto-clone above. Previously nothing
+  // handled this: an SO taken out of the field left its milestones (and any
+  // so_details row) still tagged and still pointing at a valid project_id, so
+  // they kept surfacing as "ghost" cards in Shipping/Installation check-in
+  // forever with no way to tell they'd been retired.
+  const removedSOs=isFullySplit?existingTags.filter(so=>!newSoList.includes(so)):[];
+  if(removedSOs.length){
+    const msToRemove=projMsForSoCheck.filter(m=>removedSOs.includes(m.so_tag));
+    const ok=confirm('SO'+(removedSOs.length>1?'s':'')+' '+removedSOs.join(', ')+' '+(removedSOs.length>1?'are':'is')+' no longer in this project\'s SO field.\n\nDelete the '+msToRemove.length+' milestone'+(msToRemove.length!==1?'s':'')+' (and any check-in status/notes) tagged for '+(removedSOs.length>1?'them':'it')+'?\n\nSkip this and they\'ll stay as orphaned rows that keep showing up in check-in.');
+    if(ok){
+      const idsToRemove=msToRemove.map(m=>m.id);
+      if(idsToRemove.length){
+        await sb.from('checkin_status').delete().in('milestone_id',idsToRemove);
+        await sb.from('milestone_done').delete().in('milestone_id',idsToRemove);
+        await sb.from('milestones').delete().in('id',idsToRemove);
+      }
+      await sb.from('so_details').delete().eq('project_id',id).in('so_tag',removedSOs);
+      await logActivity('removed SO from project',removedSOs.join(', '),removedSOs.join(', '),id,null,null);
+    }
+  }
   if(isFullySplit&&brandNewSOs.length>0){
     // This project is already SO-split and has new SOs added — auto-clone milestones
     const templateSO=existingTags[0];
@@ -8849,7 +8869,6 @@ async function exportUATSessionExcel(sessionId){
   infoRow('Form Factor:',proj.form_factor);
   infoRow('Naming Convention:',soCfg.naming_convention);
   infoRow('Machine Type:',machine.machine_type);
-  infoRow('Machine Label:',machine.machine_label);
   infoRow('Date Completed:',session.completed_date?session.completed_date.slice(0,10):'');
   infoRow('Badge Reader:',badgeReader);
   infoRow('Payment Method:',paymentMethod);
@@ -9201,6 +9220,71 @@ async function uatDeleteQuestion(id){
   renderUAT();
 }
 
+// Finds milestones tagged with an SO that's no longer in the project's SO
+// field — leftovers from removing an SO before the save-time cleanup existed
+// (or from anyone declining that prompt). These are the rows that keep
+// surfacing as ghost cards in Shipping/Installation check-in.
+function findGhostSOs(){
+  const groups={}; // key: projId|soTag
+  milestones.forEach(m=>{
+    if(!m.so_tag)return;
+    const proj=projects.find(p=>p.id===m.project_id);
+    if(!proj)return;
+    const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+    if(soList.includes(m.so_tag))return;
+    const key=proj.id+'|'+m.so_tag;
+    if(!groups[key])groups[key]={projId:proj.id,projName:proj.name,soTag:m.so_tag,msIds:[]};
+    groups[key].msIds.push(m.id);
+  });
+  return Object.values(groups);
+}
+async function cleanupGhostSO(projId,soTag){
+  const idsToRemove=milestones.filter(m=>m.project_id===projId&&m.so_tag===soTag).map(m=>m.id);
+  if(idsToRemove.length){
+    await sb.from('checkin_status').delete().in('milestone_id',idsToRemove);
+    await sb.from('milestone_done').delete().in('milestone_id',idsToRemove);
+    await sb.from('milestones').delete().in('id',idsToRemove);
+  }
+  await sb.from('so_details').delete().eq('project_id',projId).eq('so_tag',soTag);
+  await logActivity('cleaned up ghost SO',soTag,soTag,projId,null,null);
+}
+async function cleanupOneGhostSO(projId,soTag,btn){
+  if(btn){btn.disabled=true;btn.textContent='Cleaning...';}
+  await cleanupGhostSO(projId,soTag);
+  showToast('Cleaned up '+soTag+' ✓');
+  await loadAll();
+  renderSettings();
+}
+async function cleanupAllGhostSOs(){
+  const ghosts=findGhostSOs();
+  if(!ghosts.length)return;
+  if(!confirm('Delete '+ghosts.length+' ghost SO'+(ghosts.length>1?'s':'')+' ('+ghosts.reduce((n,g)=>n+g.msIds.length,0)+' milestones total)? This cannot be undone.'))return;
+  showToast('Cleaning up...');
+  for(const g of ghosts)await cleanupGhostSO(g.projId,g.soTag);
+  showToast('Cleaned up '+ghosts.length+' ghost SO'+(ghosts.length>1?'s':'')+' ✓');
+  await loadAll();
+  renderSettings();
+}
+function ghostSOSection(){
+  const ghosts=findGhostSOs();
+  if(!ghosts.length)return'';
+  return`<div class="section" style="max-width:700px;margin-top:16px">
+    <div class="section-head"><div class="section-title">👻 Ghost SOs</div></div>
+    <div style="padding:1.5rem">
+      <div style="background:#fef2f2;border:1px solid var(--red);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:#991b1b;line-height:1.6">
+        These SOs were removed from a project's SO field, but their milestones (and any naming/address/shipping-status overrides) were never cleaned up. They're harmless in Ops Hub but keep showing up as orphaned cards in Shipping/Installation check-in.
+      </div>
+      ${ghosts.map(g=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--gray-50);border-radius:8px;margin-bottom:8px">
+        <div>
+          <div style="font-size:13px;font-weight:600">${g.projName}</div>
+          <div style="font-size:11px;color:var(--gray-500);margin-top:2px">SO <span style="font-family:var(--mono);color:var(--red)">${g.soTag}</span> · ${g.msIds.length} milestone${g.msIds.length!==1?'s':''}</div>
+        </div>
+        <button onclick="cleanupOneGhostSO('${g.projId}','${g.soTag.replace(/'/g,"\\'")}',this)" style="font-size:12px;padding:7px 16px;border-radius:var(--radius);border:none;background:var(--red);color:white;cursor:pointer;font-family:var(--font);font-weight:600">🧹 Clean up</button>
+      </div>`).join('')}
+      <button onclick="cleanupAllGhostSOs()" style="font-size:12px;padding:8px 18px;border-radius:var(--radius);border:none;background:var(--red);color:white;cursor:pointer;font-family:var(--font);font-weight:600;margin-top:4px">⚡ Clean up all ${ghosts.length}</button>
+    </div>
+  </div>`;
+}
 function renderSettings(){
   const el=document.getElementById('tab-settings');
   const types=getProductTypes();
@@ -9260,6 +9344,7 @@ function renderSettings(){
       </div>
     </div>
     ${migrationSection}
+    ${ghostSOSection()}
     <div class="section" style="max-width:700px;margin-top:16px">
       <div class="section-head"><div class="section-title">🔵 Final QC — Add to all projects</div></div>
       <div style="padding:1.5rem">
