@@ -1098,7 +1098,7 @@ function setTab(tab){
   const ni=document.getElementById('ni-'+tab);if(ni)ni.classList.add('active');
   if(ni&&document.getElementById('nav-more')?.contains(ni))openNavMore();
   document.getElementById('nav-dropdown').classList.remove('open');
-  const ALL=['glance','pipeline','overview','projpage','week','prodqueue','qaqueue','shipping','installation','procurement','vinyl','planogram','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity','uat'];
+  const ALL=['glance','pipeline','overview','projpage','week','prodqueue','qaqueue','shipping','installation','procurement','vinyl','planogram','software','briefing','checkin','log','gendocs','templates','intake','settings','insights','calendar','readiness','capacity','uat'];
   ALL.forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.style.display=t===tab?'block':'none';});
   renderTab();
 }
@@ -1328,6 +1328,23 @@ async function loadAll(){
       workType:v.work_type||'',
       name:p?.name||v.name||'',so:p?.so_number||v.so||'',client:p?.client||v.client||'',pm:p?.pm||v.pm||''};
   });
+  // Auto-surface existing "open UI" work: a project that already has a
+  // Jira/UI Task link (ui_task_url) — set at the project level or on any of
+  // its SOs — represents software work that predates this page. Give it a
+  // virtual (unsaved) row rather than requiring someone to manually re-type
+  // work that's already linked elsewhere in the app; it becomes a real row
+  // the first time anyone edits it, same as Vinyl/Planogram's auto-rows.
+  const swProjectIds=new Set(softwareItems.map(i=>i.project_id).filter(Boolean));
+  const virtualSoftwareRows=[];
+  projects.forEach(p=>{
+    if(swProjectIds.has(p.id)||p.status==='complete')return;
+    const soTags=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+    const soUiUrl=soTags.map(so=>soDetails.find(d=>d.project_id===p.id&&d.so_tag===so)?.ui_task_url).find(Boolean);
+    const uiUrl=p.ui_task_url||soUiUrl||'';
+    if(!uiUrl)return;
+    virtualSoftwareRows.push({id:null,project_id:p.id,name:p.name,so:p.so_number||'',client:p.client||'',pm:p.pm||'',softwarePoc:'',workType:'New UI',status:'Pending',targetFinish:'',jiraLinks:[uiUrl],notes:''});
+  });
+  softwareItems=softwareItems.concat(virtualSoftwareRows);
 
   // If the project page is currently open, refresh ppData before renderTab so
   // renderProjPageBody() has fresh team/links/sections without doing a second
@@ -4546,18 +4563,20 @@ function renderSoftware(){
     extraHtml
   });
   const rows=filtered.map(item=>{
+    const origIdx=softwareItems.indexOf(item);
+    const ref=item.id||origIdx;
     const jira=(item.jiraLinks||[]).filter(Boolean);
     const jiraCell=jira.length?jira.map((u,i)=>`<a href="${u}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;display:block">Ticket ${i+1} ↗</a>`).join(''):'<span style="font-size:10px;color:var(--gray-400)">—</span>';
     return`<tr>
       <td style="font-family:var(--mono);font-size:11px;color:var(--gray-500)">${item.so||'—'}</td>
       <td>${item.client||'—'}</td>
       <td style="font-size:11px;color:var(--gray-500)">${item.pm||'—'}</td>
-      <td><input class="sched-input" style="width:110px" value="${(item.softwarePoc||'').replace(/"/g,'&quot;')}" placeholder="Owner" onchange="sw('${item.id}','softwarePoc',this.value)"></td>
-      <td><select class="sched-select" onchange="sw('${item.id}','workType',this.value)">${SOFTWARE_WORK_TYPES.map(w=>`<option${w===item.workType?' selected':''}>${w}</option>`).join('')}</select></td>
-      <td><input type="date" class="sched-input" style="width:120px" value="${item.targetFinish||''}" onchange="sw('${item.id}','targetFinish',this.value)"></td>
-      <td><select class="sched-select" onchange="sw('${item.id}','status',this.value)">${SOFTWARE_STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
-      <td>${jiraCell}<button onclick="openAddJiraLink('${item.id}')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-top:2px">+ Add link</button></td>
-      <td><button onclick="removeSoftwareItem('${item.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove">✕</button></td>
+      <td><input class="sched-input" style="width:110px" value="${(item.softwarePoc||'').replace(/"/g,'&quot;')}" placeholder="Owner" onchange="sw('${ref}','softwarePoc',this.value)"></td>
+      <td><select class="sched-select" onchange="sw('${ref}','workType',this.value)">${SOFTWARE_WORK_TYPES.map(w=>`<option${w===item.workType?' selected':''}>${w}</option>`).join('')}</select></td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${item.targetFinish||''}" onchange="sw('${ref}','targetFinish',this.value)"></td>
+      <td><select class="sched-select" onchange="sw('${ref}','status',this.value)">${SOFTWARE_STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select></td>
+      <td>${jiraCell}<button onclick="openAddJiraLink('${ref}')" style="font-size:10px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-top:2px">+ Add link</button></td>
+      <td><button onclick="removeSoftwareItem('${ref}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px" title="Remove">✕</button></td>
     </tr>`;
   }).join('');
   el.innerHTML=`<div class="section">
@@ -4573,22 +4592,39 @@ function renderSoftware(){
   bindExtra('sf-worktype-software','workType');
   bindExtra('sf-poc-software','softwarePoc');
 }
-// Per-field autosave, mirroring ps2()'s pattern for Planogram.
-function sw(itemId,k,v){
-  const item=softwareItems.find(x=>x.id===itemId);
+// Per-field autosave. Mirrors vs()'s pattern for Vinyl: a virtual
+// (auto-surfaced, never-saved) row is addressed by its array index rather
+// than an id, and gets inserted into software_items on its first edit.
+function sw(ref,k,v){
+  const item=softwareItems.find(x=>x.id===ref)||softwareItems[ref];
   if(!item)return;
   item[k]=v;
   const colMap={softwarePoc:'software_poc',workType:'work_type',targetFinish:'target_finish',status:'status',notes:'notes'};
   const col=colMap[k]||k;
-  sb.from('software_items').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',itemId).then(({error})=>{if(error)console.warn('sw save error',error);else showToast('Saved ✓');});
+  if(item.id){
+    sb.from('software_items').update({[col]:v,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error)console.warn('sw save error',error);else showToast('Saved ✓');});
+  } else {
+    sb.from('software_items').insert({
+      project_id:item.project_id||null,software_poc:item.softwarePoc||'',work_type:item.workType||'',
+      status:item.status||'Pending',target_finish:item.targetFinish||null,jira_links:item.jiraLinks||[],
+      [col]:v
+    }).select().single().then(({data,error})=>{if(error){console.warn('sw insert error',error);return;}if(data)item.id=data.id;showToast('Saved ✓');});
+  }
 }
-function openAddJiraLink(itemId){
+function openAddJiraLink(ref){
   const url=prompt('Paste the Jira link:');
   if(!url)return;
-  const item=softwareItems.find(x=>x.id===itemId);
+  const item=softwareItems.find(x=>x.id===ref)||softwareItems[ref];
   if(!item)return;
   item.jiraLinks=[...(item.jiraLinks||[]),url];
-  sb.from('software_items').update({jira_links:item.jiraLinks,updated_at:new Date().toISOString()}).eq('id',itemId).then(({error})=>{if(error){console.warn('jira link save error',error);return;}renderSoftware();});
+  if(item.id){
+    sb.from('software_items').update({jira_links:item.jiraLinks,updated_at:new Date().toISOString()}).eq('id',item.id).then(({error})=>{if(error){console.warn('jira link save error',error);return;}renderSoftware();});
+  } else {
+    sb.from('software_items').insert({
+      project_id:item.project_id||null,software_poc:item.softwarePoc||'',work_type:item.workType||'',
+      status:item.status||'Pending',target_finish:item.targetFinish||null,jira_links:item.jiraLinks
+    }).select().single().then(({data,error})=>{if(error){console.warn('jira link insert error',error);return;}if(data)item.id=data.id;renderSoftware();});
+  }
 }
 function addSoftwareItemModal(preselectProjId){
   const projOpts=pickerProjectList().map(p=>`<option value="${p.id}"${p.id===preselectProjId?' selected':''}>${p.name}${p.so_number?' — '+p.so_number:''}</option>`).join('');
@@ -4617,10 +4653,16 @@ async function saveSoftwareItem(){
   if(error){alert('Error: '+error.message);return;}
   closeModal();showToast('Added and saved ✓');await loadAll();
 }
-async function removeSoftwareItem(itemId){
+async function removeSoftwareItem(ref){
+  const item=softwareItems.find(x=>x.id===ref)||softwareItems[ref];
+  if(!item)return;
   if(!confirm('Remove this software item?'))return;
-  await sb.from('software_items').delete().eq('id',itemId);
-  softwareItems=softwareItems.filter(x=>x.id!==itemId);
+  if(item.id)await sb.from('software_items').delete().eq('id',item.id);
+  // Note: removing a never-saved virtual row (auto-surfaced from an
+  // existing Jira/UI Task link) only removes it for this session — it'll
+  // reappear next load unless the underlying link is cleared, or the row
+  // is edited first (which saves it as a real row you can then delete).
+  softwareItems=softwareItems.filter(x=>x!==item);
   renderSoftware();showToast('Removed');
 }
 async function syncVinylFromProjects(){
@@ -6968,7 +7010,7 @@ function renderProjPageBody(){
                     ${singleSO?`<span style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em;border-left:3px solid var(--red);padding-left:6px;white-space:nowrap">SO: ${singleSO}</span>`:''}
                     <input value="${naming.replace(/"/g,'&quot;')}" placeholder="Naming convention..." style="font-family:var(--mono);font-size:11px;padding:3px 8px;border:1px solid var(--gray-200);border-radius:4px;flex:1;min-width:120px;box-sizing:border-box" onblur="${singleSO?`saveSODetail('${proj.id}','${singleSO}','naming_convention',this.value)`:`saveProjField('${proj.id}','naming_convention',this.value)`}" onchange="${singleSO?`saveSODetail('${proj.id}','${singleSO}','naming_convention',this.value)`:`saveProjField('${proj.id}','naming_convention',this.value)`}">
                     <input value="${address.replace(/"/g,'&quot;')}" placeholder="Installation address..." style="font-family:var(--font);font-size:11px;padding:3px 8px;border:1px solid var(--gray-200);border-radius:4px;flex:2;min-width:160px;box-sizing:border-box" onblur="${singleSO?`saveSODetail('${proj.id}','${singleSO}','address',this.value)`:`saveProjField('${proj.id}','address',this.value)`}" onchange="${singleSO?`saveSODetail('${proj.id}','${singleSO}','address',this.value)`:`saveProjField('${proj.id}','address',this.value)`}">
-                    ${singleSO?`<button onclick="openSOConfigModal('${proj.id}','${singleSO}')" style="font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font);white-space:nowrap">⚙ Config</button>`:''}
+                    ${singleSO?`<button onclick="openSOConfigModal('${proj.id}','${singleSO}')" style="font-size:10px;padding:3px 8px;border-radius:4px;border:${saved?.coi_required==='yes'?'1px solid #7c3aed':'1px solid var(--gray-200)'};background:${saved?.coi_required==='yes'?'#f5f3ff':'white'};color:${saved?.coi_required==='yes'?'#7c3aed':'var(--gray-600)'};cursor:pointer;font-family:var(--font);font-weight:${saved?.coi_required==='yes'?'700':'500'};white-space:nowrap" title="Set COI Required, form factor, and ticket URLs for this SO">⚙ Config${saved?.coi_required==='yes'?' · 📋 COI Required':''}</button>`:`<span style="font-size:10px;color:#a16207;font-weight:600;white-space:nowrap">⚠ Add an SO Number to this project to configure COI, ticket links, etc.</span>`}
                   </div>
                 </td></tr>`;
                 return headerRow+(msHtml||'<tr><td colspan="4" style="text-align:center;padding:2rem;color:var(--gray-300)">No milestones — add them in Project Overview</td></tr>');
@@ -6984,7 +7026,7 @@ function renderProjPageBody(){
                     <input value="${naming.replace(/"/g,'&quot;')}" placeholder="Naming convention..." style="font-family:var(--mono);font-size:11px;padding:3px 8px;border:1px solid var(--gray-200);border-radius:4px;flex:1;min-width:120px;box-sizing:border-box" onblur="saveSODetail('${proj.id}','${so}','naming_convention',this.value)" onchange="saveSODetail('${proj.id}','${so}','naming_convention',this.value)">
                     <input value="${address.replace(/"/g,'&quot;')}" placeholder="Installation address..." style="font-family:var(--font);font-size:11px;padding:3px 8px;border:1px solid var(--gray-200);border-radius:4px;flex:2;min-width:160px;box-sizing:border-box" onblur="saveSODetail('${proj.id}','${so}','address',this.value)" onchange="saveSODetail('${proj.id}','${so}','address',this.value)">
                     <button onclick="pushSODatesToAll('${proj.id}','${so}')" style="font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font);white-space:nowrap">📅 Push to all</button>
-                    <button onclick="openSOConfigModal('${proj.id}','${so}')" style="font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font);white-space:nowrap">⚙ Config</button>
+                    <button onclick="openSOConfigModal('${proj.id}','${so}')" style="font-size:10px;padding:3px 8px;border-radius:4px;border:${saved?.coi_required==='yes'?'1px solid #7c3aed':'1px solid var(--gray-200)'};background:${saved?.coi_required==='yes'?'#f5f3ff':'white'};color:${saved?.coi_required==='yes'?'#7c3aed':'var(--gray-600)'};cursor:pointer;font-family:var(--font);font-weight:${saved?.coi_required==='yes'?'700':'500'};white-space:nowrap" title="Set COI Required, form factor, and ticket URLs for this SO">⚙ Config${saved?.coi_required==='yes'?' · 📋 COI Required':''}</button>
                   </div>
                 </td></tr>`;
                 return soHeader+soMs.map(buildPPMsRow).join('');
