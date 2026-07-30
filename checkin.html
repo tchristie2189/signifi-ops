@@ -354,7 +354,7 @@ async function pbLoad(){
     document.getElementById('ci-content').innerHTML='<div style="padding:40px;text-align:center;color:#b91c1c">⚠️ Production board tables not found.<br>Run <b>production-board-migration.sql</b> in the Supabase SQL editor first, then refresh.</div>';
     throw new Error('migration not run');
   }
-  projects=(pr.data||[]).filter(p=>p.status!=='complete');
+  projects=(pr.data||[]).filter(p=>p.status!=='complete'&&p.status!=='software-active');
   milestones=ms.data||[];
   pbMsDone={};(md.data||[]).forEach(d=>pbMsDone[d.milestone_id]=d);
   pbBoard={};(bd.data||[]).forEach(b=>pbBoard[b.project_id]=b);
@@ -821,7 +821,7 @@ async function procLoad(){
     document.getElementById('ci-content').innerHTML='<div class="proc-card"><div class="proc-empty">⚠️ Procurement tables not found.<br>Run <b>procurement-migration.sql</b> in the Supabase SQL editor first, then refresh.</div></div>';
     throw new Error('migration not run');
   }
-  projects=(pr.data||[]).filter(p=>p.status!=='complete');
+  projects=(pr.data||[]).filter(p=>p.status!=='complete'&&p.status!=='software-active');
   const pids=new Set(projects.map(p=>p.id));
   milestones=(ms.data||[]).filter(m=>pids.has(m.project_id));
   procMsDoneMap={};(md.data||[]).forEach(d=>procMsDoneMap[d.milestone_id]=d);
@@ -1870,6 +1870,18 @@ function ciRow(id,m,dept,bucket){
   // Shipping status dropdown
   const shipStatusSel=isShipping?`<select onchange="const itm=window._ciItemMap['${id}'];if(itm)saveCheckinShipStatus(itm,this.value)" style="font-size:11px;padding:2px 8px;border:1px solid #d1d5db;border-radius:20px;font-family:var(--font);font-weight:600;cursor:pointer;background:white;color:#374151">${SHIP_STATUS_OPTS.map(o=>`<option value="${o}"${o===getCheckinShippingStatus(m)?' selected':''}>${o}</option>`).join('')}</select>`:'';
 
+  // COI controls — Shipping owns obtaining/maintaining the COI; the PM only
+  // flags whether one is required, per SO, via Ops Hub's per-SO Config
+  // modal. Resolved the same way naming/address already are: explicit
+  // so_tag on this row, or the project's single SO if it only has one.
+  const coiSoTag=proj?(m._adhoc?null:m.so_tag)||((proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean).length===1?(proj.so_number||'').trim():null):null;
+  const coiSoDetail=(proj&&coiSoTag)?(window._soDetails||[]).find(x=>x.project_id===proj.id&&x.so_tag===coiSoTag):null;
+  const coiSel=(isShipping&&coiSoDetail&&coiSoDetail.coi_required==='yes')?`
+    <select onchange="saveCheckinCOIStatus('${proj.id}','${coiSoTag}',this.value)" style="font-size:11px;padding:2px 8px;border:1px solid #d1d5db;border-radius:20px;font-family:var(--font);font-weight:600;cursor:pointer;background:white;color:#374151" title="Certificate of Insurance status — SO ${coiSoTag}">
+      ${COI_STATUS_OPTS.map(o=>`<option value="${o}"${o===(coiSoDetail.coi_status||'Not Started')?' selected':''}>📋 ${o}</option>`).join('')}
+    </select>
+    <button onclick="openCOIDetailModal('${proj.id}','${coiSoTag}')" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-family:var(--font)" title="Date submitted, notes, document link">Edit COI ✎</button>`:'';
+
   return`<div style="background:white;border:1px solid ${borderColor};border-left:4px solid ${borderColor};border-radius:var(--radius-lg);padding:12px 14px;transition:border-color 0.15s">
     <!-- Top row: project name + date badge + actions -->
     <div style="display:flex;align-items:flex-start;gap:10px">
@@ -1883,6 +1895,7 @@ function ciRow(id,m,dept,bucket){
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:${dateBg};color:${dateColor}">${dateLabel}</span>
           ${shipStatusSel}
+          ${coiSel}
           ${_ticketUrl?`<a href="${_ticketUrl}" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue);font-weight:500;text-decoration:none;white-space:nowrap">🎫 Ticket ↗</a>`:''}
         </div>
       </div>
@@ -2079,7 +2092,58 @@ async function submitExtensionRequest(){
 
 // ── SHIPPING STATUS (CHECKIN) ──────────────────────────────
 const SHIP_STATUS_OPTS=['Pending','Scheduled','Picked up','Shipped','Delivered'];
+const COI_STATUS_OPTS=['Not Started','Requested','In Progress','Submitted','Approved'];
 function shipStatusChipCls(s){return s==='Delivered'?'chip-done':s==='Shipped'?'chip-atrisk':s==='Scheduled'?'chip-active':'chip-future';}
+async function saveCheckinCOIStatus(projId,soTag,status){
+  const existing=(window._soDetails||[]).find(d=>d.project_id===projId&&d.so_tag===soTag);
+  if(!existing){showToast('⚠ No SO config found for '+soTag+' — ask the PM to set COI Required first');return;}
+  const{error}=await sb.from('so_details').update({coi_status:status,updated_at:new Date().toISOString()}).eq('id',existing.id);
+  if(error){showToast('⚠ Save failed: '+error.message);return;}
+  existing.coi_status=status;
+  render();showToast('COI status updated ✓');
+}
+// Simple dynamic modal, mirrors pbModal()'s pattern — creates its own root
+// div on first use rather than requiring new static markup in the page body.
+function coiCloseModal(){const r=document.getElementById('coi-modal-root');if(r)r.innerHTML='';}
+function coiModal(inner){
+  let r=document.getElementById('coi-modal-root');
+  if(!r){r=document.createElement('div');r.id='coi-modal-root';document.body.appendChild(r);}
+  r.innerHTML=`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)coiCloseModal()">
+    <div style="background:#fff;border-radius:12px;width:420px;max-width:95vw;overflow:hidden" onclick="event.stopPropagation()">${inner}</div></div>`;
+}
+function openCOIDetailModal(projId,soTag){
+  const p=projects.find(x=>x.id===projId);
+  const d=(window._soDetails||[]).find(x=>x.project_id===projId&&x.so_tag===soTag);
+  if(!p||!d)return;
+  coiModal(`
+    <div style="padding:16px 18px;border-bottom:1px solid #eee;font-weight:700;font-size:14px">Certificate of Insurance — ${p.name} <span style="font-family:var(--mono);font-size:11px;color:#e22f4a;font-weight:700">${soTag}</span></div>
+    <div style="padding:16px 18px;display:flex;flex-direction:column;gap:12px">
+      <div><label style="font-size:11px;font-weight:600;color:#666;display:block;margin-bottom:4px">Date submitted</label>
+        <input type="date" id="coi-m-date" value="${d.coi_date_submitted||''}" style="width:100%;font-family:var(--font);font-size:13px;padding:7px 9px;border:1px solid #d1d5db;border-radius:8px"></div>
+      <div><label style="font-size:11px;font-weight:600;color:#666;display:block;margin-bottom:4px">Document link (optional)</label>
+        <input id="coi-m-doc" value="${(d.coi_doc_url||'').replace(/"/g,'&quot;')}" placeholder="Paste a link to the COI document..." style="width:100%;font-family:var(--font);font-size:13px;padding:7px 9px;border:1px solid #d1d5db;border-radius:8px"></div>
+      <div><label style="font-size:11px;font-weight:600;color:#666;display:block;margin-bottom:4px">Notes</label>
+        <textarea id="coi-m-notes" rows="3" style="width:100%;font-family:var(--font);font-size:13px;padding:7px 9px;border:1px solid #d1d5db;border-radius:8px">${(d.coi_notes||'').replace(/</g,'&lt;')}</textarea></div>
+    </div>
+    <div style="padding:12px 18px;border-top:1px solid #eee;display:flex;justify-content:flex-end;gap:8px">
+      <button onclick="coiCloseModal()" style="font-family:var(--font);font-size:13px;font-weight:500;padding:9px 16px;border:1px solid #d4d4d4;border-radius:8px;background:#fff;cursor:pointer">Cancel</button>
+      <button onclick="saveCOIDetailModal('${projId}','${soTag}')" style="font-family:var(--font);font-size:13px;font-weight:600;padding:9px 16px;border:none;border-radius:8px;background:#111;color:#fff;cursor:pointer">Save</button>
+    </div>`);
+}
+async function saveCOIDetailModal(projId,soTag){
+  const existing=(window._soDetails||[]).find(d=>d.project_id===projId&&d.so_tag===soTag);
+  if(!existing)return;
+  const upd={
+    coi_date_submitted:document.getElementById('coi-m-date')?.value||null,
+    coi_doc_url:document.getElementById('coi-m-doc')?.value.trim()||null,
+    coi_notes:document.getElementById('coi-m-notes')?.value.trim()||'',
+    updated_at:new Date().toISOString()
+  };
+  const{error}=await sb.from('so_details').update(upd).eq('id',existing.id);
+  if(error){showToast('⚠ Save failed: '+error.message);return;}
+  Object.assign(existing,upd);
+  coiCloseModal();render();showToast('COI updated ✓');
+}
 function getCheckinShippingStatus(m){
   if(m._adhoc){
     const r=(window._adHocShipping||[]).find(x=>'adhoc-ship-'+x.id===m._id);
