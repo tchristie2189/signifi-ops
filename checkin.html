@@ -1570,6 +1570,23 @@ let milestones=[];
 let checkins={};
 let extensionRequests=[];
 let currentWeek='this';
+let ciAutoRefreshTimer=null;
+
+// Keeps the check-in list current if the tab was left open while a PM updated
+// a date elsewhere (Ops Hub) — previously this page only ever loaded data once,
+// at login, so updates made after that were invisible until a manual reload.
+// Skips the refresh if a note textarea is mid-edit so we don't blow away unsaved typing.
+function startCiAutoRefresh(){
+  if(ciAutoRefreshTimer)clearInterval(ciAutoRefreshTimer);
+  ciAutoRefreshTimer=setInterval(()=>{
+    if(document.visibilityState==='visible'&&document.activeElement?.tagName!=='TEXTAREA')loadCheckinData();
+  },60000);
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'&&currentDept&&currentDept.passcode!=='proc2026'&&currentDept.passcode!=='prod2026'&&document.activeElement?.tagName!=='TEXTAREA'){
+    loadCheckinData();
+  }
+});
 
 // ── UTILS ──────────────────────────────────────────────────
 function today(){let t=new Date();t.setHours(0,0,0,0);return t;}
@@ -1627,6 +1644,7 @@ function doCheckinLogin(){
   if(pass==='prod2026'){prodEnter();return;}  // Production gets the board — traffic-light flow removed for Production only
   showWeekTabs();
   loadCheckinData();
+  startCiAutoRefresh();
 }
 function getGreeting(){const h=new Date().getHours();return h<12?'morning':h<17?'afternoon':'evening';}
 
@@ -1730,18 +1748,26 @@ function render(){
     });
   }
 
+  // Once a shipment is marked Delivered it no longer needs daily attention —
+  // drop it off the check-in list (Shipping dept only) so the lead's list only
+  // shows what's still active. Applies to both tracked milestones and ad hoc rows.
+  const isShippingDept=dept.passcode==='ship2026';
+  const notDelivered=m=>!isShippingDept||getCheckinShippingStatus(m)!=='Delivered';
+  const deptMilestonesActive=deptMilestones.filter(notDelivered);
+  const adHocItemsActive=adHocItems.filter(notDelivered);
+
   // Deduplicate SO-split milestones smartly:
   // — Same label + same date = collapse to one row (undifferentiated SOs, no point showing 6 identical rows)
   // — Same label + different date = keep separate (each SO ships/delivers on its own day)
   const dedupedMs=[];
   const seenByProj={};
-  [...deptMilestones].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(m=>{
+  [...deptMilestonesActive].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(m=>{
     const k=m.project_id+'|'+m.label+'|'+(m.date||'');
     if(!seenByProj[k]){seenByProj[k]=true;dedupedMs.push(m);}
   });
 
   // All items for summary counts and all-clear
-  const allItems=[...dedupedMs,...adHocItems];
+  const allItems=[...dedupedMs,...adHocItemsActive];
   window._currentCheckinItems=allItems;
   let greens=0,yellows=0,reds=0;
   allItems.forEach(m=>{const id=m._id||m.id;const ci=checkins[id];if(ci?.stoplight==='green')greens++;else if(ci?.stoplight==='yellow')yellows++;else if(ci?.stoplight==='red')reds++;});
@@ -2118,6 +2144,7 @@ function signOut(){
   document.body.classList.remove('production-mode','proc-mode');
   sessionStorage.removeItem('ci_name');
   currentDept=null;currentUserName=null;
+  if(ciAutoRefreshTimer){clearInterval(ciAutoRefreshTimer);ciAutoRefreshTimer=null;}
   document.getElementById('main-wrap').style.display='none';
   document.getElementById('login-wrap').style.display='flex';
   document.getElementById('ci-pass').value='';
