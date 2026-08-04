@@ -623,8 +623,8 @@ async function fetchAllRows(table,opts={}){
   return{data:results.flatMap(r=>r.data||[]),error:null};
 }
 
-const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end','final-qc':'Final QC',uat:'UAT',installation:'Installation',uninstallation:'Uninstallation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','go-live':'Go-live','po-release':'PO Release','mo-release':'MO Release',other:'Other'};
-const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa','final-qc':'ev-fqc',uat:'ev-uat',installation:'ev-inst',uninstallation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','go-live':'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
+const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end','final-qc':'Final QC',uat:'UAT',installation:'Installation',uninstallation:'Uninstallation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','go-live':'Go-live','kickoff':'Kickoff','ui-development':'UI Development','po-release':'PO Release','mo-release':'MO Release',other:'Other'};
+const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa','final-qc':'ev-fqc',uat:'ev-uat',installation:'ev-inst',uninstallation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','go-live':'ev-other','kickoff':'ev-other','ui-development':'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
 const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date','Print Day','Vacation'];
 const SHIP_STATUS_OPTS=['Pending','Scheduled','Picked up','Shipped','Delivered'];
@@ -875,6 +875,10 @@ async function saveAdHocShippingStatus(adHocId,status){
 // ── HEALTH SCORE ───────────────────────────────────────────
 // ── HEALTH & DONE ──────────────────────────────────────────
 function isMilestoneDone(m){
+  // N/A milestones are a completed requirement, not an open one — treated as
+  // done here (the one place every other done/overdue/at-risk check reads
+  // from) so nothing downstream needs its own N/A special-case.
+  if(m.not_applicable)return true;
   // 1. Manually marked done via Mark done button — most reliable
   if(milestoneDone[m.id])return true;
   // 2. Dept check-in green + checked — secondary confirmation
@@ -3942,7 +3946,8 @@ function openAddMsForProj(projId){
     <div class="modal-body"><div class="form-grid">
       <div class="field"><label>Type</label><select id="em-type">${typeOpts}</select></div>
       <div class="field full"><label>Label</label><input id="em-label" placeholder="e.g. Installation, Delivery, Training..."></div>
-      <div class="field"><label>Date <span style="font-weight:400;font-size:10px;color:var(--gray-400)">(optional — leave blank if not yet known)</span></label><input id="em-date" type="date"></div>
+      <div class="field"><label>Date <span style="font-weight:400;font-size:10px;color:var(--gray-400)">(optional — leave blank if not yet known)</span></label><input id="em-date" type="date" onchange="document.getElementById('em-na').checked=false"></div>
+      <div class="field full"><label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400"><input type="checkbox" id="em-na" onchange="if(this.checked)document.getElementById('em-date').value=''"> Not applicable to this project</label></div>
       ${soField}
     </div></div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEvForProj('${projId}')">Add</button></div>
@@ -3950,10 +3955,11 @@ function openAddMsForProj(projId){
 }
 async function saveEvForProj(projId){
   const label=document.getElementById('em-label').value.trim();
-  const date=document.getElementById('em-date').value||null;
+  const isNA=document.getElementById('em-na')?.checked||false;
+  const date=isNA?null:(document.getElementById('em-date').value||null);
   if(!label){alert('Please fill in a label.');return;}
   const soTag=document.getElementById('em-so')?.value||null;
-  const{data,error}=await sb.from('milestones').insert({project_id:projId,key:document.getElementById('em-type').value,label,date,original_date:date,changed_by:currentUserName,so_tag:soTag||null}).select();
+  const{data,error}=await sb.from('milestones').insert({project_id:projId,key:document.getElementById('em-type').value,label,date,original_date:date,not_applicable:isNA,changed_by:currentUserName,so_tag:soTag||null}).select();
   if(error){alert('Error: '+error.message);return;}
   if(!data||!data.length){alert('The milestone was not saved — the server returned no confirmation. Please try again, and let us know if this keeps happening.');return;}
   await logActivity('added milestone',label,label,projId,null,date);
@@ -5674,7 +5680,12 @@ const PROJECT_CONFIG_OPTIONS={
   connectivity:['LAN','WiFi','LTE','N/A'],
   authentication_types:['One Time-PIN','Badge','Barcode','Free-Vend','Integration'],
   workflow_types:['Vending','Pick-up','Drop-off','Loan','Swap','E-Waste'],
-  languages:['English','French','Spanish','German','Japanese','Other']
+  languages:['English','French','Spanish','German','Japanese','Other'],
+  deployment_type:['New Install','Relocation','Refresh/Upgrade','Add-on to Existing Site','N/A'],
+  shipping_method:['LTL','FTL','Parcel','Ocean Freight','Air Freight','N/A'],
+  shipping_transport_mode:['Land','Air','Ocean','N/A'],
+  shipping_packaging:['Crate','Pallet','Box','N/A'],
+  shipping_service_level:['White-glove','Curbside','Dock Delivery','Standard','N/A'],
 };
 function epSelect(id,options,current,placeholder='Select...'){
   return`<select id="${id}" style="font-family:var(--font);font-size:12px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">${placeholder}</option>${options.map(o=>`<option value="${o.replace(/"/g,'&quot;')}"${current===o?' selected':''}>${o}</option>`).join('')}</select>`;
@@ -5762,6 +5773,14 @@ function openEditProj(id){
         <div class="field full"><label>Workflow notes</label><textarea id="ep-workflow-notes" placeholder="Workflow details, exceptions, or special handling" style="min-height:55px">${proj.workflow_notes||''}</textarea></div>
         <div class="field full"><label>Languages <span style="font-weight:400;color:var(--gray-400)">(select all that apply)</span></label>${epMulti('ep-languages',PROJECT_CONFIG_OPTIONS.languages,proj.languages)}</div>
         <div class="field full"><label>Language notes / Other language</label><textarea id="ep-language-notes" placeholder="Required when Other is selected; optional notes for standard languages" style="min-height:55px">${proj.language_notes||''}</textarea></div>
+        <div class="field full"><div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.06em;margin-top:6px;padding-top:10px;border-top:1px solid var(--gray-100)">Deployment &amp; shipping <span style="font-weight:400;color:var(--gray-400);text-transform:none;letter-spacing:0;font-size:10px">— feeds the Kickoff Deck's Scope of Work slide; select N/A where it genuinely doesn't apply rather than leaving blank</span></div></div>
+        <div class="field"><label>Deployment type</label>${epSelect('ep-deployment-type',PROJECT_CONFIG_OPTIONS.deployment_type,proj.deployment_type)}</div>
+        <div class="field"></div>
+        <div class="field full"><label>Deployment notes</label><textarea id="ep-deployment-notes" placeholder="e.g. Relocating from existing site, address TBC" style="min-height:50px">${proj.deployment_notes||''}</textarea></div>
+        <div class="field"><label>Shipping method</label>${epSelect('ep-shipping-method',PROJECT_CONFIG_OPTIONS.shipping_method,proj.shipping_method)}</div>
+        <div class="field"><label>Transport mode</label>${epSelect('ep-shipping-transport-mode',PROJECT_CONFIG_OPTIONS.shipping_transport_mode,proj.shipping_transport_mode)}</div>
+        <div class="field"><label>Packaging</label>${epSelect('ep-shipping-packaging',PROJECT_CONFIG_OPTIONS.shipping_packaging,proj.shipping_packaging)}</div>
+        <div class="field"><label>Service level</label>${epSelect('ep-shipping-service-level',PROJECT_CONFIG_OPTIONS.shipping_service_level,proj.shipping_service_level)}</div>
         <div class="field full"><label>Notes</label><textarea id="ep-notes" style="min-height:55px">${proj.notes||''}</textarea></div>
       </div>
       <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;padding-top:8px;border-top:1px solid var(--gray-100)">🔗 Links — auto-populate into Generate Docs</div>
@@ -5895,6 +5914,12 @@ async function saveEditProj(id){
     workflow_notes:document.getElementById('ep-workflow-notes')?.value.trim()||null,
     languages:epMultiValues('ep-languages'),
     language_notes:document.getElementById('ep-language-notes')?.value.trim()||null,
+    deployment_type:document.getElementById('ep-deployment-type')?.value||null,
+    deployment_notes:document.getElementById('ep-deployment-notes')?.value.trim()||null,
+    shipping_method:document.getElementById('ep-shipping-method')?.value||null,
+    shipping_transport_mode:document.getElementById('ep-shipping-transport-mode')?.value||null,
+    shipping_packaging:document.getElementById('ep-shipping-packaging')?.value||null,
+    shipping_service_level:document.getElementById('ep-shipping-service-level')?.value||null,
     kickoff_deck_url:document.getElementById('ep-kickoff-deck')?.value.trim()||null,
     install_ticket_url:document.getElementById('ep-install-ticket')?.value.trim()||null,
     vinyl_odoo_url:document.getElementById('ep-vinyl-odoo')?.value.trim()||null,
@@ -6086,6 +6111,7 @@ async function pushSODatesToAll(projId,fromSO){
 }
 function openEditMs(id,label,date,soTag,projId){
   const ms=milestones.find(m=>m.id===id);
+  const isNA=ms?.not_applicable||false;
   const history=milestoneHistory[id]||[];
   const originalDate=ms?.original_date||null;
   const hasChanged=originalDate&&date&&originalDate!==date;
@@ -6106,8 +6132,9 @@ function openEditMs(id,label,date,soTag,projId){
     '<div class="field" style="margin-bottom:10px"><label>Label</label><input value="'+label+'" id="em-lbl" style="font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">'+
     '<div class="field"><label>Original date</label><div style="font-size:12px;padding:7px 10px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius);color:var(--gray-500)">'+(originalDate?fmt(originalDate):'Not set yet')+'</div></div>'+
-    '<div class="field"><label>Date'+(hasChanged?' <span style=\'font-size:10px;color:var(--red);font-weight:400\'>('+( variance>0?'+':'')+variance+'d slippage)</span>':'')+'</label><input type="date" id="em-dt" value="'+(date||'')+'" style="font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>'+
+    '<div class="field"><label>Date'+(hasChanged?' <span style=\'font-size:10px;color:var(--red);font-weight:400\'>('+( variance>0?'+':'')+variance+'d slippage)</span>':'')+'</label><input type="date" id="em-dt" value="'+(date||'')+'"'+(isNA?' disabled':'')+' style="font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>'+
     '</div>'+
+    '<div class="field" style="margin-bottom:10px"><label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400"><input type="checkbox" id="em-na"'+(isNA?' checked':'')+' onchange="document.getElementById(\'em-dt\').disabled=this.checked;if(this.checked)document.getElementById(\'em-dt\').value=\'\'"> Not applicable to this project <span style="font-weight:400;color:var(--gray-400);font-size:10px">— counts as complete, won\'t show as overdue/missing</span></label></div>'+
     '<div class="field"><label>Reason for change <span style=\'font-weight:400;color:var(--gray-400)\'>— shown in history</span></label><input id="em-reason" placeholder="e.g. Parts delayed, client requested push..." style="font-size:12px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>'+
     historyHtml+
     '</div>'+
@@ -6115,20 +6142,21 @@ function openEditMs(id,label,date,soTag,projId){
   '</div></div>';
 }
 async function saveEditMs(id,oldLabel,oldDate){
-  const newDate=document.getElementById('em-dt').value;
+  const isNA=document.getElementById('em-na')?.checked||false;
+  const newDate=isNA?null:document.getElementById('em-dt').value;
   const newLabel=document.getElementById('em-lbl').value.trim();
   const reason=document.getElementById('em-reason')?.value.trim()||'';
   const ms=milestones.find(m=>m.id===id);
   const proj=ms?projects.find(p=>p.id===ms.project_id):null;
 
-  const update={label:newLabel,date:newDate||null,changed_by:currentUserName,changed_at:new Date().toISOString()};
+  const update={label:newLabel,date:newDate||null,not_applicable:isNA,changed_by:currentUserName,changed_at:new Date().toISOString()};
   if(!ms?.original_date&&newDate)update.original_date=newDate;
 
   const{error}=await sb.from('milestones').update(update).eq('id',id);
   if(error){alert('Error: '+error.message);return;}
 
   // Update local state
-  if(ms){ms.date=newDate;ms.label=newLabel;}
+  if(ms){ms.date=newDate;ms.label=newLabel;ms.not_applicable=isNA;}
 
   // Record history if date changed
   if(oldDate&&newDate&&oldDate!==newDate){
@@ -6783,6 +6811,7 @@ function renderProjPageBody(){
     <td><input value="${m.role||''}" placeholder="Role" oninput="ppTeamChange('${m.id}','role',this.value)"></td>
     <td><input value="${m.name||''}" placeholder="Name" oninput="ppTeamChange('${m.id}','name',this.value)"></td>
     <td><input value="${m.organization||''}" placeholder="Org" oninput="ppTeamChange('${m.id}','organization',this.value)"></td>
+    <td><select onchange="ppTeamChange('${m.id}','side',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)"><option value="">—</option><option value="Signifi"${m.side==='Signifi'?' selected':''}>Signifi</option><option value="Client"${m.side==='Client'?' selected':''}>Client</option></select></td>
     <td><input value="${m.email||''}" placeholder="Email" oninput="ppTeamChange('${m.id}','email',this.value)"></td>
     <td class="pp-actions"><button class="pp-del" onclick="ppDelTeam('${m.id}')">✕</button></td>
   </tr>`).join('');
@@ -6801,7 +6830,8 @@ function renderProjPageBody(){
     const ci=checkinStatus[m.id];
     const d=daysDiff(m.date);
     let chip,lbl;
-    if(isDone){chip='chip-done';lbl='Done ✓';}
+    if(m.not_applicable){chip='chip-done';lbl='N/A';}
+    else if(isDone){chip='chip-done';lbl='Done ✓';}
     else if(isEscalation){chip='chip-overdue';lbl='Escalation';}
     else if(isOverdue){chip='chip-overdue';lbl=Math.abs(d)+'d overdue';}
     else if(isAtRisk){chip='chip-atrisk';lbl='At risk';}
@@ -7085,7 +7115,7 @@ function renderProjPageBody(){
       <div class="pp-card-head"><span class="pp-card-title">Project team</span></div>
       <div style="overflow-x:auto">
         <table class="pp-table">
-          <thead><tr><th>Role</th><th>Name</th><th>Organization</th><th>Email</th><th style="width:28px"></th></tr></thead>
+          <thead><tr><th>Role</th><th>Name</th><th>Organization</th><th>Side</th><th>Email</th><th style="width:28px"></th></tr></thead>
           <tbody id="pp-team">${teamHtml}</tbody>
         </table>
       </div>
@@ -7563,7 +7593,7 @@ async function ppTeamChange(id,field,val){
       const{data,error}=await sb.from('project_team').insert({
         project_id:ppProjId,
         role:item.role||'',name:item.name||'',
-        organization:item.organization||'',email:item.email||'',
+        organization:item.organization||'',email:item.email||'',side:item.side||null,
         sort_order:ppData.team.indexOf(item)
       }).select().single();
       if(data){
@@ -7586,7 +7616,7 @@ async function ppTeamChange(id,field,val){
       // Existing row — update
       await sb.from('project_team').update({
         role:item.role||'',name:item.name||'',
-        organization:item.organization||'',email:item.email||''
+        organization:item.organization||'',email:item.email||'',side:item.side||null
       }).eq('id',id);
     }
     showPPSaved();
@@ -7921,13 +7951,22 @@ async function buildProjectDocPackage(projId,soTag=''){
     workflow:Array.isArray(proj.workflow_types)?proj.workflow_types.join(', '):'',workflowNotes:proj.workflow_notes||'',
     language:Array.isArray(proj.languages)?proj.languages.join(', '):'',languageNotes:proj.language_notes||'',
     namingConvention:cfg.naming_convention||'',powerRequirements:proj.power_requirements||'',
-    // Still not tracked anywhere in Ops Hub — unchanged from the prior audit.
-    peripherals:null,deploymentType:null,shippingMethod:null,shippingMode:null,shippingPackaging:null,shippingService:null,
+    deploymentType:proj.deployment_type||'',deploymentNotes:proj.deployment_notes||'',
+    shippingMethod:proj.shipping_method||'',shippingMode:proj.shipping_transport_mode||'',
+    shippingPackaging:proj.shipping_packaging||'',shippingService:proj.shipping_service_level||'',
+    // Peripherals live on hardware_line_items (per hardware model), not as a
+    // separate project-level field — would just duplicate that column.
+    // Populated below once `hardware` is computed.
+    peripherals:null,
   };
   if(!scope.formFactor)flag('Configuration / form factor','important');
-  if(scope.peripherals===null)flag('Peripheral devices (no field exists yet)','optional');
-  if(scope.deploymentType===null)flag('Deployment type (no field exists yet)','optional');
-  if(scope.shippingMethod===null)flag('Shipping method/mode/packaging/service (no fields exist yet — shipping_status tracks progress, not method)','optional');
+  // "N/A" is a real, deliberately-chosen value — !proj.deployment_type etc.
+  // is only true for genuinely unset fields, so N/A never gets flagged here.
+  if(!proj.deployment_type)flag('Deployment type','optional');
+  if(!proj.shipping_method)flag('Shipping method','optional');
+  if(!proj.shipping_transport_mode)flag('Shipping transport mode','optional');
+  if(!proj.shipping_packaging)flag('Shipping packaging','optional');
+  if(!proj.shipping_service_level)flag('Shipping service level','optional');
 
   // 3a. Hardware line items — new normalized table (hardware_line_items),
   // falling back to the single legacy quantity/product_type captured at
@@ -7943,6 +7982,8 @@ async function buildProjectDocPackage(projId,soTag=''){
       flag('Hardware detail is falling back to the single legacy quantity/product_type from intake — no model/screen size/peripherals recorded in the new hardware line items table','optional');
     }
     if(!hardware.length)flag('Hardware line items (none recorded)','important');
+    scope.peripherals=hardware[0]?.peripherals||'';
+    if(hardware.length&&!scope.peripherals)flag('Peripheral devices (add to the hardware line item)','optional');
   }
 
   // 4. Timeline — reads milestones directly via PIPELINE_STAGES key ordering.
@@ -7953,46 +7994,51 @@ async function buildProjectDocPackage(projId,soTag=''){
   // Those are marked "To Be Confirmed" rather than invented.
   const projMs=milestones.filter(m=>m.project_id===projId&&(!effectiveSO||!m.so_tag||m.so_tag===effectiveSO));
   const byKey=k=>projMs.find(m=>m.key===k);
-  const byLabel=re=>projMs.find(m=>re.test(m.label||''));
   const timeline=PIPELINE_STAGES.map(stage=>{
     const m=projMs.find(x=>x.key===stage.key);
-    return m?{label:stage.label,icon:stage.icon,date:m.date?fmtFull(m.date):'',rawDate:m.date||''}:null;
+    if(!m)return null;
+    return{label:stage.label,icon:stage.icon,date:m.not_applicable?'N/A':(m.date?fmtFull(m.date):''),rawDate:m.date||'',notApplicable:!!m.not_applicable};
   }).filter(Boolean);
   if(!timeline.length)flag('Milestones (none set for this project yet)','important');
 
-  const uiMs=byLabel(/\bui\b|user interface/i);
+  // Renders a milestone as deck-ready text: 'N/A' if explicitly marked not
+  // applicable (a completed requirement, not a gap — never flagged below),
+  // the formatted date if set, or TBC if genuinely unset.
+  const phaseText=m=>m?.not_applicable?'N/A':(m?.date?fmtFull(m.date):TBC);
+  const phaseMissing=m=>!m?.not_applicable&&!m?.date;
+
+  const kickoffMs=byKey('kickoff');
+  const uiMs=byKey('ui-development');
   const arrivalMs=byKey('arrival'),prodStart=byKey('production-start'),prodEnd=byKey('production-end');
   const poRelease=byKey('po-release'),moRelease=byKey('mo-release');
   const qStart=byKey('quality-start'),qEnd=byKey('quality-end');
   const shipMs=byKey('shipping'),delMs=byKey('delivery'),instMs=byKey('installation');
-  // UAT and Training already exist as canonical milestone keys (I'd missed
-  // this in the first audit pass — corrected here). Go-live did not exist
-  // anywhere; added as a new canonical key (TYPE_LBL/TYPE_CLS) rather than a
-  // projects-table column, so it lives in the same per-project multi-row
-  // milestone engine as everything else — no new table, no duplicate date
-  // storage, and it's immediately available to future documents the same
-  // way every other milestone is. Each of the three is read independently;
-  // Go-live is NOT backfilled from Installation.
+  // UAT, Training, Go-live, Kickoff, and UI Development are all canonical
+  // milestone keys now (TYPE_LBL/TYPE_CLS) — every field the deck needs has
+  // a permanent home in the milestone engine, not a generator-side default
+  // or fuzzy label match. Each is read independently; Go-live is never
+  // backfilled from Installation.
   const uatMs=byKey('uat'),trainingMs=byKey('training'),goLiveMs=byKey('go-live');
   const timelinePhases={
-    kickoff:fmtFull(isoD(today())), // no milestone key for this — today's date (the meeting itself) is the only defensible default
-    kickoffRaw:isoD(today()),
-    uiDev:uiMs?.date?fmtFull(uiMs.date):TBC,
+    kickoff:kickoffMs?phaseText(kickoffMs):fmtFull(isoD(today())), // falls back to today only if no kickoff milestone exists at all yet
+    kickoffRaw:kickoffMs?.date||isoD(today()),
+    uiDev:phaseText(uiMs),
     planogramBuild:(prodStart?.date||arrivalMs?.date)&&prodEnd?.date?`${fmtFull(prodStart?.date||arrivalMs.date)} – ${fmtFull(prodEnd.date)}`:TBC,
     procurement:poRelease?.date?fmtFull(poRelease.date):(moRelease?.date?fmtFull(moRelease.date):TBC),
     qaqc:qStart?.date&&qEnd?.date?`${fmtFull(qStart.date)} – ${fmtFull(qEnd.date)}`:TBC,
-    uat:uatMs?.date?fmtFull(uatMs.date):TBC,uatRaw:uatMs?.date||'',
+    uat:phaseText(uatMs),uatRaw:uatMs?.date||'',
     packShip:shipMs?.date?fmtFull(shipMs.date):TBC,
     delivery:delMs?.date?fmtFull(delMs.date):TBC,delRaw:delMs?.date||'',
     installation:instMs?.date?fmtFull(instMs.date):TBC,instRaw:instMs?.date||'',
-    training:trainingMs?.date?fmtFull(trainingMs.date):TBC,trainingRaw:trainingMs?.date||'',
-    goLive:goLiveMs?.date?fmtFull(goLiveMs.date):TBC,goLiveRaw:goLiveMs?.date||'',
+    training:phaseText(trainingMs),trainingRaw:trainingMs?.date||'',
+    goLive:phaseText(goLiveMs),goLiveRaw:goLiveMs?.date||'',
   };
-  if(timelinePhases.uiDev===TBC)flag('UI development date (no milestone labeled UI)','optional');
+  if(!kickoffMs)flag('Kickoff date (add a milestone with type "Kickoff") — defaulting to today','optional');
+  if(phaseMissing(uiMs))flag('UI development date (add a milestone with type "UI Development", or mark N/A)','optional');
   if(timelinePhases.qaqc===TBC)flag('QA/QC date range','optional');
-  if(timelinePhases.uat===TBC)flag('UAT planned date (add a milestone with type "UAT")','optional');
-  if(timelinePhases.training===TBC)flag('Training date (add a milestone with type "Training")','optional');
-  if(timelinePhases.goLive===TBC)flag('Go-live date (add a milestone with type "Go-live") — not inferred from Installation','optional');
+  if(phaseMissing(uatMs))flag('UAT planned date (add a milestone with type "UAT", or mark N/A)','optional');
+  if(phaseMissing(trainingMs))flag('Training date (add a milestone with type "Training", or mark N/A)','optional');
+  if(phaseMissing(goLiveMs))flag('Go-live date (add a milestone with type "Go-live", or mark N/A) — not inferred from Installation','optional');
 
   // 5. Shipping locations — new normalized table (shipping_locations) with
   // real contact fields, falling back to the existing per-SO address logic
@@ -8264,7 +8310,7 @@ async function generateKickoffDeckFromTemplate(projId,soTag=''){
     const hwLine1=hw.length?hw.map(h=>`${h.quantity||1} × ${h.model||TBC}`).join('; '):TBC;
     const hwLine2=hw.length?hw.map(h=>h.screenSize||TBC).join('; '):TBC;
     const hwLine3=hw.length?hw.map(h=>[pkg.scope.voltage,pkg.scope.plugType].filter(Boolean).join(', ')||TBC).join('; '):TBC;
-    const periphs=hw.length&&hw[0].peripherals?hw[0].peripherals.split(',').map(s=>s.trim()):[];
+    const periphs=pkg.scope.peripherals?pkg.scope.peripherals.split(',').map(s=>s.trim()):[];
     xml=replaceAllRuns(xml,'1 × Gen 5 High Density Locker (96 Compartments)',hwLine1);
     xml=replaceAllRuns(xml,'15” Screen',hwLine2);
     xml=replaceAllRuns(xml,'110v, PT(B)',hwLine3);
@@ -8281,8 +8327,8 @@ async function generateKickoffDeckFromTemplate(projId,soTag=''){
     xml=replaceAllRuns(xml,'White-glove ',(pkg.scope.shippingService||TBC)+' ');
     xml=replaceAllRuns(xml,'Workflows: Check-In / Check-Out ','Workflows: '+(pkg.scope.workflow||TBC));
     xml=replaceAllRuns(xml,'Authentication: Employee ID','Authentication: '+(pkg.scope.authentication||TBC));
-    xml=replaceAllRuns(xml,'Vision & UI Training',pkg.scope.deploymentType||TBC);
-    xml=replaceAllRuns(xml,'Relocation of existing unit to new location (address tbc)',pkg.scope.workflowNotes||'');
+    xml=replaceAllRuns(xml,'Vision &amp; UI Training',pkg.scope.deploymentType||TBC);
+    xml=replaceAllRuns(xml,'Relocation of existing unit to new location (address tbc)',pkg.scope.deploymentNotes||'');
     xml=replaceAllRuns(xml,'Delivery and installation of new Kiosk','');
     xml=replaceAllRuns(xml,'S#####',pkg.title.projectNumber||TBC);
     xml=replaceAllRuns(xml,'Client Name',pkg.title.client||TBC);
