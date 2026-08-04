@@ -633,6 +633,159 @@ async function fetchAllRows(table,opts={}){
 
 const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end','final-qc':'Final QC',uat:'UAT',installation:'Installation',uninstallation:'Uninstallation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','go-live':'Go-live','kickoff':'Kickoff','ui-development':'UI Development','po-release':'PO Release','mo-release':'MO Release',other:'Other'};
 const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa','final-qc':'ev-fqc',uat:'ev-uat',installation:'ev-inst',uninstallation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','go-live':'ev-other','kickoff':'ev-other','ui-development':'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
+
+// ══════════════ SHARED RESOLVERS ══════════════
+// Used by the Project Page, the Kickoff Deck, and the Weekly Status Report —
+// one implementation each, not one per consumer, so a fix here fixes every
+// document instead of needing three matching patches.
+
+// A custom ("Other"-keyed) milestone should show the label the PM actually
+// typed, never the generic type name "Other".
+function getMilestoneDisplayLabel(m){
+  if(!m)return'';
+  if(m.key==='other')return m.label||'Custom Activity';
+  return TYPE_LBL[m.key]||m.label||'Milestone';
+}
+
+// For this app: Installation IS Go-Live — there's no separate ship date for
+// "go live" beyond the unit being installed. Priority: Installation date →
+// legacy 'go-live' milestone (for older projects that have one) → N/A → not
+// scheduled. Never fabricates a date; never silently drops a legacy value.
+function resolveInstallationGoLive(projMs){
+  const inst=projMs.find(m=>m.key==='installation');
+  const legacyGoLive=projMs.find(m=>m.key==='go-live');
+  if(inst?.not_applicable||(!inst&&legacyGoLive?.not_applicable))return{date:null,label:'N/A',notApplicable:true,source:inst?'installation':'go-live'};
+  if(inst?.date)return{date:inst.date,label:fmtFull(inst.date),notApplicable:false,source:'installation',conflict:legacyGoLive?.date&&legacyGoLive.date!==inst.date?legacyGoLive.date:null};
+  if(legacyGoLive?.date)return{date:legacyGoLive.date,label:fmtFull(legacyGoLive.date),notApplicable:false,source:'go-live (legacy)',conflict:null};
+  return{date:null,label:'Not Scheduled',notApplicable:false,source:null,conflict:null};
+}
+
+// N/A milestones are a completed requirement (see isMilestoneDone), but they
+// shouldn't inflate "3 of 3 milestones" when 2 of those 3 were never
+// applicable to begin with — completion should be measured against what
+// actually applies to this project.
+function getApplicableMilestones(projMs){return projMs.filter(m=>!m.not_applicable);}
+
+// Single place that decides what text represents a date-ish value across
+// both documents. N/A and Cancelled are absolute — they win regardless of
+// whether a date happens to be set. A Done item with no date shows nothing
+// (not TBC — the work is finished, there's nothing to confirm). A pending
+// item with no date shows "Not Scheduled" only when the caller says a date
+// is actually required for that field; otherwise it shows nothing.
+function displayScheduledValue({value,notApplicable=false,status='',required=false}){
+  const s=String(status||'').toLowerCase();
+  if(notApplicable||s==='n/a')return'N/A';
+  if(s==='cancelled')return'Cancelled';
+  if(value)return value;
+  if(s==='done'||s==='complete'||s==='completed')return'';
+  return required?'Not Scheduled':'';
+}
+
+// Hardware quantity with the legacy fallback made explicit and traceable —
+// callers can tell whether they got a real line-item total or the old
+// single-number estimate, rather than silently getting 0.
+function resolveProjectHardware(proj,hardwareRows){
+  const rows=hardwareRows||[];
+  const lineQty=rows.reduce((sum,h)=>sum+Number(h.quantity||0),0);
+  if(lineQty>0)return{quantity:lineQty,source:'line-items',rows};
+  if(Number(proj.quantity||0)>0)return{quantity:Number(proj.quantity),source:'legacy',rows:[]};
+  return{quantity:0,source:'none',rows:[]};
+}
+
+// Shipping site count with the same legacy-vs-dedicated distinction.
+// Canonical Sales Order parser — replaces the 53 duplicated inline
+// split/map/filter expressions found across the file. Accepts either a
+// project object (reads .so_number) or a raw SO string directly (form
+// inputs, so_tag fallback chains, etc. all pass a bare string today).
+// De-dupes and preserves first-seen order.
+function getSOList(projectOrValue){
+  const raw=typeof projectOrValue==='string'?projectOrValue:(projectOrValue?.so_number||'');
+  return[...new Set((raw||'').split(/[\s,;]+/).map(v=>v.trim()).filter(Boolean))];
+}
+
+// Canonical per-project completion — the same computation was previously
+// duplicated with three different (and disagreeing) formulas across the
+// app (see the architectural audit). N/A milestones never count against
+// the denominator.
+// NOTE: named getMilestoneCompletionStats, not getProjectCompletion — a
+// function with that exact name already exists (line ~1580) with different
+// semantics (returns {date} only once a project is fully installed, used by
+// the Project Page's "✓ Project complete" banner). Reusing that name would
+// have silently overwritten it and broken that banner for every project.
+function getMilestoneCompletionStats(projectMilestones){
+  const applicable=getApplicableMilestones(projectMilestones||[]);
+  const completed=applicable.filter(isMilestoneDone);
+  return{
+    completed:completed.length,total:applicable.length,
+    percentage:applicable.length?Math.round((completed.length/applicable.length)*100):0,
+  };
+}
+
+function resolveProjectShippingLocations(proj,shippingRows){
+  const rows=shippingRows||[];
+  if(rows.length)return{count:rows.length,source:'dedicated',rows};
+  const soList=getSOList(proj);
+  const legacyCount=soList.length||(proj.location?1:0);
+  return{count:legacyCount,source:legacyCount?'legacy':'none',rows:[]};
+}
+
+// Sales Order column visibility for tables in generated documents. Single-SO
+// projects and per-SO reports never need the column (there's only one value,
+// repeating it on every row adds nothing but em dashes); only a combined
+// report on a genuinely multi-SO project shows it, with the full "Sales
+// Order" heading — never the unexplained abbreviation "SO".
+function shouldShowSalesOrderColumn(proj,soScope){
+  if(soScope)return false; // a per-SO report already states its scope once, not per row
+  const soList=getSOList(proj);
+  return soList.length>1;
+}
+
+// Recognizes the same underlying activity described differently across
+// milestones / pm_tasks / action_items (e.g. a milestone key's canonical
+// label vs. a PM task's free-text label for the same real-world thing).
+// Keys are lowercased before lookup.
+const ACTIVITY_NAME_EQUIVALENTS={
+  'prod start':'production start','production start':'production start',
+  'prod end':'production end','production end':'production end',
+  'qa start':'qa start','qa end':'qa end',
+  'final qc':'final quality check','final quality check':'final quality check',
+  'installation':'installation / go-live','go-live':'installation / go-live','installation / go-live':'installation / go-live',
+  'vinyl task':'vinyl','vinyl design request':'vinyl','vinyl':'vinyl','vinyl requirements':'vinyl',
+  'ui task':'ui / ux requirements','ui / ux requirements':'ui / ux requirements','ui/ ux requirements':'ui / ux requirements',
+  'product template task':'product template','product template':'product template',
+  'it survey review task':'it survey review','it survey review':'it survey review','it survey':'it survey review',
+  'facility survey review task':'facility survey review','facility survey review':'facility survey review','facility survey':'facility survey review',
+  'language translation task':'language translation','language translation':'language translation',
+  'vision user access task':'vision user access','vision user access':'vision user access',
+  'vision training task':'vision training','vision training':'vision training',
+  'badge task':'badge configuration','badge configuration':'badge configuration',
+};
+function normalizeActivityName(name){
+  const n=(name||'').toLowerCase().trim();
+  return ACTIVITY_NAME_EQUIVALENTS[n]||n;
+}
+
+// Collapses the same real-world activity appearing from more than one
+// source (a milestone AND a pm_task for the same thing on the same date,
+// for instance) down to one entry, keeping the highest-priority source's
+// version. Two activities only collapse together when their normalized
+// name, date (including both being blank), AND Sales Order all match —
+// different dates or different SOs are legitimately separate line items
+// and are both kept.
+function deduplicateReportActivities(items){
+  const priority={milestone:1,deliverable:2,action:3};
+  const groups=new Map();
+  const order=[];
+  items.forEach(item=>{
+    const norm=normalizeActivityName(item.name);
+    const key=norm+'|'+(item.date||'')+'|'+(item.soTag||'');
+    const existing=groups.get(key);
+    if(!existing){groups.set(key,item);order.push(key);}
+    else if((priority[item.source]||9)<(priority[existing.source]||9)){groups.set(key,item);}
+  });
+  return order.map(k=>groups.get(k));
+}
+
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
 const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date','Print Day','Vacation'];
 const SHIP_STATUS_OPTS=['Pending','Scheduled','Picked up','Shipped','Delivered'];
@@ -697,14 +850,14 @@ function truncateSOTitle(so){return so||'';}
 // selected SO when one is supplied.
 function getEffectiveSODetail(proj,soTag=''){
   if(!proj)return null;
-  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   const effectiveSO=soTag||(soList.length===1?soList[0]:'');
   return effectiveSO?soDetails.find(d=>d.project_id===proj.id&&d.so_tag===effectiveSO)||null:null;
 }
 function getSOConfigSummary(proj,soTag=''){
   const d=getEffectiveSODetail(proj,soTag);
   return {
-    so:soTag||((proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean).length===1?(proj.so_number||'').trim():''),
+    so:soTag||(getSOList(proj).length===1?(proj.so_number||'').trim():''),
     form_factor:d?.form_factor??proj?.form_factor??proj?.product_type??'',
     qa_task_url:d?.qa_task_url||proj?.qa_task_url||'',
     odoo_url:d?.odoo_url||proj?.odoo_url||'',
@@ -833,7 +986,7 @@ function businessDaysUntil(dateStr){
 // multi-SO project can have several locations each needing one.
 function coiRequiredUnapprovedSOs(proj){
   if(!proj)return[];
-  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   const tags=soList.length?soList:[''];
   return tags.map(so=>({so,d:getEffectiveSODetail(proj,so||undefined)})).filter(x=>x.d&&x.d.coi_required==='yes'&&x.d.coi_status!=='Approved');
 }
@@ -934,8 +1087,8 @@ function calcHealth(pid){
   const atRisk=pMs.filter(m=>isMilestoneAtRisk(m)).length;
   const escalation=pMs.filter(m=>isMilestoneEscalation(m)).length;
   const remaining=total-done;
-  // Score = done / total — simple and honest
-  const score=Math.round((done/total)*100);
+  // Score = done / applicable (N/A excluded) — standardized via getMilestoneCompletionStats
+  const score=getMilestoneCompletionStats(pMs).percentage;
   // Color based on overdue/escalation situation
   const color=escalation>0?'#C8102E':overdue>0?'#d97706':score>=80?'#1a7a4a':score>=50?'#d97706':'#6b6b6b';
   return{score,done,total,remaining,overdue,atRisk,escalation,color};
@@ -1289,7 +1442,7 @@ async function loadAll(){
   const newVinylRows=projects.filter(p=>!vinylProjectIds.has(p.id)).flatMap((p,i)=>{
     const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl');
     const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping');
-    const soList=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+    const soList=getSOList(p);
     // One row per SO if multiple, otherwise one row with full SO string
     const entries=soList.length>1?soList:[p.so_number||''];
     return entries.map((so,j)=>({id:null,project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),so,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+j+1,is_standalone:false}));
@@ -1372,7 +1525,7 @@ async function loadAll(){
   const virtualSoftwareRows=[];
   projects.forEach(p=>{
     if(swProjectIds.has(p.id)||p.status==='complete')return;
-    const soTags=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+    const soTags=getSOList(p);
     const soUiUrl=soTags.map(so=>soDetails.find(d=>d.project_id===p.id&&d.so_tag===so)?.ui_task_url).find(Boolean);
     const uiUrl=p.ui_task_url||soUiUrl||'';
     if(!uiUrl)return;
@@ -1391,7 +1544,12 @@ async function loadAll(){
   sweepCompletedKickoffs(); // once per session, non-blocking
 }
 
-// ── PIPELINE BOARD ─────────────────────────────────────────
+// ── PROJECT PIPELINE (SO milestone progression through the project
+// lifecycle: MO/PO release → parts → production → QA → shipping →
+// delivery → installation) — NOT the Production Board's physical
+// workflow state (see PB_STAGES below, a completely separate config for
+// a different concept). Verified no cross-use between the two as of the
+// architectural audit — keep it that way. ─────────────────────────────
 const PIPELINE_STAGES=[
   {id:'mo-release',  label:'MO / PO Release', color:'#6b6b6b', icon:'📋', key:'mo-release',   doneKey:null},
   {id:'parts-order', label:'Parts Ordered',    color:'#d97706', icon:'🛒', key:'po-release',   doneKey:'po-release'},
@@ -1575,7 +1733,7 @@ function renderPipeline(){
       const healthColor=health==='red'?'#ef4444':health==='amber'?'#f59e0b':'#22c55e';
       const healthBg=health==='red'?'#fef2f2':health==='amber'?'#fffbeb':'#f0fdf4';
       const borderColor=health==='red'?'#fca5a5':health==='amber'?'#fde68a':'#bbf7d0';
-      const soList=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+      const soList=getSOList(p);
       const soDisplay=soList.length>2?soList.slice(0,2).join(', ')+` +${soList.length-2}`:p.so_number||'—';
       const upcoming=pMs.filter(m=>m.date&&daysDiff(m.date)>=0).sort((a,b)=>a.date.localeCompare(b.date))[0];
       const deptCis=pMs.map(m=>checkinStatus[m.id]).filter(Boolean);
@@ -1987,7 +2145,7 @@ function renderCapacity(){
       ${flagEntries.map(e=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--gray-100)">
         <div style="min-width:0">
           <span onclick="goToProjPage('${e.proj.id}')" style="font-size:12px;font-weight:600;cursor:pointer">${e.proj.name}</span>
-          <span style="font-size:11px;color:var(--gray-500)"> · ${TYPE_LBL[e.m.key]||e.m.key} · ${fmt(e.m.date)}</span>
+          <span style="font-size:11px;color:var(--gray-500)"> · ${getMilestoneDisplayLabel(e.m)} · ${fmt(e.m.date)}</span>
           <div style="font-size:10px;color:#92400e;margin-top:1px">${e.f.reason}</div>
         </div>
         <button onclick="clearScheduleFlag('${e.msId}')" style="font-size:10px;padding:3px 10px;border-radius:10px;border:1px solid var(--gray-300);background:white;color:var(--gray-700);cursor:pointer;font-family:var(--font);flex-shrink:0">✓ Reviewed</button>
@@ -2272,7 +2430,7 @@ function queueCard(p,boardKey){
         <button onclick="event.stopPropagation();setProjectImage('${p.id}','${boardKey}')" title="Change photo" style="position:absolute;top:4px;right:4px;width:18px;height:18px;border-radius:50%;border:none;background:rgba(0,0,0,0.55);color:white;font-size:9px;cursor:pointer;line-height:1">✎</button>
       </div>`
     :`<button onclick="event.stopPropagation();setProjectImage('${p.id}','${boardKey}')" style="width:100%;font-size:9.5px;color:var(--gray-400);background:white;border:1px dashed var(--gray-200);border-radius:6px;padding:4px;margin:-1px 0 6px;cursor:pointer;font-family:var(--font)">+ Add photo</button>`;
-  const soList=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(p);
   const soDisplay=soList.length>2?soList.slice(0,2).join(', ')+` +${soList.length-2}`:(p.so_number||'—');
   const receipt=getProductionReceipts()[p.id];
   const receiptLabel=boardKey==='qa'?'Received by QA':'Received';
@@ -2374,6 +2532,10 @@ function renderQueueBoard(boardKey){
 }
 // ═══ PRODUCTION BOARD (READ-ONLY, management-facing) ═══
 // Displays the live board Production maintains in Daily Check-In. This hub
+// PRODUCTION BOARD physical workflow state (Upcoming → WIP → Issues → Ready
+// for QA/QC → Shipped) — NOT the project/SO milestone pipeline (see
+// PIPELINE_STAGES above, a completely separate config for a different
+// concept: project lifecycle progression, not shop-floor card position).
 // view READS production_board / production_stage_history — it does not move
 // cards. Production never logs in here; Check-In is their write interface.
 // STAGE LOGIC BLOCK — keep identical to the copy in signifi-ops-checkin.html.
@@ -2427,7 +2589,7 @@ function isMilestoneKeyAllDone(pid,key){
   return ms.length>0&&ms.every(m=>milestoneDone[m.id]);
 }
 function pbHubSo(soRaw){
-  const sos=(soRaw||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const sos=getSOList(soRaw);
   if(sos.length<=3)return{text:sos.join(', ')||'—',title:''};
   return{text:sos.slice(0,3).join(', ')+' +'+(sos.length-3)+' more',title:sos.join(', ')};
 }
@@ -2515,7 +2677,7 @@ async function pbHubSavePhoto(pid,url){
 let pbHubShippedLimit=20;
 const pbHubSoExpanded=new Set();
 function pbHubSoHtml(soRaw,pid){
-  const sos=(soRaw||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const sos=getSOList(soRaw);
   if(sos.length<=3)return sos.join(', ')||'—';
   if(pbHubSoExpanded.has(pid))return sos.join(', ')+` <span class="pb-so-more" onclick="event.stopPropagation();pbHubSoExpanded.delete('${pid}');renderProductionQueue()">collapse</span>`;
   return sos.slice(0,3).join(', ')+` <span class="pb-so-more" onclick="event.stopPropagation();pbHubSoExpanded.add('${pid}');renderProductionQueue()">+${sos.length-3} more</span>`;
@@ -2702,7 +2864,7 @@ function renderProductionReports(){
     const icon={forward:'→',backward:'↩',waiting:'⏸',resumed:'▶'}[h.move_type]||'·';
     const rl=(pbHub.reasons.find(r=>r.code===h.reason_code)||{}).label||h.reason_code||'';
     return`<tr><td style="padding:3px 10px 3px 0;white-space:nowrap;color:var(--gray-400)">${new Date(h.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})} ${new Date(h.created_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</td>
-      <td style="padding:3px 10px 3px 0"><span style="font-family:var(--mono);font-size:10px;color:var(--red)">${((h.so_number||'').split(/[\s,;]+/)[0]||'')}</span> ${h.kiosk_name||''}</td>
+      <td style="padding:3px 10px 3px 0"><span style="font-family:var(--mono);font-size:10px;color:var(--red)">${(getSOList(h.so_number)[0]||'')}</span> ${h.kiosk_name||''}</td>
       <td style="padding:3px 10px 3px 0;white-space:nowrap">${icon} ${h.move_type==='waiting'?'Paused':h.move_type==='resumed'?'Resumed':f+' → '+t}</td>
       <td style="padding:3px 10px 3px 0;color:var(--gray-500)">${rl}${h.notes?' — '+h.notes:''}</td>
       <td style="padding:3px 0;color:var(--gray-400);white-space:nowrap">${h.seconds_in_prev_stage!=null?pbHubDur(Number(h.seconds_in_prev_stage)):''}</td>
@@ -3405,7 +3567,7 @@ function renderGlance(){
             ${isSoftwareActive?'<span style="font-size:10px;padding:1px 7px;border-radius:10px;background:#ede9fe;color:#7c3aed;font-weight:600">💻 Software Active</span>':''}
             ${(()=>{
               const kids=getChildren(p.id);
-              const soCount=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean).length;
+              const soCount=getSOList(p).length;
               const hasSoSplit=milestones.some(m=>m.project_id===p.id&&m.so_tag);
               if(kids.length>0)return`<span style="font-size:9px;padding:1px 7px;border-radius:10px;background:#fce7f3;color:#be185d;font-weight:700">🏛 ${kids.length} children — migrate in Settings</span>`;
               if(hasSoSplit&&soCount>1)return`<span style="font-size:9px;padding:1px 7px;border-radius:10px;background:#fff0f0;color:#e22f4a;font-weight:700">📋 ${soCount} SOs</span>`;
@@ -3487,7 +3649,7 @@ function getReadinessData(){
 
   const missingNaming=[];
   active.forEach(p=>{
-    const sos=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+    const sos=getSOList(p);
     if(!sos.length)return;
     if(sos.length===1){
       const d=soDetails.find(x=>x.project_id===p.id&&x.so_tag===sos[0]);
@@ -3500,7 +3662,7 @@ function getReadinessData(){
     'Naming is checked per Sales Order. Multi-SO projects require naming for each SO.');
 
   const duplicateMap={};
-  active.forEach(p=>(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean).forEach(so=>{(duplicateMap[so]??=[]).push(p);}));
+  active.forEach(p=>getSOList(p).forEach(so=>{(duplicateMap[so]??=[]).push(p);}));
   const duplicates=[];
   Object.entries(duplicateMap).filter(([,ps])=>ps.length>1).forEach(([so,ps])=>ps.forEach(p=>duplicates.push(projectItem(p,so))));
   add('duplicate-so','Duplicate Sales Orders','critical','sales',duplicates,
@@ -3549,7 +3711,7 @@ function getReadinessData(){
     const p=projects.find(x=>x.id===f.project_id);
     if(!m||!p)return;
     const daysFlagged=f.flagged_at?Math.floor((Date.now()-new Date(f.flagged_at).getTime())/86400000):0;
-    const item=projectItem(p,`${TYPE_LBL[m.key]||m.key} · ${fmt(m.date)} · flagged ${daysFlagged}d ago`);
+    const item=projectItem(p,`${getMilestoneDisplayLabel(m)} · ${fmt(m.date)} · flagged ${daysFlagged}d ago`);
     (daysFlagged>=7?staleFlags:freshFlags).push(item);
   });
   add('stale-schedule-flags','Unreviewed schedule change (7+ days)','critical','operations',staleFlags,'Production moved on the Capacity board over a week ago and this downstream date still hasn\'t been checked.');
@@ -3667,7 +3829,7 @@ async function rqaSetSO(pid,val){
 
 // ── SHARED PROJECT / SO CONFIG SYNC ─────────────────────────
 const SHARED_CONFIG_FIELDS=['address','naming_convention','form_factor','qa_task_url','odoo_url','install_ticket_url','ui_task_url'];
-function projectSOList(proj){return (proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);}
+function projectSOList(proj){return getSOList(proj);}
 function singleProjectSO(proj){const list=projectSOList(proj);return list.length===1?list[0]:'';}
 function effectiveProjectConfig(proj){
   const so=singleProjectSO(proj);
@@ -3716,7 +3878,7 @@ function renderOverview(){
   const overviewNamingSafe=overviewNaming.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
   // Check if milestones are already split by SO
-  const soList=(proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   const hasSoTags=isProjectFullySplit(projMs);
   const canSplit=soList.length>1&&!hasSoTags;
 
@@ -3737,7 +3899,7 @@ function renderOverview(){
     const slippageTag=hist.length&&origDate?`<span style="font-size:9px;padding:1px 5px;border-radius:8px;background:${variance>0?'var(--red-light)':'var(--success-bg)'};color:${variance>0?'var(--red)':'var(--success)'};font-weight:600;margin-left:4px" title="${hist.length} change${hist.length>1?'s':''} · Original: ${fmt(origDate)}">${variance>0?'+'+variance+'d':variance===0?'on track':variance+'d'}</span>`:'';
     return`<div class="ms-item ${st.cls}" style="${isDone?'opacity:0.75':''}">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:4px">
-        <div class="ms-type">${TYPE_LBL[m.key]||m.key}</div>
+        <div class="ms-type">${getMilestoneDisplayLabel(m)}</div>
         <button onclick="toggleMilestoneDone('${m.id}','${m.project_id}',event)" style="background:${isManualDone?'var(--success)':'transparent'};border:1px solid ${isManualDone?'var(--success)':'var(--gray-300)'};border-radius:10px;padding:1px 7px;font-size:10px;cursor:pointer;color:${isManualDone?'white':'var(--gray-500)'};font-family:var(--font);flex-shrink:0">${isManualDone?'✓ Done':'Mark done'}</button>
       </div>
       <div class="ms-label" onclick="openEditMs('${m.id}','${escJsAttr(m.label)}','${m.date||''}','${m.so_tag||''}','${m.project_id||''}')" style="cursor:pointer">${esc(m.label)}${slDot}${slippageTag}${flagBadge}</div>
@@ -3942,7 +4104,7 @@ function openAddMsForProj(projId){
   // land somewhere the project page / overview grid doesn't expect and
   // effectively vanish from view.
   const hasSoTags=projMs.length>0&&projMs.every(m=>m.so_tag);
-  const soList=(proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   // For SO-split projects show a dropdown so the milestone lands in the right group
   const soField=hasSoTags&&soList.length>1
     ?`<div class="field"><label>SO</label><select id="em-so">${soList.map(so=>`<option value="${so}">${so}</option>`).join('')}</select></div>`
@@ -4032,7 +4194,7 @@ function renderWeek(){
         const namingLine=namingConv?`<div style="font-family:var(--mono);font-size:9px;color:var(--gray-500);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${namingConv.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}">${namingConv}</div>`:'';
         const pmName=e._adhoc?(e._raw?.pm||''):(e._pm||'');
         const pmLine=pmName?`<div style="font-size:9px;color:var(--gray-500);margin-top:1px;opacity:0.9">PM: ${pmName}</div>`:'';
-        return`<div class="ev ${isDone?'ev-done':TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${esc(e.label)}</div><div class="ev-proj">${projLink}${e._adhoc?' 📦':''}</div>${soLine}${namingLine}${pmLine}${statusSel}</div>`;
+        return`<div class="ev ${isDone?'ev-done':TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':getMilestoneDisplayLabel(e)}</div><div class="ev-name">${esc(e.label)}</div><div class="ev-proj">${projLink}${e._adhoc?' 📦':''}</div>${soLine}${namingLine}${pmLine}${statusSel}</div>`;
       }).join(''):'<div class="empty-day">—</div>'}</div></div>`;
   }).join('');
   el.innerHTML=`
@@ -4241,7 +4403,7 @@ function renderDeptView(dept){
   };
 
   const projRows=filteredProjects.flatMap(p=>{
-    const soList=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+    const soList=getSOList(p);
     const pMs=milestones.filter(m=>m.project_id===p.id);
     const hasSoTags=isProjectFullySplit(pMs);
     // If single SO or no SO tags — one row as normal
@@ -4712,7 +4874,7 @@ async function syncVinylFromProjects(){
     const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'&&m.date&&m.date>=today_str);
     const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping');
     if(!vm)continue;
-    const soList=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+    const soList=getSOList(p);
     const entries=soList.length>1?soList:[p.so_number||''];
     for(const so of entries){
       // Only check project-linked rows (never standalone/ad hoc)
@@ -5112,7 +5274,7 @@ function renderCheckinOverview(){
         // Falls back to compact list only if there's no so_tag (pre-split projects)
         const soTag=m._adhoc?(m._raw?.so||''):m.so_tag||'';
         const rawSO=soTag||(proj?proj.so_number:'');
-        const soList=rawSO.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+        const soList=getSOList(rawSO);
         const compactSO=soTag?soTag:(soList.length>2?soList.slice(0,2).join(', ')+' <span style="color:var(--gray-400)">+'+(soList.length-2)+'</span>':rawSO);
         const soHtml=rawSO?'<span style="font-family:var(--mono);font-size:10px;color:var(--red)">'+compactSO+'</span>':'';
 
@@ -5179,7 +5341,7 @@ function renderCheckinOverview(){
       const ageMins=ci.stoplight_at?Math.round((Date.now()-new Date(ci.stoplight_at).getTime())/60000):0;
       const ageStr=ageMins<60?ageMins+'m':ageMins<1440?Math.round(ageMins/60)+'h':Math.round(ageMins/1440)+'d';
       const rawSO=proj?.so_number||'';
-      const soList=rawSO.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+      const soList=getSOList(rawSO);
       const compactSO=soList.length>2?soList.slice(0,2).join(', ')+'…':rawSO;
       return'<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:8px 0;border-top:1px solid #7f1d1d;font-size:12px;color:#fecaca">'+
         '<div><strong>'+(proj?proj.name:m.label)+'</strong>'+(compactSO?' <span style="font-family:var(--mono);font-size:10px;opacity:0.7">'+compactSO+'</span>':'')+' — '+m.label+
@@ -5367,7 +5529,7 @@ function renderBriefing(){
     return{...p,currentStage:currentStage?currentStage.label:'—',nextMs,health:h};
   });
   const DAY=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const msRow=m=>`<tr style="border-bottom:1px solid var(--gray-50)${m._adhoc?';background:var(--blue-bg)':''}"><td style="padding:6px 12px;font-weight:500;white-space:nowrap;font-size:12px">${DAY[new Date(m.date+'T00:00:00').getDay()]} ${fmt(m.date)}</td><td style="padding:6px 12px;font-size:12px">${m.projectName}${m._adhoc?' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 4px;border-radius:6px">Ad hoc</span>':''}</td><td style="padding:6px 12px;font-family:var(--mono);font-size:10px;color:var(--gray-500)">${m.so||''}</td><td style="padding:6px 12px;font-size:12px">${esc(m.label)}</td><td style="padding:6px 12px;font-size:10px;color:var(--gray-500)">${m._adhoc?'Ad hoc':TYPE_LBL[m.key]||m.key}</td></tr>`;
+  const msRow=m=>`<tr style="border-bottom:1px solid var(--gray-50)${m._adhoc?';background:var(--blue-bg)':''}"><td style="padding:6px 12px;font-weight:500;white-space:nowrap;font-size:12px">${DAY[new Date(m.date+'T00:00:00').getDay()]} ${fmt(m.date)}</td><td style="padding:6px 12px;font-size:12px">${m.projectName}${m._adhoc?' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 4px;border-radius:6px">Ad hoc</span>':''}</td><td style="padding:6px 12px;font-family:var(--mono);font-size:10px;color:var(--gray-500)">${m.so||''}</td><td style="padding:6px 12px;font-size:12px">${esc(m.label)}</td><td style="padding:6px 12px;font-size:10px;color:var(--gray-500)">${m._adhoc?'Ad hoc':getMilestoneDisplayLabel(m)}</td></tr>`;
   const thS='font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:7px 12px;text-align:left;border-bottom:1px solid var(--gray-100);background:var(--gray-50)';
   el.innerHTML=`<div>
     <div style="background:var(--black);color:white;padding:18px 24px;border-radius:var(--radius-lg);margin-bottom:14px;display:flex;align-items:center;justify-content:space-between" class="briefing-header">
@@ -5618,7 +5780,7 @@ async function saveIntake(){
     .map(f=>({project_id:proj.id,key:f.key,label:f.label,date:document.getElementById(f.id)?.value||null,changed_by:currentUserName}));
 
   // Auto-split milestones by SO if multiple SOs entered
-  const soList=so.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(so);
 
   // The database creates starter PO / MO / Parts milestones when a project is inserted.
   // Remove those trigger-created rows before saving the complete intake timeline;
@@ -5689,11 +5851,11 @@ const PROJECT_CONFIG_OPTIONS={
   authentication_types:['One Time-PIN','Badge','Barcode','Free-Vend','Integration'],
   workflow_types:['Vending','Pick-up','Drop-off','Loan','Swap','E-Waste'],
   languages:['English','French','Spanish','German','Japanese','Other'],
-  deployment_type:['New Install','Relocation','Refresh/Upgrade','Add-on to Existing Site','N/A'],
-  shipping_method:['LTL','FTL','Parcel','Ocean Freight','Air Freight','N/A'],
-  shipping_transport_mode:['Land','Air','Ocean','N/A'],
-  shipping_packaging:['Crate','Pallet','Box','N/A'],
-  shipping_service_level:['White-glove','Curbside','Dock Delivery','Standard','N/A'],
+  deployment_type:['New Installation','Replacement','Relocation','Expansion','Upgrade / Retrofit','Removal','Remote Configuration','N/A','Other'],
+  shipping_method:['Signifi Arranged','Client Arranged','Courier','Dedicated Carrier','Freight Forwarder','Customer Pickup','Internal Transfer','N/A','Other'],
+  shipping_transport_mode:['Ground','Air','Ocean','Local Delivery','Customer Pickup','N/A','Other'],
+  shipping_packaging:['Pallet','Crate','Boxed','Blanket Wrap','Loose / Hand-Carried','N/A','Other'],
+  shipping_service_level:['Standard','Expedited','White Glove','Inside Delivery','Liftgate','Appointment Delivery','N/A','Other'],
 };
 function epSelect(id,options,current,placeholder='Select...'){
   return`<select id="${id}" style="font-family:var(--font);font-size:12px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">${placeholder}</option>${options.map(o=>`<option value="${o.replace(/"/g,'&quot;')}"${current===o?' selected':''}>${o}</option>`).join('')}</select>`;
@@ -5714,7 +5876,7 @@ function openEditProj(id){
   const overviewConfig=effectiveProjectConfig(proj);
   const projMs=milestones.filter(m=>m.project_id===id);
   const hasSoTags=isProjectFullySplit(projMs);
-  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   let msRows='';
   if(hasSoTags&&soList.length>1){
     // Group milestones under SO headers so they're not one giant repeated flat list
@@ -5965,7 +6127,7 @@ async function saveEditProj(id){
   // AUTO-ADD MILESTONES FOR NEWLY ADDED SOs
   // If this project is already SO-split and the SO field gained new SOs, clone milestones for them
   const newSoNumber=document.getElementById('ep-so').value.trim();
-  const newSoList=newSoNumber.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const newSoList=getSOList(newSoNumber);
   const projMsForSoCheck=milestones.filter(m=>m.project_id===id);
   const existingTags=[...new Set(projMsForSoCheck.filter(m=>m.so_tag).map(m=>m.so_tag))];
   // Guard: only treat this project as "fully SO-split" if EVERY milestone is tagged.
@@ -6072,7 +6234,7 @@ async function saveEditProj(id){
 async function splitMilestonesBySO(projId){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
-  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   if(soList.length<2){showToast('Project needs multiple SOs to split');return;}
   if(!confirm('Split milestones into '+soList.length+' groups ('+soList.join(', ')+')? This will create a copy of all milestones for each SO.'))return;
   const existingMs=milestones.filter(m=>m.project_id===projId);
@@ -6094,7 +6256,7 @@ async function splitMilestonesBySO(projId){
 async function pushSODatesToAll(projId,fromSO){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
-  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   const otherSOs=soList.filter(s=>s!==fromSO);
   if(!otherSOs.length)return;
   if(!confirm('Push all dates from SO '+fromSO+' to '+otherSOs.join(', ')+'?\n\nThis overwrites their dates.'))return;
@@ -6212,7 +6374,7 @@ async function saveEditMs(id,oldLabel,oldDate){
 
   // If this milestone has a so_tag and date changed, offer to push to all SOs
   if(ms?.so_tag&&newDate&&oldDate!==newDate&&proj){
-    const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+    const soList=getSOList(proj);
     const otherSOs=soList.filter(s=>s!==ms.so_tag);
     if(otherSOs.length){
       closeModal();
@@ -6275,7 +6437,7 @@ async function applyCascadeShift(){
 async function pushSODateToOthers(projId,fromSO,msKey,newDate,msLabel){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
-  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   const otherSOs=soList.filter(s=>s!==fromSO);
   let updated=0;
   for(const so of otherSOs){
@@ -6363,7 +6525,7 @@ function exportToExcel(){
   exportProjects.forEach(p=>{
     const pMs=milestones.filter(m=>m.project_id===p.id&&(!hideMs||!isMilestoneEffectivelyDone(m)));
     if(!pMs.length){r1.push([p.name,p.so_number,p.client,p.product_type,p.status,'','','','','']);}
-    else{pMs.forEach((m,i)=>r1.push([i===0?p.name:'',i===0?p.so_number:'',i===0?p.client:'',i===0?p.product_type:'',i===0?p.status:'',m.label,TYPE_LBL[m.key]||m.key,m.date,m.date?daysDiff(m.date):'',m.changed_by||'']));}
+    else{pMs.forEach((m,i)=>r1.push([i===0?p.name:'',i===0?p.so_number:'',i===0?p.client:'',i===0?p.product_type:'',i===0?p.status:'',m.label,getMilestoneDisplayLabel(m),m.date,m.date?daysDiff(m.date):'',m.changed_by||'']));}
   });
   const ws1=XLSX.utils.aoa_to_sheet(r1);ws1['!cols']=[{wch:28},{wch:14},{wch:18},{wch:18},{wch:10},{wch:26},{wch:16},{wch:12},{wch:14},{wch:18}];XLSX.utils.book_append_sheet(wb,ws1,'Projects & Milestones');
   // Sheet 2: Vinyl Schedule — respect vinyl filters
@@ -6426,12 +6588,12 @@ function exportToExcel(){
 
 // ── PROJECT PAGE ───────────────────────────────────────────
 let ppProjId=null;
-let ppData={team:[],actions:[],risks:[],decisions:[],sections:{},links:[],pmtasks:[]};
+let ppData={team:[],actions:[],risks:[],decisions:[],sections:{},links:[],pmtasks:[],hardware:[],shipping:[]};
 let ppSaveTimer=null;
 
 async function loadProjPage(pid){
   ppProjId=pid;
-  const[team,actions,risks,decisions,sections,links,pmt]=await Promise.all([
+  const[team,actions,risks,decisions,sections,links,pmt,hardware,shipping]=await Promise.all([
     sb.from('project_team').select('*').eq('project_id',pid).order('sort_order'),
     sb.from('action_items').select('*').eq('project_id',pid).order('created_at'),
     sb.from('risks').select('*').eq('project_id',pid).order('created_at'),
@@ -6439,7 +6601,10 @@ async function loadProjPage(pid){
     sb.from('project_sections').select('*').eq('project_id',pid),
     sb.from('project_links').select('*').eq('project_id',pid).order('sort_order'),
     sb.from('pm_tasks').select('*').eq('project_id',pid).order('sort_order'),
+    sb.from('hardware_line_items').select('*').eq('project_id',pid).order('sort_order'),
+    sb.from('shipping_locations').select('*').eq('project_id',pid).order('delivery_sequence'),
   ]);
+  [team,actions,risks,decisions,sections,links,pmt,hardware,shipping].forEach(r=>{if(r.error)console.warn('loadProjPage query error',r.error);});
   ppData={
     team:team.data||[],
     actions:actions.data||[],
@@ -6448,6 +6613,8 @@ async function loadProjPage(pid){
     sections:Object.fromEntries((sections.data||[]).map(s=>[s.section_key,s])),
     links:links.data||[],
     pmtasks:pmt.data||[],
+    hardware:hardware.data||[],
+    shipping:shipping.data||[],
   };
 }
 
@@ -6519,7 +6686,7 @@ function toggleAllSOView(){
   if(window._allSOSourceProjId!==ppProjId){window._allSOSourceOverride=null;window._allSOSourceProjId=ppProjId;}
 
   // Support both SO-split (so_tag on milestones) and campaign children (separate projects per SO)
-  const soListFromField=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soListFromField=getSOList(proj);
   const children=getChildren(ppProjId); // campaign children
 
   // Determine mode: so_tag split or campaign children
@@ -6625,7 +6792,7 @@ function toggleAllSOView(){
 async function pushMsKeyToAllSOs(key,date,projId,label){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
-  const soListFromField=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soListFromField=getSOList(proj);
   const tagsPresent=[...new Set(milestones.filter(m=>m.project_id===projId&&m.so_tag).map(m=>m.so_tag))];
   const soList=[...new Set([...soListFromField,...tagsPresent])];
   const children=getChildren(projId);
@@ -6657,7 +6824,7 @@ async function pushMsKeyToAllSOs(key,date,projId,label){
 
 async function pushAllMilestoneKeysToAllSOs(projId,explicitSourceSO){
   const proj=projects.find(p=>p.id===projId);
-  const soListFromField=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soListFromField=getSOList(proj);
   const tagsPresent=[...new Set(milestones.filter(m=>m.project_id===projId&&m.so_tag).map(m=>m.so_tag))];
   const soList=[...new Set([...soListFromField,...tagsPresent])];
   const firstSO=explicitSourceSO||soList.find(so=>milestones.some(m=>m.project_id===projId&&m.so_tag===so))||soList[0];
@@ -6680,7 +6847,7 @@ async function pushAllMilestoneKeysToAllSOs(projId,explicitSourceSO){
 async function addMissingSOMilestones(projId,missingSOsStr){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
-  const missingSOs=missingSOsStr.split(/[\s,;]+/).filter(Boolean);
+  const missingSOs=getSOList(missingSOsStr);
   if(!missingSOs.length)return;
   // Use the SO with the most complete milestone set as the template
   const allTags=[...new Set(milestones.filter(m=>m.project_id===projId&&m.so_tag).map(m=>m.so_tag))];
@@ -6705,7 +6872,7 @@ async function addMissingSOMilestones(projId,missingSOsStr){
 function switchProjPageBySO(so){
   // For SO-split projects: scroll to that SO's group in the milestone tracker
   // Only navigate away if it's a campaign child project with its own page
-  const child=projects.find(p=>p.id!==ppProjId&&p.parent_project_id===ppProjId&&p.so_number&&p.so_number.split(/[\s,;]+/).map(s=>s.trim()).includes(so));
+  const child=projects.find(p=>p.id!==ppProjId&&p.parent_project_id===ppProjId&&p.so_number&&getSOList(p).includes(so));
   if(child){switchProjPage(child.id);return;}
   // Same project — find the SO header span in the milestone table and scroll to it
   const spans=[...document.querySelectorAll('span')];
@@ -6767,7 +6934,36 @@ function renderProjPageBody(){
   const goLive=pMs.find(m=>m.key==='installation')?.date||'';
   const phase=getSection('phase')||'Execution';
 
-  // Quick links — merge saved project_links table + project record fields (source of truth)
+  // Key Project Dates — plain labels over the canonical milestone engine.
+  // The PM edits "Kickoff" / "UI Development" / etc directly; under the hood
+  // this creates or updates the matching milestone by key. No one needs to
+  // know what a milestone key is to use this.
+  const KEY_DATES=[
+    {key:'kickoff',label:'Kickoff'},
+    {key:'ui-development',label:'UI Development'},
+    {key:'production-start',label:'Production Start'},
+    {key:'production-end',label:'Production End'},
+    {key:'quality-start',label:'QA Start'},
+    {key:'quality-end',label:'QA End'},
+    {key:'shipping',label:'Shipping'},
+    {key:'installation',label:'Installation / Go-Live'},
+    {key:'training',label:'Training'},
+    {key:'uat',label:'UAT'},
+  ];
+  const keyDatesHtml=KEY_DATES.map(kd=>{
+    const m=pMs.find(x=>x.key===kd.key);
+    const isNA=m?.not_applicable||false;
+    const statusTxt=isNA?'N/A':(m?.date?(isMilestoneDone(m)?'Done':(isMilestoneOverdue(m)?'Overdue':'Scheduled')):'Not Scheduled');
+    const statusColor=isNA?'var(--gray-400)':statusTxt==='Done'?'#16a34a':statusTxt==='Overdue'?'var(--red)':statusTxt==='Scheduled'?'#d97706':'var(--gray-400)';
+    return`<tr data-key="${kd.key}">
+      <td style="font-weight:500">${esc(kd.label)}${kd.key==='installation'?' <span style="font-size:9px;color:var(--gray-400);font-weight:400">(same date used as Go-Live)</span>':''}</td>
+      <td><input type="date" class="kd-date" value="${m?.date||''}"${isNA?' disabled':''} onchange="const tr=this.closest('tr');ppKeyDateChange(tr.dataset.key,tr.querySelector('.kd-label').dataset.label,this.value,tr.querySelector('.kd-na').checked)"></td>
+      <td style="text-align:center" class="kd-label" data-label="${esc(kd.label)}"><input type="checkbox" class="kd-na"${isNA?' checked':''} onchange="const tr=this.closest('tr');const d=tr.querySelector('.kd-date');d.disabled=this.checked;if(this.checked)d.value='';ppKeyDateChange(tr.dataset.key,tr.querySelector('.kd-label').dataset.label,d.value,this.checked)"></td>
+      <td style="font-size:11px;color:${statusColor};font-weight:600">${statusTxt}</td>
+    </tr>`;
+  }).join('');
+
+
   const LINK_CATS=[
     {cat:'Meetings',items:[{label:'Kickoff deck',key:'kickoff_deck'},{label:'Kickoff recording',key:'kickoff_rec'},{label:'Meeting minutes',key:'meeting_min'}]},
     {cat:'Project Documents',items:[{label:'Statement of Work',key:'sow'},{label:'Installation Ticket',key:'install_ticket'},{label:'Vision Training',key:'vision_training'}]},
@@ -6819,15 +7015,42 @@ function renderProjPageBody(){
     <td><input value="${m.role||''}" placeholder="Role" oninput="ppTeamChange('${m.id}','role',this.value)"></td>
     <td><input value="${m.name||''}" placeholder="Name" oninput="ppTeamChange('${m.id}','name',this.value)"></td>
     <td><input value="${m.organization||''}" placeholder="Org" oninput="ppTeamChange('${m.id}','organization',this.value)"></td>
-    <td><select onchange="ppTeamChange('${m.id}','side',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)"><option value="">—</option><option value="Signifi"${m.side==='Signifi'?' selected':''}>Signifi</option><option value="Client"${m.side==='Client'?' selected':''}>Client</option></select></td>
+    <td><select onchange="ppTeamChange('${m.id}','side',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid ${m.name&&!m.side?'var(--red)':'var(--gray-300)'};border-radius:var(--radius);background:var(--white)"><option value=""${!m.side?' selected':''}>${m.name?'⚠ Unclassified':'—'}</option><option value="Signifi"${m.side==='Signifi'?' selected':''}>Signifi</option><option value="Client"${m.side==='Client'?' selected':''}>Client</option></select></td>
     <td><input value="${m.email||''}" placeholder="Email" oninput="ppTeamChange('${m.id}','email',this.value)"></td>
     <td class="pp-actions"><button class="pp-del" onclick="ppDelTeam('${m.id}')">✕</button></td>
+  </tr>`).join('');
+
+  // Hardware line items
+  const hwSoOpts=getSOList(ppProj?.so_number||projects.find(p=>p.id===ppProjId)?.so_number||'');
+  const hwLegacyBanner=(!ppData.hardware.length&&projects.find(p=>p.id===ppProjId)?.quantity)?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;font-size:12px;color:#92600a">This project is currently using the legacy hardware quantity (${projects.find(p=>p.id===ppProjId)?.quantity}). Convert it into an editable hardware line to add model, screen size, and peripherals.<br><button onclick="ppConvertLegacyHardware()" style="margin-top:6px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid #d97706;background:white;color:#92600a;cursor:pointer">Create Hardware Line from Existing Project Data</button></div>`:'';
+  const hardwareHtml=ppData.hardware.map(h=>`<tr data-id="${h.id}">
+    ${hwSoOpts.length>1?`<td><select onchange="ppHardwareChange('${h.id}','so_tag',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value=""${!h.so_tag?' selected':''}>All SOs</option>${hwSoOpts.map(so=>`<option value="${so}"${h.so_tag===so?' selected':''}>${so}</option>`).join('')}</select></td>`:''}
+    <td><input value="${h.model||''}" placeholder="Model / machine type" oninput="ppHardwareChange('${h.id}','model',this.value)"></td>
+    <td><input type="number" min="1" step="1" value="${h.quantity||1}" style="width:60px" oninput="ppHardwareChange('${h.id}','quantity',this.value)"></td>
+    <td><input value="${h.screen_size||''}" placeholder="e.g. 21.5&quot;" oninput="ppHardwareChange('${h.id}','screen_size',this.value)"></td>
+    <td><input value="${h.peripherals||''}" placeholder="e.g. Badge reader, UBIE boards" oninput="ppHardwareChange('${h.id}','peripherals',this.value)"></td>
+    <td class="pp-actions"><button class="pp-del" onclick="ppDelHardware('${h.id}')">✕</button></td>
+  </tr>`).join('');
+  const hwTotalQty=ppData.hardware.reduce((s,h)=>s+Number(h.quantity||0),0);
+
+  // Shipping locations
+  const shSoOpts=hwSoOpts;
+  const shLegacyBanner=(!ppData.shipping.length&&(projects.find(p=>p.id===ppProjId)?.location||projects.find(p=>p.id===ppProjId)?.so_number))?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;font-size:12px;color:#92600a">Shipping information is currently using the Sales Order address. Convert it into a shipping location to add the site name and delivery contact.<br><button onclick="ppConvertLegacyShipping()" style="margin-top:6px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid #d97706;background:white;color:#92600a;cursor:pointer">Create Shipping Location from Existing Address</button></div>`:'';
+  const shippingHtml=ppData.shipping.map((s,i)=>`<tr data-id="${s.id}">
+    ${shSoOpts.length>1?`<td><select onchange="ppShippingChange('${s.id}','so_tag',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value=""${!s.so_tag?' selected':''}>All SOs</option>${shSoOpts.map(so=>`<option value="${so}"${s.so_tag===so?' selected':''}>${so}</option>`).join('')}</select></td>`:''}
+    <td><input value="${s.site_name||''}" placeholder="Site name" oninput="ppShippingChange('${s.id}','site_name',this.value)"></td>
+    <td><input value="${s.address||''}" placeholder="Full address" oninput="ppShippingChange('${s.id}','address',this.value)"></td>
+    <td><input type="number" min="1" step="1" value="${s.delivery_sequence||i+1}" style="width:50px" oninput="ppShippingChange('${s.id}','delivery_sequence',this.value)"></td>
+    <td><input value="${s.contact_name||''}" placeholder="Contact name" oninput="ppShippingChange('${s.id}','contact_name',this.value)"></td>
+    <td><input value="${s.contact_email||''}" placeholder="Email" oninput="ppShippingChange('${s.id}','contact_email',this.value)"></td>
+    <td><input value="${s.contact_phone||''}" placeholder="Phone" oninput="ppShippingChange('${s.id}','contact_phone',this.value)"></td>
+    <td class="pp-actions"><button class="pp-del" onclick="ppDelShipping('${s.id}')">✕</button></td>
   </tr>`).join('');
 
   // Milestones from hub — group by SO if split
   const ppProj=projects.find(p=>p.id===ppProjId);
   const ppHasSoTags=isProjectFullySplit(pMs);
-  const ppSoList=(ppProj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const ppSoList=getSOList(ppProj);
 
   const buildPPMsRow=(m)=>{
     const isDone=isMilestoneEffectivelyDone(m);
@@ -6881,7 +7104,7 @@ function renderProjPageBody(){
     <td><input value="${a.owner||''}" placeholder="Owner" style="width:90px" oninput="ppAIChange('${a.id}','owner',this.value)"></td>
     <td><input value="${a.description||''}" placeholder="Action item" oninput="ppAIChange('${a.id}','description',this.value)"></td>
     <td><input type="date" value="${a.due_date||''}" oninput="ppAIChange('${a.id}','due_date',this.value)"></td>
-    <td><select onchange="ppAIChange('${a.id}','side',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)"><option value="">—</option><option value="Signifi"${a.side==='Signifi'?' selected':''}>Signifi</option><option value="Client"${a.side==='Client'?' selected':''}>Client</option></select></td>
+    <td><select onchange="ppAIChange('${a.id}','side',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid ${a.description&&!a.side?'var(--red)':'var(--gray-300)'};border-radius:var(--radius);background:var(--white)"><option value=""${!a.side?' selected':''}>${a.description?'⚠ Unclassified':'—'}</option><option value="Signifi"${a.side==='Signifi'?' selected':''}>Signifi</option><option value="Client"${a.side==='Client'?' selected':''}>Client</option></select></td>
     <td><select class="pp-status-sel ${a.status==='Done'?'status-done':a.status==='At Risk'?'status-risk':a.status==='On Hold'?'status-hold':'status-open'}" oninput="ppAIChange('${a.id}','status',this.value);this.className='pp-status-sel '+(this.value==='Done'?'status-done':this.value==='At Risk'?'status-risk':this.value==='On Hold'?'status-hold':'status-open')">
       <option${a.status==='Open'?' selected':''}>Open</option>
       <option${a.status==='Done'?' selected':''}>Done</option>
@@ -6937,7 +7160,7 @@ function renderProjPageBody(){
           ${isChild(proj)?`<button onclick="switchProjPage('${proj.parent_project_id}')" style="font-size:10px;padding:2px 10px;border-radius:10px;border:1px solid #e879f9;background:rgba(232,121,249,0.15);color:#e879f9;cursor:pointer;font-family:var(--font)">🏛 Back to master</button>`:''}
         </div>
         <div class="pp-meta">
-          <span>📋 SO: ${(proj.so_number||'').split(/[\s,;]+/).map(s=>{const so=s.trim();return so?'<strong style="cursor:pointer;text-decoration:underline;color:#93c5fd" onclick="switchProjPageBySO(\''+so+'\')" title="Go to '+so+'">'+so+'</strong>':''}).join(', ')||'—'}</span>
+          <span>📋 SO: ${getSOList(proj).map(so=>'<strong style="cursor:pointer;text-decoration:underline;color:#93c5fd" onclick="switchProjPageBySO(\''+so+'\')" title="Go to '+so+'">'+so+'</strong>').join(', ')||'—'}</span>
           <span>👤 PM: <strong>${proj.pm||'—'}</strong></span>
           <span>🏢 ${proj.client||'—'}</span>
           ${proj.product_type?`<span>📦 ${proj.product_type}</span>`:''}
@@ -6964,8 +7187,6 @@ function renderProjPageBody(){
         ${(ppHasSoTags||isMaster(proj)||(proj.so_number||"").split(",").filter(s=>s.trim()).length>1)?`<button onclick="toggleAllSOView()" id="btn-show-all-so" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #16a34a;background:#14532d;color:#86efac;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📊 All SO milestones</button>`:''}
         ${isChild(proj)?`<button onclick="unlinkFromMaster('${proj.id}')" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #dc2626;background:#450a0a;color:#fca5a5;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🔗 Unlink from master</button>`:''}
         <button onclick="exportProjPageExcel()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #2d6a4f;background:#1a4a35;color:#4ade80;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">⬇ Excel</button>
-        <button onclick="openClientExport()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #1d4ed8;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📤 Client export</button>
-        <button onclick="openClientDeliverables()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #d97706;background:#3f2200;color:#fbbf24;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📋 Edit deliverables</button>
 
         <button onclick="window.print()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #555;background:#1a1a1a;color:#aaa;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🖨 Print / PDF</button>
       </div>
@@ -6975,15 +7196,15 @@ function renderProjPageBody(){
     <div class="pp-grid">
       <div>
         <div class="pp-card" style="margin-bottom:12px">
-          <div class="pp-card-head"><span class="pp-card-title">Project summary</span><span style="font-size:10px;color:var(--gray-400)">Internal only · Click to edit</span></div>
+          <div class="pp-card-head"><span class="pp-card-title">Internal Project Summary</span><span style="font-size:10px;color:var(--gray-400)">Internal only · Not included in the Weekly Status Report</span></div>
           <div class="pp-card-body">
-            <textarea class="pp-textarea" placeholder="Brief 3-5 sentence summary of current project status, major accomplishments, upcoming milestones, and any concerns requiring attention..." onchange="savePPSection('summary',this.value)" style="min-height:80px">${getSection('summary')}</textarea>
+            <textarea class="pp-textarea" placeholder="Internal project context and background. This is not included in the Weekly Status Report..." onchange="savePPSection('summary',this.value)" style="min-height:80px">${getSection('summary')}</textarea>
           </div>
         </div>
         <div class="pp-card" style="margin-bottom:12px">
-          <div class="pp-card-head"><span class="pp-card-title">Client updates</span><span style="font-size:10px;color:var(--success)">Appears on client export</span></div>
+          <div class="pp-card-head"><span class="pp-card-title">Current Client Update</span><span style="font-size:10px;color:var(--success)">Included in the Weekly Status Report until updated</span></div>
           <div class="pp-card-body">
-            <textarea class="pp-textarea" placeholder="Updates, status, and notes for the client..." onchange="savePPSection('client_updates',this.value)" style="min-height:80px">${getSection('client_updates')}</textarea>
+            <textarea class="pp-textarea" placeholder="Current client-facing message included in the Weekly Status Report until it is updated..." onchange="savePPSection('client_updates',this.value)" style="min-height:80px">${getSection('client_updates')}</textarea>
           </div>
         </div>
         ${(()=>{
@@ -7129,6 +7350,43 @@ function renderProjPageBody(){
         </table>
       </div>
       <button class="pp-add-btn" onclick="ppAddTeam()">+ Add team member</button>
+    </div>
+
+    <!-- Key Project Dates -->
+    <div class="pp-card" style="margin-bottom:12px" id="pp-section-dates">
+      <div class="pp-card-head"><span class="pp-card-title">Key project dates</span></div>
+      <div style="overflow-x:auto">
+        <table class="pp-table">
+          <thead><tr><th>Date</th><th style="width:150px">When</th><th style="width:50px;text-align:center">N/A</th><th style="width:90px">Status</th></tr></thead>
+          <tbody>${keyDatesHtml}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Hardware -->
+    <div class="pp-card" style="margin-bottom:12px" id="pp-section-hardware">
+      <div class="pp-card-head"><span class="pp-card-title">Hardware</span><span style="font-size:11px;color:var(--gray-500)">${hwTotalQty} machine${hwTotalQty===1?'':'s'} total</span></div>
+      ${hwLegacyBanner}
+      <div style="overflow-x:auto">
+        <table class="pp-table">
+          <thead><tr>${hwSoOpts.length>1?'<th style="width:90px">Sales Order</th>':''}<th>Model / machine type</th><th style="width:70px">Qty</th><th style="width:110px">Screen size</th><th>Peripherals</th><th style="width:28px"></th></tr></thead>
+          <tbody id="pp-hardware">${hardwareHtml}</tbody>
+        </table>
+      </div>
+      <button class="pp-add-btn" onclick="ppAddHardware()">+ Add hardware line</button>
+    </div>
+
+    <!-- Shipping Locations -->
+    <div class="pp-card" style="margin-bottom:12px" id="pp-section-shipping">
+      <div class="pp-card-head"><span class="pp-card-title">Shipping locations</span></div>
+      ${shLegacyBanner}
+      <div style="overflow-x:auto">
+        <table class="pp-table">
+          <thead><tr>${shSoOpts.length>1?'<th style="width:90px">Sales Order</th>':''}<th>Site name</th><th>Address</th><th style="width:50px">Seq</th><th>Contact</th><th>Email</th><th>Phone</th><th style="width:28px"></th></tr></thead>
+          <tbody id="pp-shipping">${shippingHtml}</tbody>
+        </table>
+      </div>
+      <button class="pp-add-btn" onclick="ppAddShipping()">+ Add shipping location</button>
     </div>
 
 
@@ -7485,31 +7743,56 @@ async function removePPLink(label,linkId){
 }
 
 // ── PM TASKS ────────────────────────────────────────────────
+// Stable document keys — used for reliable matching in generated documents
+// instead of fragile label text matching. A task can be left "Custom (no
+// key)" and will still show up via legacy label matching as a fallback.
+const PM_TASK_DOC_KEYS=[
+  ['','Custom (no key)'],
+  ['ui_ux_requirements','UI / UX Requirements'],['vinyl_requirements','Vinyl Requirements'],
+  ['branding_guidelines','Branding Guidelines'],['merchant_info','Merchant Info'],
+  ['product_template','Product Template'],['sample_products','Sample Products'],
+  ['sample_badges','Sample Badges'],['employee_list','Employee List'],
+  ['facility_survey','Facility Survey'],['it_survey','IT Survey'],
+  ['pre_deployment_checklist','Pre-Deployment Checklist'],['language_translation','Language Translation'],
+  ['vision_user_access','Vision User Access'],['vision_training','Vision Training'],
+  ['badge_configuration','Badge Configuration'],
+];
+const PM_TASK_STATUSES=['Not Started','In Progress','Blocked','Done','N/A','Cancelled'];
 function renderPMTaskRows(pid,saved){
   var DEFAULT_LABELS=['Vinyl design request','UI Task','Product Template task','IT Survey Review task','Facility Survey Review task','Language Translation task','Vision User Access task','Vision Training task','Installation Ticket','Planogram Layout','QA Task','Badge Task'];
   // Always merge: start with defaults, override with saved data if exists, append any extra saved rows
   var rows=DEFAULT_LABELS.map(function(label){
     var s=saved.find(function(x){return x.label===label;});
-    return s||{label:label,due_date:null,status:'Pending',_default:true};
+    return s||{label:label,due_date:null,status:'Not Started',_default:true};
   });
   // Append any saved rows that aren't in the default list
   saved.forEach(function(s){if(!DEFAULT_LABELS.includes(s.label))rows.push(s);});
+  var proj=projects.find(function(p){return p.id===pid;});
+  var soOpts=getSOList(proj);
   return rows.map(function(t){
     var id=t.id?t.id:('def-'+t.label.replace(/[^a-zA-Z0-9]/g,'-'));
-    var sc=t.status==='Done'?'var(--success)':t.status==='In Progress'?'#d97706':'#e11d48';
+    var st=t.status||'Not Started';
+    var sc=st==='Done'?'var(--success)':st==='N/A'?'var(--gray-400)':st==='Cancelled'?'var(--gray-400)':st==='Blocked'?'var(--red)':st==='In Progress'?'#d97706':'#e11d48';
     var lbl=t.label.split('"').join('&quot;');
     var isSaved=!!t.id;
     var labelCell='<input value="'+lbl+'" id="pmt-lbl-'+id+'" data-pid="'+pid+'" data-tid="'+id+'" data-field="label" style="font-family:var(--font);font-size:11px;padding:3px 5px;border:'+(isSaved?'1px solid var(--gray-200)':'1px solid transparent')+';border-radius:4px;width:100px;background:'+(isSaved?'var(--white)':'transparent')+'" onblur="pmtBlur(this)" onfocus="this.style.border=\'1px solid var(--gray-200)\';this.style.background=\'var(--white)\'">';
     var dueCell='<input type="date" value="'+(t.due_date||'')+'" data-pid="'+pid+'" data-tid="'+id+'" data-field="due_date" style="font-family:var(--font);font-size:10px;padding:2px 3px;border:1px solid var(--gray-200);border-radius:4px;width:88px" onchange="pmtChange(this)">';
-    var statusOpts=['Pending','In Progress','Done'].map(function(s){return'<option'+(t.status===s?' selected':'')+'>'+s+'</option>';}).join('');
-    var statusCell='<select data-pid="'+pid+'" data-tid="'+id+'" data-field="status" style="font-family:var(--font);font-size:10px;padding:2px 3px;border:1px solid var(--gray-200);border-radius:4px;color:'+sc+';font-weight:500;width:78px" onchange="pmtChange(this)">'+statusOpts+'</select>';
+    var statusOpts=PM_TASK_STATUSES.map(function(s){return'<option'+(st===s?' selected':'')+'>'+s+'</option>';}).join('');
+    var statusCell='<select data-pid="'+pid+'" data-tid="'+id+'" data-field="status" style="font-family:var(--font);font-size:10px;padding:2px 3px;border:1px solid var(--gray-200);border-radius:4px;color:'+sc+';font-weight:500;width:84px" onchange="pmtChange(this)">'+statusOpts+'</select>';
     var delCell='<button data-tid="'+id+'" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:13px" title="Remove" onclick="deletePMTask(this.dataset.tid)">✕</button>';
     var noteVal=(t.notes||'').split('"').join('&quot;');
     var noteCell='<input type="text" value="'+noteVal+'" placeholder="Note..." data-pid="'+pid+'" data-tid="'+id+'" data-field="notes" style="font-family:var(--font);font-size:10px;padding:2px 5px;border:none;border-bottom:1px solid var(--gray-100);border-radius:0;width:100%;color:var(--gray-500);background:transparent" onblur="pmtBlur(this)">';
-    return'<tr id="pmt-row-'+id+'" style="border-bottom:1px solid var(--gray-50)"><td style="padding:5px 6px 1px 6px">'+labelCell+'<div>'+noteCell+'</div></td><td style="padding:5px 6px">'+dueCell+'</td><td style="padding:5px 6px">'+statusCell+'</td><td style="padding:5px 4px;text-align:center">'+delCell+'</td></tr>';
+    var docKeyOpts=PM_TASK_DOC_KEYS.map(function(k){return'<option value="'+k[0]+'"'+((t.doc_key||'')===k[0]?' selected':'')+'>'+k[1]+'</option>';}).join('');
+    var docKeyCell='<select data-pid="'+pid+'" data-tid="'+id+'" data-field="doc_key" title="Stable document key" style="font-family:var(--font);font-size:9px;padding:2px 3px;border:1px solid var(--gray-200);border-radius:4px;width:100%;color:var(--gray-500)" onchange="pmtChange(this)">'+docKeyOpts+'</select>';
+    var ownerCell='<input type="text" value="'+((t.owner||'').split('"').join('&quot;'))+'" placeholder="Owner" data-pid="'+pid+'" data-tid="'+id+'" data-field="owner" style="font-family:var(--font);font-size:9px;padding:2px 4px;border:1px solid var(--gray-200);border-radius:4px;width:100%" onblur="pmtBlur2(this)">';
+    var soCell=soOpts.length>1?('<select data-pid="'+pid+'" data-tid="'+id+'" data-field="so_tag" style="font-family:var(--font);font-size:9px;padding:2px 3px;border:1px solid var(--gray-200);border-radius:4px;width:100%" onchange="pmtChange(this)"><option value=""'+(!t.so_tag?' selected':'')+'>All SOs</option>'+soOpts.map(function(so){return'<option value="'+so+'"'+(t.so_tag===so?' selected':'')+'>'+so+'</option>';}).join('')+'</select>'):'';
+    var includeCell='<input type="checkbox"'+(t.include_in_report!==false?' checked':'')+' title="Include in client documents" data-pid="'+pid+'" data-tid="'+id+'" onchange="savePMTask(\''+pid+'\',\''+id+'\',\'include_in_report\',this.checked)">';
+    var metaRow='<tr id="pmt-meta-'+id+'" style="border-bottom:1px solid var(--gray-50)"><td colspan="4" style="padding:0 6px 5px 6px"><div style="display:grid;grid-template-columns:'+(soOpts.length>1?'1fr 1fr 50px 34px':'1fr 50px 34px')+';gap:4px;align-items:center">'+docKeyCell+ownerCell+(soOpts.length>1?soCell:'')+'<span style="display:flex;align-items:center;gap:2px;font-size:8px;color:var(--gray-400)">'+includeCell+'incl.</span></div></td></tr>';
+    return'<tr id="pmt-row-'+id+'" style="border-bottom:1px solid var(--gray-50)"><td style="padding:5px 6px 1px 6px">'+labelCell+'<div>'+noteCell+'</div></td><td style="padding:5px 6px">'+dueCell+'</td><td style="padding:5px 6px">'+statusCell+'</td><td style="padding:5px 4px;text-align:center">'+delCell+'</td></tr>'+metaRow;
   }).join('');
 }
 function pmtBlur(el){savePMTask(el.dataset.pid,el.dataset.tid,'label',el.value);}
+function pmtBlur2(el){savePMTask(el.dataset.pid,el.dataset.tid,el.dataset.field,el.value);}
 function pmtChange(el){savePMTask(el.dataset.pid,el.dataset.tid,el.dataset.field,el.value);}
 const DEFAULT_PM_TASKS=['Vinyl design request','UI Task','Product Template task','IT Survey Review task','Facility Survey Review task','Language Translation task','Vision User Access task','Vision Training task','Installation Ticket','Planogram Layout','QA Task','Badge Task'];
 async function savePMTask(pid,taskId,field,val){
@@ -7517,44 +7800,60 @@ async function savePMTask(pid,taskId,field,val){
     // Brand new user-added row — insert with label from input
     const label=document.getElementById('pmt-label-'+taskId)?.value.trim()||'Task';
     if(!label||label==='Task')return;
-    const{data,error}=await sb.from('pm_tasks').insert({project_id:pid,label,due_date:field==='due_date'?val||null:null,status:field==='status'?val:'Pending',sort_order:ppData.pmtasks.length}).select().single();
+    const insertPayload={project_id:pid,label,due_date:null,status:'Not Started',sort_order:ppData.pmtasks.length};
+    insertPayload[field]=val; // whichever field the user actually touched first — never silently dropped
+    const{data,error}=await sb.from('pm_tasks').insert(insertPayload).select().single();
     if(error){console.warn('pm_tasks insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data){
       ppData.pmtasks.push(data);
-      const el=document.getElementById('pmt-row-'+taskId);
-      if(el){el.id='pmt-row-'+data.id;}
-      // Update all onclick handlers in this row to use real ID
-      el?.querySelectorAll('[onchange],[onblur]').forEach(inp=>{
-        if(inp.getAttribute('onchange'))inp.setAttribute('onchange',inp.getAttribute('onchange').replace(taskId,data.id));
-        if(inp.getAttribute('onblur'))inp.setAttribute('onblur',inp.getAttribute('onblur').replace(taskId,data.id));
+      ['pmt-row-','pmt-meta-'].forEach(prefix=>{
+        const el=document.getElementById(prefix+taskId);
+        if(el){
+          el.id=prefix+data.id;
+          el.querySelectorAll('[onchange],[onblur],[onclick]').forEach(inp=>{
+            ['onchange','onblur','onclick'].forEach(attr=>{
+              const cur=inp.getAttribute(attr);
+              if(cur)inp.setAttribute(attr,cur.split(taskId).join(data.id));
+            });
+          });
+        }
       });
     }
   } else if(taskId.startsWith('def-')){
     // Default task — insert into DB first
     const label=document.getElementById('pmt-row-'+taskId)?.querySelector('span')?.textContent||taskId.replace('def-','').replace(/-/g,' ');
-    const{data,error}=await sb.from('pm_tasks').insert({project_id:pid,label,due_date:field==='due_date'?val||null:null,status:field==='status'?val:'Pending',sort_order:ppData.pmtasks.length}).select().single();
+    const insertPayload={project_id:pid,label,due_date:null,status:'Not Started',sort_order:ppData.pmtasks.length};
+    insertPayload[field]=val; // same fix as above — capture whatever field triggered this save
+    const{data,error}=await sb.from('pm_tasks').insert(insertPayload).select().single();
     if(error){console.warn('pm_tasks insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data){
       ppData.pmtasks.push(data);
-      // Update row ID and all event handlers to use real DB id
-      const row=document.getElementById('pmt-row-'+taskId);
-      if(row){
-        row.id='pmt-row-'+data.id;
-        row.querySelectorAll('[onchange],[onblur]').forEach(el=>{
-          if(el.getAttribute('onchange'))el.setAttribute('onchange',el.getAttribute('onchange').replace(new RegExp(taskId.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g'),data.id));
-          if(el.getAttribute('onblur'))el.setAttribute('onblur',el.getAttribute('onblur').replace(new RegExp(taskId.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g'),data.id));
-        });
-        row.querySelectorAll('[onclick]').forEach(el=>{
-          if(el.getAttribute('onclick'))el.setAttribute('onclick',el.getAttribute('onclick').replace(new RegExp(taskId.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g'),data.id));
-        });
-      }
+      // Update row ID and all event handlers to use real DB id — both the
+      // main row AND the meta row (doc_key/owner/SO/include), which has its
+      // own separate onchange handlers still pointing at the temp id.
+      const idRe=new RegExp(taskId.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g');
+      ['pmt-row-','pmt-meta-'].forEach(prefix=>{
+        const row=document.getElementById(prefix+taskId);
+        if(row){
+          row.id=prefix+data.id;
+          row.querySelectorAll('[onchange],[onblur],[onclick]').forEach(el=>{
+            ['onchange','onblur','onclick'].forEach(attr=>{
+              const cur=el.getAttribute(attr);
+              if(cur)el.setAttribute(attr,cur.replace(idRe,data.id));
+            });
+          });
+        }
+      });
     }
   } else {
-    // Existing DB row — just update
-    await sb.from('pm_tasks').update({[field]:val||null}).eq('id',taskId);
+    // Existing DB row — just update. Booleans need explicit handling: val||null
+    // would silently turn `false` into `null` (false||null === null in JS),
+    // corrupting the include_in_report checkbox every time it's unchecked.
+    const updateVal=typeof val==='boolean'?val:(val||null);
+    await sb.from('pm_tasks').update({[field]:updateVal}).eq('id',taskId);
     // Update local ppData
     const t=ppData.pmtasks.find(x=>x.id===taskId);
-    if(t)t[field]=val||null;
+    if(t)t[field]=updateVal;
   }
 }
 async function deletePMTask(taskId){
@@ -7644,9 +7943,134 @@ async function ppDelTeam(id){
   document.querySelector('#pp-team tr[data-id="'+id+'"]')?.remove();
 }
 
+// Key Project Dates — saves directly to the canonical milestones table by
+// key, creating the row on first use. This is the ONLY place a PM needs to
+// touch to set these dates; there's no separate "add milestone" step.
+async function ppKeyDateChange(key,label,dateVal,isNA){
+  const existing=milestones.find(m=>m.project_id===ppProjId&&m.key===key);
+  if(existing){
+    const update={date:isNA?null:(dateVal||null),not_applicable:isNA,changed_by:currentUserName,changed_at:new Date().toISOString()};
+    if(!existing.original_date&&dateVal&&!isNA)update.original_date=dateVal;
+    const{error}=await sb.from('milestones').update(update).eq('id',existing.id);
+    if(error){showToast('⚠ Save failed: '+error.message);return;}
+    Object.assign(existing,update);
+  } else {
+    const{data,error}=await sb.from('milestones').insert({
+      project_id:ppProjId,key,label,date:isNA?null:(dateVal||null),
+      original_date:isNA?null:(dateVal||null),not_applicable:isNA,changed_by:currentUserName,
+    }).select().single();
+    if(error){showToast('⚠ Save failed: '+error.message);return;}
+    if(data)milestones.push(data);
+  }
+  showPPSaved();
+  renderProjPageBody();
+}
+
+
+let ppHardwareSaveTimer={};
+async function ppHardwareChange(id,field,val){
+  let item=ppData.hardware.find(h=>h.id===id);
+  if(!item)return;
+  if(field==='quantity'){val=Math.max(1,parseInt(val)||1);}
+  item[field]=val;
+  clearTimeout(ppHardwareSaveTimer[id]);
+  ppHardwareSaveTimer[id]=setTimeout(async()=>{
+    const{error}=await sb.from('hardware_line_items').update({
+      so_tag:item.so_tag||null,model:item.model||'',quantity:item.quantity||1,
+      screen_size:item.screen_size||'',peripherals:item.peripherals||'',
+    }).eq('id',id);
+    if(error){console.warn('hardware_line_items update error',error);showToast('⚠ Save failed: '+error.message);return;}
+    logActivity('edited hardware line',field,item.model||'(unnamed)',ppProjId);
+    showPPSaved();
+  },600);
+}
+async function ppAddHardware(){
+  if(!guardStart('ppAddHardware'))return;
+  const{data,error}=await sb.from('hardware_line_items').insert({
+    project_id:ppProjId,model:'',quantity:1,screen_size:'',peripherals:'',
+    sort_order:ppData.hardware.length,created_by:currentUserName,
+  }).select().single();
+  guardEnd('ppAddHardware');
+  if(error){console.warn('hardware_line_items insert error',error);showToast('⚠ Save failed: '+error.message);return;}
+  if(data){ppData.hardware.push(data);logActivity('added hardware line','','',ppProjId);renderProjPageBody();}
+}
+async function ppDelHardware(id){
+  await sb.from('hardware_line_items').delete().eq('id',id);
+  const removed=ppData.hardware.find(h=>h.id===id);
+  ppData.hardware=ppData.hardware.filter(h=>h.id!==id);
+  logActivity('deleted hardware line',removed?.model||'',ppProjId);
+  renderProjPageBody();
+}
+// Explicit, user-triggered conversion only — never auto-created just by
+// opening the page, per the requirement that legacy data isn't silently
+// migrated without user action.
+async function ppConvertLegacyHardware(){
+  const proj=projects.find(p=>p.id===ppProjId);
+  if(!proj)return;
+  const soList=getSOList(proj);
+  const{data,error}=await sb.from('hardware_line_items').insert({
+    project_id:ppProjId,so_tag:soList.length===1?soList[0]:null,
+    model:proj.product_type||proj.form_factor||'',quantity:proj.quantity||1,
+    screen_size:'',peripherals:'',sort_order:0,created_by:currentUserName,
+  }).select().single();
+  if(error){showToast('⚠ Conversion failed: '+error.message);return;}
+  if(data){ppData.hardware.push(data);logActivity('converted legacy hardware to line item',data.model||'',ppProjId);showToast('Hardware line created ✓');renderProjPageBody();}
+}
+
+// Shipping locations CRUD
+let ppShippingSaveTimer={};
+async function ppShippingChange(id,field,val){
+  let item=ppData.shipping.find(s=>s.id===id);
+  if(!item)return;
+  if(field==='delivery_sequence'){val=Math.max(1,parseInt(val)||1);}
+  item[field]=val;
+  clearTimeout(ppShippingSaveTimer[id]);
+  ppShippingSaveTimer[id]=setTimeout(async()=>{
+    const{error}=await sb.from('shipping_locations').update({
+      so_tag:item.so_tag||null,site_name:item.site_name||'',address:item.address||'',
+      delivery_sequence:item.delivery_sequence||1,contact_name:item.contact_name||'',
+      contact_email:item.contact_email||'',contact_phone:item.contact_phone||'',
+    }).eq('id',id);
+    if(error){console.warn('shipping_locations update error',error);showToast('⚠ Save failed: '+error.message);return;}
+    logActivity('edited shipping location',field,item.site_name||'(unnamed)',ppProjId);
+    showPPSaved();
+  },600);
+}
+async function ppAddShipping(){
+  if(!guardStart('ppAddShipping'))return;
+  const{data,error}=await sb.from('shipping_locations').insert({
+    project_id:ppProjId,site_name:'',address:'',delivery_sequence:ppData.shipping.length+1,
+    contact_name:'',contact_email:'',contact_phone:'',sort_order:ppData.shipping.length,created_by:currentUserName,
+  }).select().single();
+  guardEnd('ppAddShipping');
+  if(error){console.warn('shipping_locations insert error',error);showToast('⚠ Save failed: '+error.message);return;}
+  if(data){ppData.shipping.push(data);logActivity('added shipping location','','',ppProjId);renderProjPageBody();}
+}
+async function ppDelShipping(id){
+  await sb.from('shipping_locations').delete().eq('id',id);
+  const removed=ppData.shipping.find(s=>s.id===id);
+  ppData.shipping=ppData.shipping.filter(s=>s.id!==id);
+  logActivity('deleted shipping location',removed?.site_name||'',ppProjId);
+  renderProjPageBody();
+}
+async function ppConvertLegacyShipping(){
+  const proj=projects.find(p=>p.id===ppProjId);
+  if(!proj)return;
+  const soList=getSOList(proj);
+  const cfg=soList.length===1?getSOConfigSummary(proj,soList[0]):effectiveProjectConfig(proj);
+  const{data,error}=await sb.from('shipping_locations').insert({
+    project_id:ppProjId,so_tag:soList.length===1?soList[0]:null,
+    site_name:proj.name||'',address:cfg.address||proj.location||'',delivery_sequence:1,
+    contact_name:'',contact_email:'',contact_phone:'',sort_order:0,created_by:currentUserName,
+  }).select().single();
+  if(error){showToast('⚠ Conversion failed: '+error.message);return;}
+  if(data){ppData.shipping.push(data);logActivity('converted legacy address to shipping location',data.site_name||'',ppProjId);showToast('Shipping location created ✓');renderProjPageBody();}
+}
+
 // Action items CRUD
 async function ppAIChange(id,field,val){
-  await sb.from('action_items').update({[field]:val,updated_at:new Date().toISOString()}).eq('id',id);
+  const{error}=await sb.from('action_items').update({[field]:val,updated_at:new Date().toISOString()}).eq('id',id);
+  if(error){console.warn('action_items update error',error);showToast('⚠ Save failed: '+error.message);return;}
   const item=ppData.actions.find(a=>a.id===id);if(item)item[field]=val;
   showPPSaved();
 }
@@ -7920,10 +8344,114 @@ function resolveProjectStakeholders(proj,team){
   return{stakeholders,stakeholdersSignifi,stakeholdersClient,conflicts,unclassifiedCount:unclassified};
 }
 
+// ══════════════ CLIENT_DELIVERABLES → PM_TASKS MIGRATION ══════════════
+// One-time, admin-triggered, idempotent. Running it twice must not create
+// duplicates — matching happens by doc_key first (or normalized label for
+// legacy rows with no stable-key equivalent), and an existing pm_tasks row
+// is only ever filled in on blank fields, never overwritten. The legacy
+// projects.client_deliverables column is left in place, untouched, as a
+// rollback source — this migration only ever reads it, never clears it.
+const LEGACY_DELIV_KEY_TO_DOC_KEY={
+  training:'vision_training',it_survey:'it_survey',facility_survey:'facility_survey',
+  vinyl:'vinyl_requirements',badge:'badge_configuration',employee:'employee_list',
+  // 'arrival' (shown as "Products / Hardware") and 'uat' and 'installation' have
+  // no equivalent in the 15 canonical doc_keys — those milestones/deliverables
+  // already have their own home (hardware_line_items, the UAT/Installation
+  // milestones). Migrated as custom (no doc_key) pm_tasks rows rather than
+  // silently dropped, matched by normalized label instead.
+};
+const LEGACY_STATUS_TO_PM_STATUS={Pending:'Not Started','In Progress':'In Progress',Complete:'Done','N/A':'N/A'};
+
+function normalizeDelivLabel(s){return(s||'').toLowerCase().replace(/\s+/g,' ').trim();}
+
+async function runClientDeliverablesMigration(){
+  const counts={projectsScanned:0,legacyRowsFound:0,matched:0,created:0,updated:0,skipped:0,ambiguous:0,failed:0};
+  const ambiguousLog=[],failedLog=[];
+
+  for(const proj of projects){
+    const legacyRows=proj.client_deliverables;
+    if(!Array.isArray(legacyRows)||!legacyRows.length)continue;
+    counts.projectsScanned++;
+    counts.legacyRowsFound+=legacyRows.length;
+
+    const{data:existingTasks,error:loadErr}=await sb.from('pm_tasks').select('*').eq('project_id',proj.id);
+    if(loadErr){console.warn('migration: pm_tasks load failed',proj.id,loadErr);failedLog.push({project:proj.name,reason:loadErr.message});counts.failed+=legacyRows.length;continue;}
+    let tasks=existingTasks||[];
+
+    for(const row of legacyRows){
+      try{
+        const docKey=LEGACY_DELIV_KEY_TO_DOC_KEY[row.key]||null;
+        const normLabel=normalizeDelivLabel(row.label);
+        let match=docKey?tasks.find(t=>t.doc_key===docKey):null;
+        if(!match)match=tasks.find(t=>normalizeDelivLabel(t.label)===normLabel);
+
+        // Ambiguous: more than one existing task matches by label with no
+        // doc_key to disambiguate — don't guess, report it for manual review.
+        if(!docKey){
+          const labelMatches=tasks.filter(t=>normalizeDelivLabel(t.label)===normLabel);
+          if(labelMatches.length>1){
+            counts.ambiguous++;
+            ambiguousLog.push({project:proj.name,legacyLabel:row.label,matchCount:labelMatches.length});
+            continue;
+          }
+        }
+
+        const legacyStatus=LEGACY_STATUS_TO_PM_STATUS[row.status]||'Not Started';
+
+        if(match){
+          counts.matched++;
+          // Fill blank fields only — an existing non-blank value is assumed
+          // more authoritative than the legacy row and is never overwritten.
+          const fill={};
+          if(!match.due_date&&row.date)fill.due_date=row.date;
+          if(!match.notes&&row.notes)fill.notes=row.notes;
+          if(!match.doc_key&&docKey)fill.doc_key=docKey;
+          if(Object.keys(fill).length){
+            const{error}=await sb.from('pm_tasks').update(fill).eq('id',match.id);
+            if(error){counts.failed++;failedLog.push({project:proj.name,reason:error.message});continue;}
+            Object.assign(match,fill);
+            counts.updated++;
+          } else {
+            counts.skipped++; // already fully populated — nothing to fill
+          }
+        } else {
+          const{data,error}=await sb.from('pm_tasks').insert({
+            project_id:proj.id,label:row.label,due_date:row.date||null,
+            status:legacyStatus,notes:row.notes||'',doc_key:docKey,
+            sort_order:tasks.length,
+          }).select().single();
+          if(error){counts.failed++;failedLog.push({project:proj.name,reason:error.message});continue;}
+          if(data){tasks.push(data);counts.created++;}
+        }
+      }catch(e){
+        counts.failed++;failedLog.push({project:proj.name,reason:e.message});
+      }
+    }
+  }
+  return{counts,ambiguousLog,failedLog};
+}
+
+async function openMigrationRunner(){
+  if(!confirm('This migrates legacy Client Deliverables data into PM Tasks. It only reads the legacy data — nothing is deleted, and it\'s safe to run more than once. Continue?'))return;
+  showToast('Running migration…');
+  const result=await runClientDeliverablesMigration();
+  const{counts,ambiguousLog,failedLog}=result;
+  const rows=Object.entries(counts).map(([k,v])=>`<tr><td style="padding:4px 10px;color:var(--gray-500)">${k.replace(/([A-Z])/g,' $1').replace(/^./,c=>c.toUpperCase())}</td><td style="padding:4px 10px;font-weight:700;text-align:right">${v}</td></tr>`).join('');
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:520px" onclick="event.stopPropagation()">
+    <div class="modal-head"><span class="modal-title">Migration results</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div style="padding:14px 18px;max-height:60vh;overflow-y:auto">
+      <table style="width:100%;font-size:13px;border-collapse:collapse">${rows}</table>
+      ${ambiguousLog.length?`<div style="margin-top:12px;font-size:11px;color:#92600a"><b>Ambiguous (needs manual review):</b><br>${ambiguousLog.map(a=>esc(a.project)+' — "'+esc(a.legacyLabel)+'" ('+a.matchCount+' possible matches)').join('<br>')}</div>`:''}
+      ${failedLog.length?`<div style="margin-top:12px;font-size:11px;color:var(--red)"><b>Failed:</b><br>${failedLog.map(f=>esc(f.project)+' — '+esc(f.reason)).join('<br>')}</div>`:''}
+    </div>
+    <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>
+  </div></div>`;
+}
+
 async function buildProjectDocPackage(projId,soTag=''){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return null;
-  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   const effectiveSO=soTag||(soList.length===1?soList[0]:'');
   const cfg=effectiveSO?getSOConfigSummary(proj,effectiveSO):effectiveProjectConfig(proj);
   const TBC='To Be Confirmed';
@@ -7957,7 +8485,7 @@ async function buildProjectDocPackage(projId,soTag=''){
   const{stakeholders,stakeholdersSignifi,stakeholdersClient,conflicts,unclassifiedCount}=resolveProjectStakeholders(proj,team);
   if(conflicts.length)flag(`${conflicts.length} stakeholder conflict(s) — same role, different name in project fields vs. team list (scalar project field used; see readiness panel)`,'important');
   if(!stakeholders.length)flag('Stakeholders (no PM/SDM/Solutions/Sales/AM or team rows set)','important');
-  if(unclassifiedCount)flag(`${unclassifiedCount} team member(s) have no Side set (Signifi/Client) — won't appear in either column until set`,'optional');
+  if(unclassifiedCount)flag(`${unclassifiedCount} project contact(s) aren't marked as Signifi or Client yet. Classify them under Project Team.`,'optional');
 
   // 3. Scope of work
   const scope={
@@ -7986,20 +8514,23 @@ async function buildProjectDocPackage(projId,soTag=''){
 
   // 3a. Hardware line items — new normalized table (hardware_line_items),
   // falling back to the single legacy quantity/product_type captured at
-  // intake if no line items have been entered yet.
+  // intake if no line items have been entered yet. Uses the shared
+  // resolveProjectHardware so this and the Weekly Status Report never
+  // disagree on the fallback logic.
   let hardware=[];
   {
     const hwRes=await sb.from('hardware_line_items').select('*').eq('project_id',projId).order('sort_order');
     if(hwRes.error)console.warn('hardware_line_items load error',hwRes.error);
-    hardware=(hwRes.data||[]).filter(h=>!effectiveSO||!h.so_tag||h.so_tag===effectiveSO)
-      .map(h=>({model:h.model||'',quantity:h.quantity||1,screenSize:h.screen_size||'',peripherals:h.peripherals||''}));
-    if(!hardware.length&&proj.quantity){
-      hardware=[{model:proj.product_type||cfg.form_factor||'',quantity:proj.quantity,screenSize:'',peripherals:'',_legacy:true}];
-      flag('Hardware detail is falling back to the single legacy quantity/product_type from intake — no model/screen size/peripherals recorded in the new hardware line items table','optional');
+    const allRows=(hwRes.data||[]).filter(h=>!effectiveSO||!h.so_tag||h.so_tag===effectiveSO);
+    hardware=allRows.map(h=>({model:h.model||'',quantity:h.quantity||1,screenSize:h.screen_size||'',peripherals:h.peripherals||''}));
+    const hwResolved=resolveProjectHardware(proj,allRows);
+    if(!hardware.length&&hwResolved.source==='legacy'){
+      hardware=[{model:proj.product_type||cfg.form_factor||'',quantity:hwResolved.quantity,screenSize:'',peripherals:'',_legacy:true}];
+      flag(`Hardware is using the legacy project quantity (${hwResolved.quantity}). Convert it to detailed hardware lines under Hardware to add screen size and peripherals.`,'optional');
     }
-    if(!hardware.length)flag('Hardware line items (none recorded)','important');
+    if(!hardware.length)flag('Hardware details have not been entered. Add hardware models and quantities under Hardware.','important');
     scope.peripherals=hardware[0]?.peripherals||'';
-    if(hardware.length&&!scope.peripherals)flag('Peripheral devices (add to the hardware line item)','optional');
+    if(hardware.length&&!scope.peripherals)flag('No peripherals recorded for this hardware line. Add them under Hardware.','optional');
   }
 
   // 4. Timeline — reads milestones directly via PIPELINE_STAGES key ordering.
@@ -8028,13 +8559,14 @@ async function buildProjectDocPackage(projId,soTag=''){
   const arrivalMs=byKey('arrival'),prodStart=byKey('production-start'),prodEnd=byKey('production-end');
   const poRelease=byKey('po-release'),moRelease=byKey('mo-release');
   const qStart=byKey('quality-start'),qEnd=byKey('quality-end');
-  const shipMs=byKey('shipping'),delMs=byKey('delivery'),instMs=byKey('installation');
-  // UAT, Training, Go-live, Kickoff, and UI Development are all canonical
-  // milestone keys now (TYPE_LBL/TYPE_CLS) — every field the deck needs has
-  // a permanent home in the milestone engine, not a generator-side default
-  // or fuzzy label match. Each is read independently; Go-live is never
-  // backfilled from Installation.
-  const uatMs=byKey('uat'),trainingMs=byKey('training'),goLiveMs=byKey('go-live');
+  const shipMs=byKey('shipping'),delMs=byKey('delivery');
+  // Installation IS Go-Live for this app — one field, not two. Priority:
+  // Installation date → legacy 'go-live' milestone (older projects) → N/A →
+  // Not Scheduled. See resolveInstallationGoLive. Delivery (shipment
+  // physically arriving on site) stays independent — it's a genuinely
+  // separate, earlier event, not part of the installation/go-live merge.
+  const uatMs=byKey('uat'),trainingMs=byKey('training');
+  const instGoLive=resolveInstallationGoLive(projMs);
   const timelinePhases={
     kickoff:kickoffMs?phaseText(kickoffMs):fmtFull(isoD(today())), // falls back to today only if no kickoff milestone exists at all yet
     kickoffRaw:kickoffMs?.date||isoD(today()),
@@ -8044,17 +8576,19 @@ async function buildProjectDocPackage(projId,soTag=''){
     qaqc:qStart?.date&&qEnd?.date?`${fmtFull(qStart.date)} – ${fmtFull(qEnd.date)}`:TBC,
     uat:phaseText(uatMs),uatRaw:uatMs?.date||'',
     packShip:shipMs?.date?fmtFull(shipMs.date):TBC,
-    delivery:delMs?.date?fmtFull(delMs.date):TBC,delRaw:delMs?.date||'',
-    installation:instMs?.date?fmtFull(instMs.date):TBC,instRaw:instMs?.date||'',
     training:phaseText(trainingMs),trainingRaw:trainingMs?.date||'',
-    goLive:phaseText(goLiveMs),goLiveRaw:goLiveMs?.date||'',
+    delivery:delMs?.date?fmtFull(delMs.date):TBC,delRaw:delMs?.date||'',
+    installation:instGoLive.label,instRaw:instGoLive.date||'',
+    goLive:instGoLive.label,goLiveRaw:instGoLive.date||'',
+    installGoLiveConflict:instGoLive.conflict,
   };
-  if(!kickoffMs)flag('Kickoff date (add a milestone with type "Kickoff") — defaulting to today','optional');
-  if(phaseMissing(uiMs))flag('UI development date (add a milestone with type "UI Development", or mark N/A)','optional');
-  if(timelinePhases.qaqc===TBC)flag('QA/QC date range','optional');
-  if(phaseMissing(uatMs))flag('UAT planned date (add a milestone with type "UAT", or mark N/A)','optional');
-  if(phaseMissing(trainingMs))flag('Training date (add a milestone with type "Training", or mark N/A)','optional');
-  if(phaseMissing(goLiveMs))flag('Go-live date (add a milestone with type "Go-live", or mark N/A) — not inferred from Installation','optional');
+  if(!kickoffMs)flag('Kickoff date hasn\'t been set — using today\'s date. Add the real date under Key Project Dates.','optional');
+  if(phaseMissing(uiMs))flag('UI Development date not set. Add it under Key Project Dates, or mark N/A if this project has no custom UI work.','optional');
+  if(timelinePhases.qaqc===TBC)flag('QA start/end dates not set. Add them under Key Project Dates.','optional');
+  if(phaseMissing(uatMs))flag('UAT date not set. Add it under Key Project Dates, or mark N/A.','optional');
+  if(phaseMissing(trainingMs))flag('Training date not set. Add it under Key Project Dates, or mark N/A.','optional');
+  if(!instGoLive.date&&!instGoLive.notApplicable)flag('Installation / Go-Live is not scheduled. Add it under Key Project Dates.','optional');
+  if(instGoLive.conflict)flag(`Installation date and an older Go-Live milestone disagree (Installation: ${fmtFull(instGoLive.date)}, Go-Live: ${fmtFull(instGoLive.conflict)}) — Installation is being used. Review under Key Project Dates.`,'important');
 
   // 5. Shipping locations — new normalized table (shipping_locations) with
   // real contact fields, falling back to the existing per-SO address logic
@@ -8072,22 +8606,29 @@ async function buildProjectDocPackage(projId,soTag=''){
         const c=so?getSOConfigSummary(proj,so):cfg;
         return{siteName:so||proj.name||'',address:c.address||proj.location||'',sequence:i+1,contactName:'',contactEmail:'',contactPhone:''};
       }).filter(s=>s.address);
-      if(shipping.length)flag('Shipping site names/contacts are inferred from SO address data — no dedicated shipping_locations rows entered yet','optional');
+      if(shipping.length)flag('Shipping information is currently using the Sales Order address. Convert it into a shipping location under Shipping Locations to add the site name and delivery contact.','optional');
     }
-    if(!shipping.length)flag('Shipping address(es)','important');
-    else if(shipping.some(s=>!s.contactName))flag('Site contact name/email/phone missing for one or more sites','optional');
+    if(!shipping.length)flag('No shipping address on file. Add a shipping location under Shipping Locations.','important');
+    else if(shipping.some(s=>!s.contactName))flag('Site contact name/email/phone missing for one or more sites. Add them under Shipping Locations.','optional');
   }
 
   // 6. Client deliverables — matched by stable doc_key where the task has been
-  // tagged, falling back to label matching for anything not yet tagged (see
-  // migration: pm_tasks.doc_key, nullable, additive). Client-facing labels in
-  // the PowerPoint are unchanged either way — doc_key only changes how we
-  // find the right pm_tasks row, never what's printed on the slide.
-  const deliverables=(pmTasks||[]).map(t=>({label:t.label||'',dueDate:t.due_date?fmtFull(t.due_date):'',status:t.status||'Pending',notes:t.notes||'',docKey:t.doc_key||null}));
-  if(!deliverables.length)flag('Client deliverables (no PM tasks recorded for this project yet)','optional');
+  // tagged, falling back to label matching for anything not yet tagged.
+  // include_in_report lets a PM keep an internal-only task in pm_tasks
+  // without it ever reaching a client document. Date display follows
+  // displayScheduledValue: no TBC/"To Be Confirmed" next to Done, N/A, or Cancelled.
+  const deliverables=(pmTasks||[])
+    .filter(t=>t.include_in_report!==false)
+    .map(t=>({
+      label:t.label||'',
+      dueDate:displayScheduledValue({value:t.due_date?fmtFull(t.due_date):'',status:t.status,required:false}),
+      status:t.status||'Not Started',notes:t.notes||'',docKey:t.doc_key||null,
+      owner:t.owner||'',soTag:t.so_tag||'',
+    }));
+  if(!deliverables.length)flag('No client deliverables recorded yet. Add them under PM Tasks.','optional');
   else{
     const untagged=deliverables.filter(d=>!d.docKey);
-    if(untagged.length)flag(`${untagged.length} deliverable(s) not tagged with a stable doc_key — matched by label text, which breaks silently if the label is edited`,'optional');
+    if(untagged.length)flag(`${untagged.length} deliverable(s) aren't tagged with a stable document key yet — matched by name instead, which can break if the name is edited. Tag them under PM Tasks.`,'optional');
     const allRows=[...ROW_LABELS_16,...ROW_LABELS_19];
     const ambiguousRows=[];
     const matchedDeliverableIds=new Set();
@@ -8096,7 +8637,9 @@ async function buildProjectDocPackage(projId,soTag=''){
       if(matches.length>1)ambiguousRows.push(row);
       matches.forEach(m=>matchedDeliverableIds.add(m.label+'|'+m.dueDate+'|'+m.docKey));
     });
-    if(ambiguousRows.length)flag(`Ambiguous deliverable match — more than one task matches: ${ambiguousRows.join(', ')}`,'important');
+    if(ambiguousRows.length)flag(`More than one deliverable matches the same slot: ${ambiguousRows.join(', ')}. Review under PM Tasks.`,'important');
+    const noDate=deliverables.filter(d=>!d.dueDate&&!['Done','N/A','Cancelled'].includes(d.status));
+    if(noDate.length)flag(`${noDate.length} active deliverable(s) don't have a target date yet. Add them under PM Tasks.`,'optional');
     const unmatched=deliverables.filter(d=>!matchedDeliverableIds.has(d.label+'|'+d.dueDate+'|'+d.docKey));
     if(unmatched.length)flag(`${unmatched.length} deliverable(s) don't match any slot on the Client Deliverables slides and won't appear: ${unmatched.map(d=>d.label).join(', ')}`,'optional');
   }
@@ -8447,8 +8990,7 @@ const WEEKLY_TIMELINE_PHASES=[
   {label:'Production',stageIds:['parts-arrive','production']},
   {label:'QA',stageIds:['qa']},
   {label:'Shipping',stageIds:['shipping','delivered']},
-  {label:'Deployment',stageIds:['installation']},
-  {label:'Go Live',stageIds:['complete']},
+  {label:'Installation / Go-Live',stageIds:['installation','complete']},
 ];
 function currentReportingPeriod(){
   // Monday–Sunday of the current week, matching how the rest of Ops Hub
@@ -8490,18 +9032,19 @@ async function buildWeeklyStatusPackage(projId,soScope=''){
   const overdueCount=projMs.filter(m=>isMilestoneOverdue(m)).length;
   const atRiskCount=projMs.filter(m=>isMilestoneAtRisk(m)).length;
   const overallHealth=overdueCount>0?'Red':atRiskCount>0?'Yellow':'Green';
-  const goLiveMs=projMs.find(m=>m.key==='go-live');
-  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const instGoLive=resolveInstallationGoLive(projMs);
+  const soList=getSOList(proj);
   const header={
     projectName:proj.name||'',client:proj.client||'',
     salesOrders:soScope?[soScope]:(soList.length?soList:[proj.so_number||'']).filter(Boolean),
     reportingPeriod:period,pm:proj.pm||'',
     currentPhase:stageInfo?.label||'—',
     overallHealth,
-    targetGoLive:goLiveMs?.not_applicable?'N/A':(goLiveMs?.date?fmtFull(goLiveMs.date):'To Be Confirmed'),
+    targetGoLive:instGoLive.label,
   };
   if(!header.pm)flag('Project Manager','important');
-  if(!goLiveMs?.date&&!goLiveMs?.not_applicable)flag('Target Go-live date (add a milestone with type "Go-live", or mark N/A)','optional');
+  if(!instGoLive.date&&!instGoLive.notApplicable)flag('Installation / Go-Live is not scheduled. Add it under Key Project Dates.','optional');
+  if(instGoLive.conflict)flag('Installation date and an older Go-Live milestone disagree — Installation is being used. Review under Key Project Dates.','important');
 
   // ── Executive summary — saved per reporting period, loaded here so the
   // review screen shows last-saved text (or blank) rather than starting
@@ -8515,34 +9058,62 @@ async function buildWeeklyStatusPackage(projId,soScope=''){
   }
   if(!executiveSummary.trim())flag('Executive summary not yet written for this period','important');
 
+  // ── Current Client Update — a separate, not-period-scoped field
+  // (project_sections['client_updates']), the same source Client Export used
+  // to read before being retired. Kept as its own section rather than merged
+  // into the period-scoped Executive Summary above — different purpose,
+  // different update cadence. ──
+  let clientUpdate='';
+  {
+    const{data,error}=await sb.from('project_sections').select('content').eq('project_id',projId).eq('section_key','client_updates').maybeSingle();
+    if(error)console.warn('project_sections (client_updates) load error',error);
+    clientUpdate=data?.content||'';
+  }
+
+  // ── Key links — carried forward from the retired Client Export, which
+  // showed these to clients directly. ──
+  const{data:linkRows,error:linkErr}=await sb.from('project_links').select('*').eq('project_id',projId);
+  if(linkErr)console.warn('project_links load error (weekly status)',linkErr);
+  const keyLinks=(linkRows||[]).filter(l=>l.url&&/vision training|facility site survey|it site survey|deployment plan/i.test(l.label||''));
+
   // ── Client deliverables & commitments — pm_tasks, same source as the
-  // kickoff deck's deliverables slide, each with an include toggle
-  // defaulting to true (PM excludes via checkbox, not by deleting data). ──
-  const deliverables=(pmTasks||[]).map(t=>({
-    id:t.id,label:t.label||'',soTag:t.so_tag||'',targetDate:t.due_date?fmtFull(t.due_date):'',
-    status:t.status||'Pending',included:true,
-  })).filter(d=>!soScope||!d.soTag||d.soTag===soScope);
+  // kickoff deck's deliverables slide. include toggle (review-time,
+  // per-generation) defaults true; include_in_report (persistent, set on
+  // the PM Tasks row) filters out internal-only tasks before that. ──
+  const deliverables=(pmTasks||[])
+    .filter(t=>t.include_in_report!==false)
+    .map(t=>({
+      id:t.id,label:t.label||'',soTag:t.so_tag||'',owner:t.owner||'',docKey:t.doc_key||null,
+      targetDate:displayScheduledValue({value:t.due_date?fmtFull(t.due_date):'',status:t.status,required:false}),
+      status:t.status||'Not Started',included:true,
+    })).filter(d=>!soScope||!d.soTag||d.soTag===soScope);
 
   // ── Project snapshot ──
-  const doneCount=projMs.filter(m=>isMilestoneDone(m)).length;
-  const completionPct=projMs.length?Math.round(100*doneCount/projMs.length):0;
-  const nextMs=projMs.filter(m=>!isMilestoneDone(m)&&m.date&&!m.not_applicable).sort((a,b)=>(a.date||'').localeCompare(b.date||''))[0];
+  const applicableMs=getApplicableMilestones(projMs);
+  const completionStats=getMilestoneCompletionStats(projMs);
+  const doneCount=completionStats.completed;
+  const completionPct=completionStats.percentage;
+  const nextMs=applicableMs.filter(m=>!isMilestoneDone(m)&&m.date).sort((a,b)=>(a.date||'').localeCompare(b.date||''))[0];
   const shipMs=projMs.find(m=>m.key==='shipping');
   const hwRes=await sb.from('hardware_line_items').select('quantity').eq('project_id',projId);
   if(hwRes.error)console.warn('hardware_line_items load error (weekly status)',hwRes.error);
-  const machineCount=(hwRes.data||[]).reduce((sum,h)=>sum+(h.quantity||1),0);
+  const hwResolved=resolveProjectHardware(proj,hwRes.data);
+  const machineCount=hwResolved.quantity;
   const shipRes=await sb.from('shipping_locations').select('id').eq('project_id',projId);
   if(shipRes.error)console.warn('shipping_locations load error (weekly status)',shipRes.error);
-  const shippingSiteCount=shipRes.data?.length||soList.length||(proj.location?1:0);
+  const shipResolved=resolveProjectShippingLocations(proj,shipRes.data);
+  const shippingSiteCount=shipResolved.count;
   const snapshot={
     completionPct,currentPhase:header.currentPhase,
-    nextMilestone:nextMs?`${TYPE_LBL[nextMs.key]||nextMs.label} — ${fmtFull(nextMs.date)}`:'—',
-    targetShipDate:shipMs?.date?fmtFull(shipMs.date):'To Be Confirmed',
-    targetGoLive:header.targetGoLive,
-    machines:machineCount,milestonesCompleted:`${doneCount} / ${projMs.length}`,
+    nextMilestone:nextMs?`${getMilestoneDisplayLabel(nextMs)} — ${fmtFull(nextMs.date)}`:'—',
+    targetShipDate:displayScheduledValue({value:shipMs?.date?fmtFull(shipMs.date):'',notApplicable:shipMs?.not_applicable,required:true}),
+    targetGoLive:instGoLive.label,
+    machines:machineCount,milestonesCompleted:`${doneCount} / ${applicableMs.length}`,
     shippingSites:shippingSiteCount,
   };
-  if(!machineCount)flag('No hardware line items recorded — Machines will show 0','optional');
+  if(!machineCount)flag('Hardware details have not been entered. Add hardware models and quantities under Hardware.','optional');
+  else if(hwResolved.source==='legacy')flag(`Hardware is using the legacy project quantity (${machineCount}). Convert it to detailed hardware lines under Hardware.`,'optional');
+  if(shipResolved.source==='legacy')flag('Shipping site count is using the Sales Order address, not a dedicated shipping location. Add one under Shipping Locations.','optional');
 
   // ── Project timeline — major client-facing phases only, mapped from the
   // same PIPELINE_STAGES the Pipeline Board uses. ──
@@ -8556,37 +9127,43 @@ async function buildWeeklyStatusPackage(projId,soScope=''){
     const relevantKeys=PIPELINE_STAGES.filter(s=>phase.stageIds.includes(s.id)).map(s=>s.key);
     const dates=projMs.filter(m=>relevantKeys.includes(m.key)&&m.date).map(m=>m.date).sort();
     const completion=status==='Complete'?100:status==='Upcoming'?0:50;
-    return{label:phase.label,status,dateRange:dates.length?`${fmtFull(dates[0])}${dates.length>1?' – '+fmtFull(dates[dates.length-1]):''}`:'To Be Confirmed',owner:header.pm||'—',completion};
+    return{label:phase.label,status,dateRange:dates.length?`${fmtFull(dates[0])}${dates.length>1?' – '+fmtFull(dates[dates.length-1]):''}`:'Not Scheduled',owner:header.pm||'—',completion};
   });
 
   // ── Completed this week — milestones/pm_tasks/deliverables/client
   // actions whose date falls in the current reporting period. Each gets an
-  // `included` toggle (default true); nothing here is auto-excluded. ──
+  // `included` toggle (default true); nothing here is auto-excluded.
+  // Deduplicated afterward — the same real-world thing tracked as both a
+  // milestone and a pm_task (e.g. "Vinyl") should show once, not twice. ──
   const inPeriod=d=>d&&d>=period.start&&d<=period.end;
-  const completedThisWeek=[
-    ...projMs.filter(m=>isMilestoneDone(m)&&inPeriod(m.date)).map(m=>({description:TYPE_LBL[m.key]||m.label,date:fmtFull(m.date),owner:header.pm||'—',included:true,source:'milestone'})),
-    ...(pmTasks||[]).filter(t=>/complete|done/i.test(t.status||'')&&inPeriod(t.due_date)).map(t=>({description:t.label,date:fmtFull(t.due_date),owner:header.pm||'—',included:true,source:'deliverable'})),
-    ...(actionItems||[]).filter(a=>a.status==='Done'&&inPeriod(a.due_date)).map(a=>({description:a.description,date:a.due_date?fmtFull(a.due_date):'',owner:a.owner||'—',included:true,source:'action'})),
+  let completedThisWeek=[
+    ...projMs.filter(m=>isMilestoneDone(m)&&inPeriod(m.date)).map(m=>({name:getMilestoneDisplayLabel(m),description:getMilestoneDisplayLabel(m),date:fmtFull(m.date),rawDate:m.date,soTag:m.so_tag||'',owner:header.pm||'—',included:true,source:'milestone'})),
+    ...(pmTasks||[]).filter(t=>t.include_in_report!==false&&/complete|done/i.test(t.status||'')&&inPeriod(t.due_date)).map(t=>({name:t.label,description:t.label,date:fmtFull(t.due_date),rawDate:t.due_date,soTag:t.so_tag||'',owner:t.owner||header.pm||'—',included:true,source:'deliverable'})),
+    ...(actionItems||[]).filter(a=>a.status==='Done'&&inPeriod(a.due_date)).map(a=>({name:a.description,description:a.description,date:a.due_date?fmtFull(a.due_date):'',rawDate:a.due_date,soTag:'',owner:a.owner||'—',included:true,source:'action'})),
   ];
+  completedThisWeek=deduplicateReportActivities(completedThisWeek);
 
   // ── Upcoming activities — next 30 days, not yet done. Sorted on the raw
-  // ISO date (sortKey), never the human-formatted display string — "Aug 25"
-  // sorts before "Aug 5" lexicographically, which silently scrambles order. ──
+  // ISO date (sortKey), never the human-formatted display string. Client-side
+  // open actions are excluded here — they belong exclusively in Client
+  // Actions Required, never in both places. Deduplicated afterward. ──
   const soon=isoD(addD(today(),30));
-  const upcoming=[
-    ...projMs.filter(m=>!isMilestoneDone(m)&&!m.not_applicable&&m.date&&m.date<=soon).map(m=>({activity:TYPE_LBL[m.key]||m.label,targetDate:fmtFull(m.date),sortKey:m.date,owner:header.pm||'—',included:true,source:'milestone'})),
-    ...(pmTasks||[]).filter(t=>!/complete|done/i.test(t.status||'')&&t.due_date&&t.due_date<=soon).map(t=>({activity:t.label,targetDate:fmtFull(t.due_date),sortKey:t.due_date,owner:header.pm||'—',included:true,source:'deliverable'})),
-    ...(actionItems||[]).filter(a=>a.status==='Open'&&a.due_date&&a.due_date<=soon).map(a=>({activity:a.description,targetDate:fmtFull(a.due_date),sortKey:a.due_date,owner:a.owner||'—',included:true,source:'action'})),
-  ].sort((a,b)=>(a.sortKey||'').localeCompare(b.sortKey||''));
+  let upcoming=[
+    ...projMs.filter(m=>!isMilestoneDone(m)&&!m.not_applicable&&m.date&&m.date<=soon).map(m=>({name:getMilestoneDisplayLabel(m),activity:getMilestoneDisplayLabel(m),targetDate:fmtFull(m.date),sortKey:m.date,soTag:m.so_tag||'',owner:header.pm||'—',included:true,source:'milestone'})),
+    ...(pmTasks||[]).filter(t=>t.include_in_report!==false&&!/complete|done/i.test(t.status||'')&&t.status!=='N/A'&&t.status!=='Cancelled'&&t.due_date&&t.due_date<=soon).map(t=>({name:t.label,activity:t.label,targetDate:fmtFull(t.due_date),sortKey:t.due_date,soTag:t.so_tag||'',owner:t.owner||header.pm||'—',included:true,source:'deliverable'})),
+    ...(actionItems||[]).filter(a=>a.status==='Open'&&a.side!=='Client'&&a.due_date&&a.due_date<=soon).map(a=>({name:a.description,activity:a.description,targetDate:fmtFull(a.due_date),sortKey:a.due_date,soTag:'',owner:a.owner||'—',included:true,source:'action'})),
+  ];
+  upcoming=deduplicateReportActivities(upcoming).sort((a,b)=>(a.sortKey||'').localeCompare(b.sortKey||''));
 
   // ── Client actions required — hidden entirely if empty, per spec. ──
-  const clientActionsRequired=(actionItems||[]).filter(a=>a.side==='Client'&&a.status==='Open').map(a=>({action:a.description,owner:a.owner||'—',dueDate:a.due_date?fmtFull(a.due_date):'To Be Confirmed',status:a.status}));
+  const clientActionsRequired=(actionItems||[]).filter(a=>a.side==='Client'&&a.status==='Open').map(a=>({action:a.description,owner:a.owner||'—',dueDate:a.due_date?fmtFull(a.due_date):'Not Scheduled',status:a.status}));
   const unclassifiedOpenActions=(actionItems||[]).filter(a=>a.status==='Open'&&!a.side).length;
-  if(unclassifiedOpenActions)flag(`${unclassifiedOpenActions} open action item(s) have no Side set — won't appear in Client Actions Required until tagged`,'optional');
+  if(unclassifiedOpenActions)flag(`${unclassifiedOpenActions} open action item${unclassifiedOpenActions===1?' is':'s are'} unclassified. Mark each as Client or Signifi under Action Items.`,'optional');
 
   // ── Contacts — reuses the same resolver the kickoff deck uses. ──
-  const{stakeholders,stakeholdersSignifi,stakeholdersClient,conflicts}=resolveProjectStakeholders(proj,team);
+  const{stakeholders,stakeholdersSignifi,stakeholdersClient,conflicts,unclassifiedCount}=resolveProjectStakeholders(proj,team);
   if(conflicts.length)flag(`${conflicts.length} stakeholder conflict(s) — same role, different name in project fields vs. team list`,'important');
+  if(unclassifiedCount)flag(`${unclassifiedCount} project contact(s) aren't marked as Signifi or Client yet. Classify them under Project Team.`,'optional');
   const findRole=(list,re)=>list.find(s=>re.test(s.role||''))?.name||'';
   const contacts={
     signifiPM:proj.pm||'',
@@ -8605,7 +9182,7 @@ async function buildWeeklyStatusPackage(projId,soScope=''){
   const now=new Date();
   const actionAging=openActions.map(a=>({description:a.description,owner:a.owner||'—',ageDays:a.created_at?Math.round((now-new Date(a.created_at))/86400000):null}));
   const slipped=projMs.filter(m=>m.original_date&&m.date&&m.original_date!==m.date);
-  const scheduleVariance=slipped.map(m=>({milestone:TYPE_LBL[m.key]||m.label,originalDate:fmtFull(m.original_date),currentDate:fmtFull(m.date),varianceDays:Math.round((new Date(m.date+'T00:00:00')-new Date(m.original_date+'T00:00:00'))/86400000)}));
+  const scheduleVariance=slipped.map(m=>({milestone:getMilestoneDisplayLabel(m),originalDate:fmtFull(m.original_date),currentDate:fmtFull(m.date),varianceDays:Math.round((new Date(m.date+'T00:00:00')-new Date(m.original_date+'T00:00:00'))/86400000)}));
   const internalReview={
     openRisks,openIssues,scheduleVariance,
     decisions:(decisions||[]).slice(0,10),
@@ -8614,7 +9191,7 @@ async function buildWeeklyStatusPackage(projId,soScope=''){
   };
   flag('Dependencies are not tracked anywhere in Ops Hub yet — Internal Review will show this section empty','optional');
 
-  return{proj,header,executiveSummary,deliverables,snapshot,timeline,completedThisWeek,upcoming,clientActionsRequired,contacts,internalReview,missing,
+  return{proj,soScope,header,executiveSummary,clientUpdate,keyLinks,deliverables,snapshot,timeline,completedThisWeek,upcoming,clientActionsRequired,contacts,internalReview,missing,
     readiness:{missingImportant:missing.filter(m=>m.severity==='important'),missingOptional:missing.filter(m=>m.severity==='optional')}};
 }
 
@@ -8679,7 +9256,7 @@ async function renderKickoffPreview(){
 // ══════════════ WEEKLY STATUS REPORT — UI ══════════════
 function renderWeeklyStatusSection(){
   const proj=projects.find(p=>p.id===selectedDocProjId);
-  const soList=(proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   const isMultiSO=soList.length>1;
   return`<div id="wsr-scope" class="wsr-no-print">
     ${isMultiSO?`<div class="pp-card" style="margin-bottom:12px"><div class="pp-card-head"><span class="pp-card-title">Report scope</span></div>
@@ -8730,10 +9307,19 @@ async function renderWeeklyStatusReview(){
       <b>${r.missingOptional.length} optional item(s):</b><br>${r.missingOptional.map(m=>'• '+esc(m.text)).join('<br>')}
     </div>`:''}
 
-    <div class="pp-card" style="margin-bottom:12px"><div class="pp-card-head"><span class="pp-card-title">Executive summary</span><span style="font-size:10px;color:var(--gray-400)">Reporting period: ${esc(pkg.header.reportingPeriod.start)} – ${esc(pkg.header.reportingPeriod.end)}</span></div>
+    <div class="pp-card" style="margin-bottom:12px"><div class="pp-card-head"><span class="pp-card-title">Weekly Executive Summary</span><span style="font-size:10px;color:var(--gray-400)">Reporting period: ${esc(pkg.header.reportingPeriod.start)} – ${esc(pkg.header.reportingPeriod.end)}</span></div>
       <div class="pp-card-body">
+        <div style="font-size:10.5px;color:var(--gray-400);margin-bottom:6px">Reporting-period-specific summary for this Weekly Status Report. Earlier reports remain unchanged.</div>
         <textarea id="wsr-summary" placeholder="What happened this week, in plain terms, for the client to read..." style="width:100%;min-height:90px;font-family:var(--font);font-size:13px;padding:9px;border:1px solid var(--gray-300);border-radius:var(--radius)">${esc(pkg.executiveSummary)}</textarea>
         <button onclick="wsrSaveSummary()" style="margin-top:6px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer">Save summary</button>
+      </div>
+    </div>
+
+    <div class="pp-card" style="margin-bottom:12px"><div class="pp-card-head"><span class="pp-card-title">Current Client Update</span><span style="font-size:10px;color:var(--gray-400)">Not period-scoped</span></div>
+      <div class="pp-card-body">
+        <div style="font-size:10.5px;color:var(--gray-400);margin-bottom:6px">Current client-facing message included in the Weekly Status Report until it is updated. Same field as the Project Page's Current Client Update box.</div>
+        <textarea id="wsr-client-update" placeholder="A standing update for the client — not tied to a specific week..." style="width:100%;min-height:70px;font-family:var(--font);font-size:13px;padding:9px;border:1px solid var(--gray-300);border-radius:var(--radius)">${esc(pkg.clientUpdate)}</textarea>
+        <button onclick="wsrSaveClientUpdate()" style="margin-top:6px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer">Save client update</button>
       </div>
     </div>
 
@@ -8779,6 +9365,31 @@ async function wsrSaveSummary(){
   const ok=await saveWeeklyStatusSummary(selectedDocProjId,soScope,text);
   if(ok){wsrPkg.executiveSummary=text;showToast('Summary saved ✓');renderWeeklyStatusPreviewPane();}
 }
+async function wsrSaveClientUpdate(){
+  const text=document.getElementById('wsr-client-update')?.value||'';
+  // Same table/key the Project Page's own "Client Updates" textarea uses —
+  // mirrors savePPSection()'s exact check-existing-then-branch pattern
+  // (there's no DB-level unique constraint to upsert against), but scoped to
+  // selectedDocProjId rather than ppProjId — the Communications tab can be
+  // open on a different project than whatever's loaded on the Project Page.
+  const{data:existing,error:findErr}=await sb.from('project_sections').select('id').eq('project_id',selectedDocProjId).eq('section_key','client_updates').maybeSingle();
+  if(findErr){showToast('⚠ Save failed: '+findErr.message);return;}
+  let saveErr;
+  if(existing){
+    const{error}=await sb.from('project_sections').update({content:text,updated_by:currentUserName,updated_at:new Date().toISOString()}).eq('id',existing.id);
+    saveErr=error;
+  } else {
+    const{error}=await sb.from('project_sections').insert({project_id:selectedDocProjId,section_key:'client_updates',content:text,updated_by:currentUserName});
+    saveErr=error;
+  }
+  if(saveErr){showToast('⚠ Save failed: '+saveErr.message);return;}
+  // Keep the Project Page's own copy of this same field in sync if it's
+  // the same project currently loaded there.
+  if(ppProjId===selectedDocProjId&&ppData.sections)ppData.sections['client_updates']={content:text};
+  if(wsrPkg)wsrPkg.clientUpdate=text;
+  showToast('Client update saved ✓');
+  renderWeeklyStatusPreviewPane();
+}
 
 // Builds the client-facing report HTML — used for both the on-screen
 // preview and the print/PDF output (same markup, #wsr-print-area is just
@@ -8790,7 +9401,8 @@ function renderWeeklyStatusReportHTML(pkg){
   const sec=(title,body)=>body?`<div style="margin-bottom:22px"><div style="font-size:11px;font-weight:700;color:#E22F4A;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;border-bottom:2px solid #1a1a1a;padding-bottom:4px">${esc(title)}</div>${body}</div>`:'';
   const table=(headers,rows)=>`<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>${headers.map(h=>`<th style="text-align:left;padding:5px 8px;background:#f3f4f6;font-size:10px;text-transform:uppercase;color:#6b6b6b">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
 
-  const deliverableRows=pkg.deliverables.filter(d=>d.included).map(d=>`<tr><td style="padding:6px 8px;border-top:1px solid #eee">${esc(d.label)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(d.soTag||'—')}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(d.targetDate||'TBC')}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(d.status)}</td></tr>`).join('');
+  const showSO=shouldShowSalesOrderColumn(pkg.proj,pkg.soScope);
+  const deliverableRows=pkg.deliverables.filter(d=>d.included).map(d=>`<tr><td style="padding:6px 8px;border-top:1px solid #eee">${esc(d.label)}</td>${showSO?`<td style="padding:6px 8px;border-top:1px solid #eee">${esc(d.soTag||'—')}</td>`:''}<td style="padding:6px 8px;border-top:1px solid #eee">${esc(d.targetDate)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(d.status)}</td></tr>`).join('');
   const completedRows=pkg.completedThisWeek.filter(c=>c.included).map(c=>`<tr><td style="padding:6px 8px;border-top:1px solid #eee">${esc(c.description)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(c.date)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(c.owner)}</td></tr>`).join('');
   const upcomingRows=pkg.upcoming.filter(u=>u.included).map(u=>`<tr><td style="padding:6px 8px;border-top:1px solid #eee">${esc(u.activity)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(u.targetDate)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(u.owner)}</td></tr>`).join('');
 
@@ -8807,7 +9419,7 @@ function renderWeeklyStatusReportHTML(pkg){
 
   const contactsHtml=`<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:12px">
     ${[['Signifi PM',pkg.contacts.signifiPM],['Client PM',pkg.contacts.clientPM],['Deployment Lead',pkg.contacts.deploymentLead],['Support Contact',pkg.contacts.supportContact]]
-      .map(([label,val])=>`<div><span style="color:#999">${esc(label)}:</span> <b>${esc(val||'To Be Confirmed')}</b></div>`).join('')}
+      .map(([label,val])=>`<div><span style="color:#999">${esc(label)}:</span> <b>${esc(val||'Not assigned')}</b></div>`).join('')}
   </div>`;
 
   const clientBody=`<div style="font-family:var(--font,Arial,sans-serif);max-width:900px;margin:0 auto;background:white;color:#1a1a1a">
@@ -8830,13 +9442,15 @@ function renderWeeklyStatusReportHTML(pkg){
         <div><b style="color:#1a1a1a">Target Go-Live:</b> ${esc(h.targetGoLive)}</div>
       </div>
       ${sec('Executive Summary',pkg.executiveSummary?`<div style="font-size:13px;line-height:1.6;white-space:pre-wrap">${esc(pkg.executiveSummary)}</div>`:'<div style="font-size:12px;color:#999;font-style:italic">No summary written for this period yet.</div>')}
-      ${sec('Client Deliverables & Commitments',deliverableRows?table(['Deliverable','SO','Target Date','Status'],deliverableRows):'')}
+      ${pkg.clientUpdate?sec('Current Client Update',`<div style="font-size:13px;line-height:1.6;white-space:pre-wrap">${esc(pkg.clientUpdate)}</div>`):''}
+      ${sec('Client Deliverables & Commitments',deliverableRows?table(showSO?['Deliverable','Sales Order','Target Date','Status']:['Deliverable','Target Date','Status'],deliverableRows):'')}
       ${sec('Project Snapshot',snapshotHtml)}
       ${sec('Project Timeline',`<div style="display:flex;gap:8px;flex-wrap:wrap">${timelineHtml}</div>`)}
       ${sec('Completed This Week',completedRows?table(['Description','Date','Owner'],completedRows):'<div style="font-size:12px;color:#999;font-style:italic">Nothing completed in this period.</div>')}
       ${sec('Upcoming Activities',upcomingRows?table(['Activity','Target Date','Owner'],upcomingRows):'')}
       ${pkg.clientActionsRequired.length?sec('Client Actions Required',table(['Action','Owner','Due Date','Status'],pkg.clientActionsRequired.map(a=>`<tr><td style="padding:6px 8px;border-top:1px solid #eee">${esc(a.action)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(a.owner)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(a.dueDate)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(a.status)}</td></tr>`).join(''))):''}
       ${sec('Project Contacts',contactsHtml)}
+      ${pkg.keyLinks&&pkg.keyLinks.length?sec('Key Links',pkg.keyLinks.map(l=>`<div style="font-size:12px;padding:3px 0"><a href="${esc(l.url)}" target="_blank" style="color:#1d4ed8;text-decoration:none">🔗 ${esc(l.label)}</a></div>`).join('')):''}
       <div style="margin-top:24px;padding-top:14px;border-top:1px solid #eee;font-size:10px;color:#aaa;text-align:center">SIGNIFI SOLUTIONS · CONFIDENTIAL — PREPARED FOR ${esc(h.client).toUpperCase()}</div>
     </div>
   </div>`;
@@ -8920,7 +9534,7 @@ function renderGenDocs(){
         ${(()=>{
           if(!selectedDocProjId)return'';
           const dp=projects.find(p=>p.id===selectedDocProjId);
-          const dSoList=(dp?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+          const dSoList=getSOList(dp);
           const dHasSoTags=milestones.some(m=>m.project_id===selectedDocProjId&&m.so_tag);
           if(dSoList.length<=1&&!dHasSoTags)return'';
           return'<div class="proj-select-row" style="margin-top:6px"><label>SO</label>'
@@ -9122,7 +9736,7 @@ function renderQAForm(){
   const soDet=getEffectiveSODetail(p,selectedDocSO);
   const shipDate=getDocDate('shipping');
   const vinylDate=getDocDate('vinyl');
-  const soNum=selectedDocSO||((p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean).length===1?(p.so_number||'').trim():p.so_number||'');
+  const soNum=selectedDocSO||(getSOList(p).length===1?(p.so_number||'').trim():p.so_number||'');
   const address=soDet?.address??p.address??'';
   const naming=soDet?.naming_convention??p.naming_convention??'';
   const formFactor=soDet?.form_factor||[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'';
@@ -9319,7 +9933,7 @@ ${g('uf-special')?`\nNotes:\n${g('uf-special')}`:''}`;
   } else {
     const qaP=proj||getDocProj();
     const qaSoDet=getEffectiveSODetail(qaP,selectedDocSO);
-    const qaSoNum=selectedDocSO||((qaP.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean).length===1?(qaP.so_number||'').trim():safeGet('qf-so')||qaP.so_number||'');
+    const qaSoNum=selectedDocSO||(getSOList(qaP).length===1?(qaP.so_number||'').trim():safeGet('qf-so')||qaP.so_number||'');
     const qaAddress=qaSoDet?.address??safeGet('qf-address')??qaP.address??'';
     const qaNaming=qaSoDet?.naming_convention??g('qf-naming')??qaP.naming_convention??'';
     text=`QA TASK
@@ -10181,7 +10795,7 @@ async function loadUATRunnerProject(projId){
   uatRunnerProjId=projId;
   uatRunnerSessionId=null;
   const proj=projects.find(p=>p.id===projId);
-  const soList=(proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   uatRunnerSOTag=soList.length===1?soList[0]:''; // auto-set for single-SO projects; multi-SO asks below
   const[m,s]=await Promise.all([
     sb.from('uat_machines').select('*').eq('project_id',projId),
@@ -10628,7 +11242,7 @@ function renderUATRun(){
   }
   const proj=projects.find(p=>p.id===uatRunnerProjId);
   if(!proj){el.innerHTML=header;return;}
-  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   // Multi-SO project, no SO chosen yet — ask which SO this checklist run is for.
   // Selecting one drives address/naming (via so_details) and scopes the machine list.
   if(soList.length>1&&!uatRunnerSOTag){
@@ -10844,7 +11458,7 @@ function findGhostSOs(){
     if(!m.so_tag)return;
     const proj=projects.find(p=>p.id===m.project_id);
     if(!proj)return;
-    const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+    const soList=getSOList(proj);
     if(soList.includes(m.so_tag))return;
     const key=proj.id+'|'+m.so_tag;
     if(!groups[key])groups[key]={projId:proj.id,projName:proj.name,soTag:m.so_tag,msIds:[]};
@@ -10926,6 +11540,19 @@ function renderSettings(){
       </div>
     </div>`:'';
 
+  const legacyDelivProjects=projects.filter(p=>Array.isArray(p.client_deliverables)&&p.client_deliverables.length);
+  const delivMigrationSection=`
+    <div class="section" style="max-width:700px;margin-top:16px">
+      <div class="section-head"><div class="section-title">🔄 Client Deliverables Migration</div></div>
+      <div style="padding:1.5rem">
+        <div style="background:#fffbeb;border:1px solid #d97706;border-radius:8px;padding:12px 16px;margin-bottom:16px">
+          <div style="font-size:13px;font-weight:600;color:#92400e;margin-bottom:4px">Client Export has been retired</div>
+          <div style="font-size:12px;color:#a16207;line-height:1.6">PM Tasks is now the only source the Kickoff Deck and Weekly Status Report read deliverables from. ${legacyDelivProjects.length?legacyDelivProjects.length+' project(s) still have data in the old legacy field.':'No projects currently have legacy data to migrate.'} Running this copies that data into PM Tasks — it never deletes the legacy field, and it's safe to run more than once.</div>
+        </div>
+        <button onclick="openMigrationRunner()"${legacyDelivProjects.length?'':' disabled'} style="font-size:12px;padding:8px 18px;border-radius:var(--radius);border:none;background:${legacyDelivProjects.length?'#d97706':'var(--gray-300)'};color:white;cursor:${legacyDelivProjects.length?'pointer':'not-allowed'};font-family:var(--font);font-weight:600">↗ Migrate legacy deliverables to PM Tasks</button>
+      </div>
+    </div>`;
+
   el.innerHTML=`
     <div class="section" style="max-width:700px">
       <div class="section-head">
@@ -10958,6 +11585,7 @@ function renderSettings(){
       </div>
     </div>
     ${migrationSection}
+    ${delivMigrationSection}
     ${ghostSOSection()}
     <div class="section" style="max-width:700px;margin-top:16px">
       <div class="section-head"><div class="section-title">🔵 Final QC — Add to all projects</div></div>
@@ -11065,7 +11693,7 @@ async function addFinalQCToAllProjects(){
     const hasSoTags=isProjectFullySplit(projMs);
     if(hasSoTags){
       // SO-split — handle per SO
-      const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+      const soList=getSOList(proj);
       const tagsSeen=[...new Set(projMs.map(m=>m.so_tag).filter(Boolean))];
       const allSOs=[...new Set([...soList,...tagsSeen])];
       for(const so of allSOs){
@@ -11542,7 +12170,7 @@ async function renamePPLink(oldLabel,newLabel){
 }
 function openLinksPopout(soOverride=''){
   const proj=projects.find(p=>p.id===ppProjId)||{};
-  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   const activeSO=soOverride||(soList.length===1?soList[0]:'');
   const soConfig=getSOConfigSummary(proj,activeSO);
   const ALL_LINKS=[
@@ -11629,396 +12257,16 @@ function openLinksPopout(soOverride=''){
   </div>`;
 }
 
-function openClientDeliverables(){
-  const proj=projects.find(p=>p.id===ppProjId);
-  if(!proj){showToast('No project selected');return;}
-  const pMs=milestones.filter(m=>m.project_id===ppProjId);
-  const msKeyMap={};pMs.forEach(m=>{msKeyMap[m.key]=m;});
-  const DEFAULT_DELIVS=[
-    {label:'Training',key:'training'},{label:'IT Site Survey',key:'it_survey'},
-    {label:'Facility Site Survey',key:'facility_survey'},{label:'Branding / Vinyl',key:'vinyl'},
-    {label:'Products / Hardware',key:'arrival'},{label:'Badge Reader Setup',key:'badge'},
-    {label:'Employee List',key:'employee'},{label:'UAT Sign-off',key:'uat'},
-    {label:'Installation',key:'installation'},
-  ];
-  const getDelivDate=(key)=>{const km={training:'training',vinyl:'vinyl',arrival:'arrival',uat:'uat',installation:'installation'};const mk=km[key];return mk&&msKeyMap[mk]?msKeyMap[mk].date:'';};
-  const saved=proj.client_deliverables||[];
-  const rows=DEFAULT_DELIVS.map(d=>{const s=saved.find(x=>x.key===d.key)||{};return{...d,date:s.date||getDelivDate(d.key)||'',status:s.status||'Pending',notes:s.notes||''};});
-  saved.filter(s=>!DEFAULT_DELIVS.find(d=>d.key===s.key)).forEach(s=>rows.push(s));
-
-  const rowsHtml=rows.map((d,i)=>`
-    <tr style="border-bottom:1px solid var(--gray-50)" id="cd-row-${i}">
-      <td style="padding:6px 8px;font-size:12px;white-space:nowrap">
-        <input type="text" value="${d.label.replace(/"/g,'&quot;')}" id="cd-label-${i}" style="font-family:var(--font);font-size:12px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:140px">
-      </td>
-      <td style="padding:4px 8px"><input type="date" value="${d.date||''}" id="cd-date-${i}" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:120px"></td>
-      <td style="padding:4px 8px">
-        <select id="cd-status-${i}" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px">
-          ${['Pending','In Progress','Complete','N/A'].map(s=>`<option${s===d.status?' selected':''}>${s}</option>`).join('')}
-        </select>
-      </td>
-      <td style="padding:4px 8px"><input type="text" value="${(d.notes||'').replace(/"/g,'&quot;')}" id="cd-notes-${i}" placeholder="Notes..." style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:100%"></td>
-      <td style="padding:4px 8px;text-align:center"><button onclick="document.getElementById('cd-row-${i}').remove();window._cdDeleted.add(${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px;line-height:1" title="Remove">✕</button></td>
-    </tr>`).join('');
-
-  document.getElementById('modal-root').innerHTML=`
-  <div class="modal-backdrop" onclick="closeModal()">
-    <div class="modal" style="width:700px;max-height:85vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
-      <div class="modal-head"><span class="modal-title">📋 Client Deliverables — ${proj.name}</span><button class="modal-close" onclick="closeModal()">×</button></div>
-      <div style="overflow-y:auto;flex:1;padding:12px 16px">
-        <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="border-bottom:2px solid var(--gray-200)">
-            <th style="padding:6px 8px;font-size:10px;font-weight:700;color:var(--gray-500);text-align:left;text-transform:uppercase">Deliverable</th>
-            <th style="padding:6px 8px;font-size:10px;font-weight:700;color:var(--gray-500);text-align:left;text-transform:uppercase">Due Date</th>
-            <th style="padding:6px 8px;font-size:10px;font-weight:700;color:var(--gray-500);text-align:left;text-transform:uppercase">Status</th>
-            <th style="padding:6px 8px;font-size:10px;font-weight:700;color:var(--gray-500);text-align:left;text-transform:uppercase">Notes</th>
-            <th style="width:30px"></th>
-          </tr></thead>
-          <tbody id="cd-rows">${rowsHtml}</tbody>
-        </table>
-        <div style="margin-top:10px;display:flex;gap:8px">
-          <input id="cd-new-label" placeholder="Add custom deliverable..." style="font-family:var(--font);font-size:12px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);flex:1">
-          <button class="btn btn-primary" onclick="cdAddRow()" style="font-size:12px">+ Add</button>
-        </div>
-      </div>
-      <div class="modal-actions">
-        <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveClientDeliverables('${proj.id}',${rows.length})">💾 Save</button>
-      </div>
-    </div>
-  </div>`;
-  window._cdRowCount=rows.length;
-  window._cdDeleted=new Set();
-}
-
-function cdAddRow(){
-  const labelVal=document.getElementById('cd-new-label')?.value.trim();
-  if(!labelVal)return;
-  const i=window._cdRowCount++;
-  const key=labelVal.toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9-]/g,'');
-  const tbody=document.getElementById('cd-rows');
-  if(!tbody)return;
-  const tr=document.createElement('tr');
-  tr.id='cd-row-'+i;
-  tr.style.borderBottom='1px solid var(--gray-50)';
-  tr.innerHTML=`
-    <td style="padding:6px 8px"><input type="text" value="${esc(labelVal)}" id="cd-label-${i}" style="font-family:var(--font);font-size:12px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:140px"><input type="hidden" id="cd-key-${i}" value="${key}"></td>
-    <td style="padding:4px 8px"><input type="date" id="cd-date-${i}" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:120px"></td>
-    <td style="padding:4px 8px"><select id="cd-status-${i}" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px"><option>Pending</option><option>In Progress</option><option>Complete</option><option>N/A</option></select></td>
-    <td style="padding:4px 8px"><input type="text" id="cd-notes-${i}" placeholder="Notes..." style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:100%"></td>
-    <td style="padding:4px 8px;text-align:center"><button onclick="this.closest('tr').remove();window._cdDeleted.add(${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px;line-height:1" title="Remove">✕</button></td>`;
-  tbody.appendChild(tr);
-  document.getElementById('cd-new-label').value='';
-}
-
-async function saveClientDeliverables(projId,count){
-  const rows=[];
-  const DEFAULT_KEYS=['training','it_survey','facility_survey','vinyl','arrival','badge','employee','uat','installation'];
-  for(let i=0;i<window._cdRowCount;i++){
-    if(window._cdDeleted&&window._cdDeleted.has(i))continue;
-    const rowEl=document.getElementById('cd-row-'+i);
-    if(!rowEl)continue; // row was deleted from DOM
-    const labelEl=document.getElementById('cd-label-'+i);
-    const dateEl=document.getElementById('cd-date-'+i);
-    const statusEl=document.getElementById('cd-status-'+i);
-    const notesEl=document.getElementById('cd-notes-'+i);
-    const keyEl=document.getElementById('cd-key-'+i);
-    const label=labelEl?labelEl.value.trim():(i<DEFAULT_KEYS.length?DEFAULT_KEYS[i]:'Custom');
-    const key=keyEl?keyEl.value:(i<DEFAULT_KEYS.length?DEFAULT_KEYS[i]:('custom-'+i));
-    if(!label)continue;
-    rows.push({key,label,date:dateEl?.value||'',status:statusEl?.value||'Pending',notes:notesEl?.value||''});
-  }
-  const{error}=await sb.from('projects').update({client_deliverables:rows}).eq('id',projId);
-  if(error){
-    alert('Error saving deliverables: '+error.message+'\n\nThe column may not exist yet — run this in Supabase:\nalter table projects add column if not exists client_deliverables jsonb default \'[]\'::jsonb;');
-    return;
-  }
-  const p=projects.find(x=>x.id===projId);if(p)p.client_deliverables=rows;
-  closeModal();showToast('Deliverables saved ✓');
-}
-function openClientExport(){
-  try{
-  const proj=projects.find(p=>p.id===ppProjId);
-  if(!proj){showToast('No project selected');return;}
-  const pMs=[...milestones.filter(m=>m.project_id===ppProjId)].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-  const teamRows=(ppData.team||[]).filter(t=>t.name&&t.name!=='Name'&&t.name.trim());
-  const summary=getSection('summary')||'';
-  const clientUpdateText=getSection('client_updates')||'';
-  const statusVal=getSection('status')||'on-track';
-  const statusLbl=statusVal==='on-track'?'On Track':statusVal==='at-risk'?'At Risk':'Off Track';
-  const statusColor=statusVal==='on-track'?'#166534':statusVal==='at-risk'?'#854d0e':'#991b1b';
-  const statusBg=statusVal==='on-track'?'#dcfce7':statusVal==='at-risk'?'#fef9c3':'#fee2e2';
-  const goLive=pMs.find(m=>m.key==='installation')?.date;
-  const done=pMs.filter(m=>isMilestoneEffectivelyDone(m)).length;
-  const total=pMs.filter(m=>m.date).length;
-  const pct=total?Math.round((done/total)*100):0;
-
-  // Key links to show client
-  const lv=Object.fromEntries((ppData.links||[]).map(l=>[l.label,l.url]));
-  const clientLinks=[
-    {label:'Vision Training',url:lv['Vision Training']||proj.vision_training_url},
-    {label:'Facility Site Survey',url:lv['Facility Site Survey']||proj.facility_survey_url},
-    {label:'IT Site Survey',url:lv['IT Site Survey']||proj.it_survey_url},
-    {label:'Deployment Plan',url:lv['Deployment Plan']},
-  ].filter(l=>l.url);
-
-  const msRows=pMs.filter(m=>m.date).map(m=>{
-    const isDone=isMilestoneEffectivelyDone(m);
-    const d=daysDiff(m.date);
-    const dotColor=isDone?'#22c55e':d===0?'#C8102E':d<0?'#f59e0b':'#cbd5e1';
-    const chipBg=isDone?'#dcfce7':d===0?'#fee2e2':d<=7&&d>0?'#eff6ff':'#f1f5f9';
-    const chipColor=isDone?'#166534':d===0?'#991b1b':d<=7&&d>0?'#1d4ed8':'#64748b';
-    const chipLbl=isDone?'Complete':d===0?'Today':d<0?`${Math.abs(d)}d ago`:`${fmt(m.date)}`;
-    return`<tr style="border-bottom:1px solid #f1f5f9">
-      <td style="padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:10px">
-        <span style="width:10px;height:10px;border-radius:50%;background:${dotColor};display:inline-block;flex-shrink:0"></span>${esc(m.label)}
-      </td>
-      <td style="padding:10px 16px;font-size:12px;color:#64748b;font-family:monospace">${fmt(m.date)}</td>
-      <td style="padding:10px 16px"><span style="font-size:11px;padding:2px 10px;border-radius:12px;background:${chipBg};color:${chipColor};font-weight:500">${chipLbl}</span></td>
-    </tr>`;
-  }).join('');
-
-  const teamHtml=teamRows.map(t=>`
-    <div style="background:#f8fafc;border-radius:8px;padding:12px 16px">
-      <div style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">${t.role||''}</div>
-      <div style="font-size:13px;font-weight:600;color:#0f172a">${t.name}</div>
-      ${t.organization?`<div style="font-size:11px;color:#64748b">${t.organization}</div>`:''}
-      ${t.email?`<div style="font-size:11px;color:#3b82f6">${t.email}</div>`:''}
-    </div>`).join('');
-
-  const linksHtml=clientLinks.map(l=>`
-    <a href="${l.url}" target="_blank" style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:#f8fafc;border-radius:8px;text-decoration:none;color:#1d4ed8;font-size:13px;font-weight:500">
-      🔗 ${esc(l.label)}
-    </a>`).join('');
-
-  const html=`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>${proj.name} — Project Status</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400&display=swap" rel="stylesheet">
-<style>
-*{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'DM Sans',sans-serif;background:#f1f5f9;color:#0f172a;-webkit-print-color-adjust:exact;print-color-adjust:exact;font-size:13px}
-.page{max-width:1160px;margin:0 auto;padding:1.5rem}
-/* HEADER */
-.header{background:#0c1120;border-radius:12px;padding:1.5rem 2rem;margin-bottom:1.25rem;color:white;display:flex;align-items:center;justify-content:space-between;gap:1rem}
-.logo{font-size:9px;font-weight:700;letter-spacing:0.18em;color:#475569;text-transform:uppercase;margin-bottom:6px}
-.proj-name{font-size:22px;font-weight:700;margin-bottom:5px}
-.meta{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:#64748b;align-items:center}
-.meta span{display:flex;align-items:center;gap:4px}
-.status-pill{padding:5px 16px;border-radius:20px;font-size:12px;font-weight:700;white-space:nowrap;flex-shrink:0}
-/* SUMMARY */
-.summary-card{background:white;border:1px solid #e2e8f0;border-radius:10px;padding:1.25rem 1.5rem;margin-bottom:1.25rem}
-.card-label{font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px}
-/* PROGRESS */
-.progress-section{background:white;border:1px solid #e2e8f0;border-radius:10px;padding:1.25rem 1.5rem;margin-bottom:1.25rem}
-.progress-nums{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
-.progress-big{font-size:24px;font-weight:700;color:#0f172a}
-.progress-sub{font-size:12px;color:#94a3b8}
-.progress-pct{font-size:24px;font-weight:700;color:#0f172a}
-.bar{height:10px;background:#f1f5f9;border-radius:5px;overflow:hidden}
-.bar-fill{height:100%;background:#22c55e;border-radius:5px}
-/* GANTT */
-.gantt-section{background:white;border:1px solid #e2e8f0;border-radius:10px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;overflow:hidden}
-.gantt-wrap{overflow-x:auto}
-.gantt-table{border-collapse:collapse;min-width:700px;width:100%}
-.gantt-table th{font-size:9px;font-weight:600;color:#94a3b8;text-align:center;padding:4px 2px;border-bottom:1px solid #f1f5f9;min-width:28px}
-.gantt-table td.label-col{font-size:11px;font-weight:500;color:#334155;padding:5px 12px 5px 0;white-space:nowrap;min-width:160px}
-.gantt-table td.date-col{font-size:10px;color:#94a3b8;padding:5px 8px 5px 0;white-space:nowrap;font-family:'DM Mono',monospace;min-width:65px}
-.gantt-table td.status-col{padding:5px 10px 5px 0;min-width:70px}
-.gantt-table td.cell{padding:4px 1px;position:relative}
-.chip{font-size:9px;padding:2px 8px;border-radius:10px;font-weight:600;white-space:nowrap;display:inline-block}
-.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;margin-right:7px;vertical-align:middle}
-/* BOTTOM */
-.bottom-row{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem}
-.card{background:white;border:1px solid #e2e8f0;border-radius:10px;padding:1.25rem 1.5rem}
-.deliv-table{width:100%;border-collapse:collapse}
-.deliv-table th{background:#0c1120;color:white;font-size:10px;font-weight:600;text-align:left;padding:8px 12px;letter-spacing:0.04em}
-.deliv-table td{font-size:11px;padding:8px 12px;border-bottom:1px solid #f1f5f9;color:#334155}
-.deliv-table tr:last-child td{border-bottom:none}
-.team-row{padding:8px 0;border-bottom:1px solid #f8fafc;display:flex;align-items:center;gap:10px}
-.team-row:last-child{border-bottom:none}
-.team-avatar{width:32px;height:32px;border-radius:50%;background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:#475569;flex-shrink:0}
-.team-role{font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em}
-.team-name{font-size:12px;font-weight:600;color:#0f172a}
-.link-row{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f8fafc}
-.link-row:last-child{border-bottom:none}
-.footer{text-align:center;font-size:10px;color:#cbd5e1;padding:1rem 0}
-@media print{
-  body{background:white}
-  .page{padding:0.5rem;max-width:100%}
-  .bottom-row{grid-template-columns:1fr 1fr}
-}
-</style>
-</head>
-<body>
-<div class="page">
-
-  <!-- HEADER -->
-  <div class="header">
-    <div>
-      <div class="logo">Signifi Solutions — Project Status Report</div>
-      <div class="proj-name">${proj.name}</div>
-      <div class="meta">
-        ${proj.so_number?`<span>📋 SO: ${proj.so_number}</span>`:''}
-        ${proj.pm?`<span>👤 PM: ${proj.pm}</span>`:''}
-        ${proj.sdm?`<span>SDM: ${proj.sdm}</span>`:''}
-        ${goLive?`<span>🎯 Go-live: ${fmt(goLive)}</span>`:''}
-        <span>Generated: ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span>
-      </div>
-    </div>
-    <span class="status-pill" style="background:${statusBg};color:${statusColor}">${statusLbl}</span>
-  </div>
-
-  <!-- SUMMARY -->
-  ${clientUpdateText?`<div class="summary-card"><div class="card-label">Client Updates</div><p style="line-height:1.65;color:#475569">${clientUpdateText.replace(/\n/g,'<br>')}</p></div>`:''}
-
-  <!-- PROGRESS -->
-  <div class="progress-section">
-    <div class="card-label">Overall Progress</div>
-    <div class="progress-nums">
-      <div><span class="progress-big">${done}</span> <span class="progress-sub">of ${total} milestones complete</span></div>
-      <span class="progress-pct">${pct}%</span>
-    </div>
-    <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
-  </div>
-
-  <!-- GANTT TIMELINE -->
-  ${(()=>{
-    const msDated=pMs.filter(m=>m.date);
-    if(!msDated.length)return'';
-    // Build date range
-    const allDates=msDated.map(m=>new Date(m.date+'T00:00:00'));
-    const minD=new Date(Math.min(...allDates));const maxD=new Date(Math.max(...allDates));
-    minD.setDate(minD.getDate()-3);maxD.setDate(maxD.getDate()+7);
-    // Build weekday columns
-    const cols=[];let cur=new Date(minD);
-    while(cur<=maxD){if(cur.getDay()!==0&&cur.getDay()!==6)cols.push(new Date(cur));cur.setDate(cur.getDate()+1);}
-    const t=today();
-    // Month headers
-    const monthCells=[];let lastMonth=-1,monthSpan=0,monthStart=0;
-    cols.forEach((d,i)=>{
-      if(d.getMonth()!==lastMonth){
-        if(lastMonth>=0)monthCells.push({label:new Date(2026,lastMonth,1).toLocaleDateString('en-US',{month:'short'}),span:monthSpan,start:monthStart});
-        lastMonth=d.getMonth();monthSpan=1;monthStart=i;
-      } else monthSpan++;
-    });
-    if(lastMonth>=0)monthCells.push({label:new Date(cols[cols.length-1].getFullYear(),lastMonth,1).toLocaleDateString('en-US',{month:'short'}),span:monthSpan,start:monthStart});
-    // Colour per milestone key
-    const COL={'po-release':'#8b5cf6','arrival':'#8b5cf6','production-start':'#7c3aed','production-end':'#7c3aed','other':'#0891b2','quality-start':'#d97706','quality-end':'#d97706','final-qc':'#0891b2','vinyl':'#db2777','uat':'#16a34a','shipping':'#059669','delivery':'#059669','training':'#f59e0b','installation':'#e11d48'};
-    const monthRow='<tr><td class="label-col"></td><td class="date-col"></td><td class="status-col"></td>'+monthCells.map(mc=>`<th colspan="${mc.span}" style="text-align:left;font-size:9px;font-weight:700;color:#64748b;padding:2px 0 4px 3px;letter-spacing:0.06em;text-transform:uppercase">${esc(mc.label)}</th>`).join('')+'</tr>';
-    const dayRow='<tr style="border-bottom:1px solid #f1f5f9"><td class="label-col"></td><td class="date-col"></td><td class="status-col"></td>'+cols.map(d=>{const isT=sameDay(d,t);return`<th style="${isT?'color:#C8102E;font-weight:700':''}">${d.getDate()}</th>`;}).join('')+'</tr>';
-    const msGanttRows=msDated.map(m=>{
-      const isDone=isMilestoneEffectivelyDone(m);
-      const d=daysDiff(m.date);
-      const chipBg=isDone?'#dcfce7':d<0?'#fef3c7':d===0?'#fee2e2':d<=7?'#eff6ff':'#f1f5f9';
-      const chipColor=isDone?'#166534':d<0?'#92400e':d===0?'#991b1b':d<=7?'#1d4ed8':'#64748b';
-      const chipLbl=isDone?'Done':d<0?Math.abs(d)+'d ago':d===0?'Today':d+'d';
-      const barColor=COL[m.key]||'#8b5cf6';
-      const mDate=new Date(m.date+'T00:00:00');
-      const cells=cols.map(cd=>{
-        const isT=sameDay(cd,t);
-        const onMs=sameDay(cd,mDate);
-        const bg=onMs?barColor:isT?'#fff0f0':'transparent';
-        const border=isT?'border-left:1.5px solid rgba(200,16,46,0.3)':'';
-        return`<td class="cell" style="background:${bg};${border};border-radius:${onMs?'3px':'0'}">${onMs?`<div style="height:16px;width:100%;border-radius:3px"></div>`:isT?`<div style="height:16px;border-left:1.5px solid rgba(200,16,46,0.25)"></div>`:''}</td>`;
-      }).join('');
-      return`<tr style="border-bottom:1px solid #f8fafc">
-        <td class="label-col"><span class="dot" style="background:${isDone?'#22c55e':d<0?'#f59e0b':barColor}"></span>${esc(m.label)}</td>
-        <td class="date-col">${fmt(m.date)}</td>
-        <td class="status-col"><span class="chip" style="background:${chipBg};color:${chipColor}">${chipLbl}</span></td>
-        ${cells}
-      </tr>`;
-    }).join('');
-    return`<div class="gantt-section"><div class="card-label">Project Timeline</div><div class="gantt-wrap"><table class="gantt-table"><thead>${monthRow}${dayRow}</thead><tbody>${msGanttRows}</tbody></table></div></div>`;
-  })()}
-
-  <!-- BOTTOM ROW -->
-  <div class="bottom-row">
-    ${(()=>{
-    try{
-    const DEFAULT_DELIVS=[
-      {label:'Training',key:'training'},{label:'IT Site Survey',key:'it_survey'},
-      {label:'Facility Site Survey',key:'facility_survey'},{label:'Branding / Vinyl',key:'vinyl'},
-      {label:'Products / Hardware',key:'arrival'},{label:'Badge Reader Setup',key:'badge'},
-      {label:'Employee List',key:'employee'},{label:'UAT Sign-off',key:'uat'},
-      {label:'Installation',key:'installation'},
-    ];
-    const msKeyMap2={};pMs.forEach(m=>{msKeyMap2[m.key]=m;});
-    const getDD=(key)=>{const km={training:'training',vinyl:'vinyl',arrival:'arrival',uat:'uat',installation:'installation'};const mk=km[key];return mk&&msKeyMap2[mk]?msKeyMap2[mk].date:'';};
-    const savedDelivs=proj.client_deliverables||[];
-    const delivRows=DEFAULT_DELIVS.map(d=>{const s=savedDelivs.find(x=>x.key===d.key)||{};return{...d,date:s.date||getDD(d.key)||'',status:s.status||'Pending',notes:s.notes||''};});
-    savedDelivs.filter(s=>!DEFAULT_DELIVS.find(d=>d.key===s.key)).forEach(s=>delivRows.push(s));
-    const delivHtml=delivRows.map(function(d){
-      const isDone=d.status==='Complete';
-      const bg=isDone?'#dcfce7':d.status==='In Progress'?'#eff6ff':'#f1f5f9';
-      const fc=isDone?'#166534':d.status==='In Progress'?'#1d4ed8':'#64748b';
-      return'<tr><td>'+d.label+'</td><td style="font-family:monospace;white-space:nowrap">'+(d.date?fmt(d.date):'')+'</td><td><span class="chip" style="background:'+bg+';color:'+fc+'">'+d.status+'</span></td><td style="color:#94a3b8">'+(d.notes||'')+'</td></tr>';
-    }).join('');
-    return'<div class="card"><div class="card-label" style="margin-bottom:10px">Client Deliverables</div><table class="deliv-table"><thead><tr><th>Deliverable</th><th>Due Date</th><th>Status</th><th>Notes</th></tr></thead><tbody>'+delivHtml+'</tbody></table></div>';
-    }catch(e){return'<div class="card"><b>Deliverables error:</b> '+e.message+'</div>';}
-    })()}
-
-    <!-- TEAM + LINKS -->
-    <div>
-      ${teamRows.length?'<div class="card" style="margin-bottom:1.25rem"><div class="card-label" style="margin-bottom:10px">Project Team</div>'+teamRows.map(t=>'<div class="team-row"><div class="team-avatar">'+(t.name||'?')[0].toUpperCase()+'</div><div><div class="team-role">'+(t.role||'')+'</div><div class="team-name">'+t.name+'</div></div></div>').join('')+'</div>':''}
-      ${clientLinks.length?'<div class="card"><div class="card-label" style="margin-bottom:10px">Key Resources</div>'+clientLinks.map(l=>'<div class="link-row"><span style="font-size:12px;font-weight:500">'+l.label+'</span><a href="'+l.url+'" target="_blank" style="font-size:11px;color:#3b82f6;font-weight:600;text-decoration:none">Open ↗</a></div>').join('')+'</div>':''}
-    </div>
-  </div>
-
-
-  <div class="footer">Signifi Solutions · Confidential · ${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})}</div>
-</div>
-</body>
-</html>`;
-
-  // Write into a full-screen overlay in the current page
-  // Remove any existing overlay first
-  const existing=document.getElementById('client-export-overlay');
-  if(existing)existing.remove();
-  const overlay=document.createElement('div');
-  overlay.id='client-export-overlay';
-  overlay.style.cssText='position:fixed;inset:0;z-index:99999;background:white;overflow-y:auto;padding:0';
-  overlay.innerHTML=html+`<div class="no-print" style="position:fixed;bottom:20px;right:20px;display:flex;gap:8px;z-index:100000">
-    <button onclick="ceprint()" style="font-family:DM Sans,sans-serif;font-size:13px;font-weight:600;padding:10px 20px;background:#0f172a;color:white;border:none;border-radius:8px;cursor:pointer">🖨 Print / Save PDF</button>
-    <button onclick="document.getElementById('client-export-overlay').remove();document.body.style.overflow=''" style="font-family:DM Sans,sans-serif;font-size:13px;font-weight:600;padding:10px 20px;background:#e2e8f0;color:#0f172a;border:none;border-radius:8px;cursor:pointer">✕ Close</button>
-  </div>`;
-  document.body.appendChild(overlay);
-  document.body.style.overflow='hidden';
-  } catch(e){alert('Export error: '+e.message+'\n'+e.stack?.split('\n')[1]);}
-}
-// Print only the client export overlay — hides the hub behind it
-function ceprint(){
-  const overlay=document.getElementById('client-export-overlay');
-  if(!overlay)return;
-  // Clone overlay content into a print window
-  const win=window.open('','_blank','width=1200,height=800');
-  if(!win){
-    // Fallback: inject print-only style
-    const s=document.createElement('style');
-    s.id='ce-print-style';
-    s.textContent='@media print{body>*:not(#client-export-overlay){display:none!important;}#client-export-overlay .no-print{display:none!important;}}';
-    document.head.appendChild(s);
-    window.print();
-    setTimeout(()=>{const el=document.getElementById('ce-print-style');if(el)el.remove();},1000);
-    return;
-  }
-  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Project Export</title>');
-  // Copy all styles
-  Array.from(document.styleSheets).forEach(ss=>{try{Array.from(ss.cssRules).forEach(r=>{try{win.document.write('<style>'+r.cssText+'</style>');}catch(e){}});}catch(e){}});
-  win.document.write('</head><body style="margin:0;padding:0">');
-  // Write the overlay content (without the button bar)
-  const clone=overlay.cloneNode(true);
-  clone.querySelectorAll('.no-print').forEach(el=>el.remove());
-  clone.style.cssText='position:static;overflow:visible;';
-  win.document.write(clone.innerHTML);
-  win.document.write('</body></html>');
-  win.document.close();
-  win.focus();
-  setTimeout(()=>{win.print();win.close();},500);
-}
+// ══════════════ RETIRED: Client Export / Edit Deliverables (legacy) ══════════════
+// openClientDeliverables(), cdAddRow(), saveClientDeliverables(), openClientExport(),
+// and ceprint() were removed here. They read/wrote projects.client_deliverables and
+// built a standalone client status report directly from milestones/project_sections,
+// independent of buildProjectDocPackage()/buildWeeklyStatusPackage(). The Weekly
+// Status Report (Communications tab) is now the canonical client-facing status
+// report. projects.client_deliverables itself is intentionally NOT dropped — it's
+// kept as an unused rollback source. Migrate any remaining legacy data via
+// Settings → Client Deliverables Migration (runClientDeliverablesMigration()) before
+// this column is considered safe to drop in a future release.
 function exportProjPageExcel(){
   const proj=projects.find(p=>p.id===ppProjId);
   if(!proj){showToast('No project selected');return;}
@@ -12033,7 +12281,7 @@ function exportProjPageExcel(){
     ['PROJECT INFORMATION',''],['Project Name',proj.name||''],['Sales Order (SO)',proj.so_number||''],
     ['Client',proj.client||''],['Project Manager',proj.pm||''],['Status',statusLbl],
     ['Current Phase',getSection('phase')||''],['Product Type',proj.product_type||''],['Location',proj.location||''],
-    ['',''],['PROJECT SUMMARY',''],[(getSection('summary')||''),''],
+    ['',''],['INTERNAL PROJECT SUMMARY',''],[(getSection('summary')||''),''],
     ['',''],['KEY LINKS',''],
     ['Odoo Task',proj.odoo_url||''],['Jira / UI Task',proj.ui_task_url||''],
     ['QA Task',proj.qa_task_url||''],['Product Template',proj.product_template_url||''],
@@ -12469,9 +12717,9 @@ function renderCalendar(){
     const iso=isoD(d),list=(byDay[iso]||[]);
     const pills=list.slice(0,3).map(e=>{
       const done=!e._adhoc&&isMilestoneDone(e);
-      const lbl=(TYPE_LBL[e.key]||e.key);
+      const lbl=getMilestoneDisplayLabel(e);
       return `<span class="cal-pill${done?' pdone':''}" style="background:${CAL_COLOR[e.key]||'#6b6b6b'}" title="${(lbl+' — '+(e.projectName||e.label)).replace(/"/g,'&quot;')}" onclick="${e._pid?`selectedProjId='${e._pid}';ppProjId='${e._pid}';setTab('projpage')`:''}">${(e.projectName||e.label||'').replace(/</g,'&lt;')}</span>`;}).join('');
-    const more=list.length>3?`<span class="cal-more" title="${list.slice(3).map(e=>(TYPE_LBL[e.key]||e.key)+' — '+(e.projectName||e.label)).join('\n').replace(/"/g,'&quot;')}">+${list.length-3} more</span>`:'';
+    const more=list.length>3?`<span class="cal-more" title="${list.slice(3).map(e=>getMilestoneDisplayLabel(e)+' — '+(e.projectName||e.label)).join('\n').replace(/"/g,'&quot;')}">+${list.length-3} more</span>`:'';
     cells+=`<div class="cal-day${d.getMonth()!==mo?' dim':''}${sameDay(d,today())?' today':''}"><div class="cal-dnum">${d.getDate()}</div>${pills}${more}</div>`;
   }
   const legend=[['Production','#7c3aed'],['QA','#d97706'],['Vinyl / Delivery','#2563eb'],['Shipping','#059669'],['Install','#db2777'],['Training','#f59e0b']].map(([l,c])=>`<span><i style="background:${c}"></i>${l}</span>`).join('');
@@ -12613,7 +12861,7 @@ const FULL_MS_SET=[
 async function backfillMilestones(projId){
   const proj=projects.find(p=>p.id===projId);if(!proj)return;
   const projMs=milestones.filter(m=>m.project_id===projId);
-  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const soList=getSOList(proj);
   // Only treat this project as genuinely SO-split if EVERY milestone is
   // tagged — same fix applied to saveEditProj/openAddMsForProj. Previously
   // this checked projMs.some(m=>m.so_tag) (any single tagged row), so a
@@ -12642,7 +12890,7 @@ async function backfillMilestones(projId){
 <script>
 // ═══ PROCUREMENT PANEL (hub side) — reads the shared procurement tables ═══
 function hubProcPosFor(p){
-  const sos=(p.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const sos=getSOList(p);
   const ids=new Set((procLinkData||[]).filter(l=>l.project_id===p.id||(l.so_number&&sos.includes(l.so_number))).map(l=>l.po_id));
   return (procPoData||[]).filter(x=>ids.has(x.id)&&x.status!=='cancelled');
 }
