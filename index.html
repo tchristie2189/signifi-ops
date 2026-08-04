@@ -407,6 +407,14 @@ body.production-view-active .header-inner{max-width:none;width:100%;padding-left
 .pb-badge{font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:10px;background:var(--gray-100);color:var(--gray-600)}
 .pb-badge.wait{background:#fef3c7;color:#92400e}
 .pb-badge.pri-High,.pb-badge.late{background:var(--red-light);color:var(--red)}
+/* Weekly Status Report print scoping — only #wsr-print-area is visible when
+   printing/saving to PDF; everything else in the app is hidden. */
+@media print{
+  body *{visibility:hidden}
+  #wsr-print-area,#wsr-print-area *{visibility:visible}
+  #wsr-print-area{position:absolute;left:0;top:0;width:100%}
+  .wsr-no-print{display:none!important}
+}
 </style>
 </head>
 <body>
@@ -6873,6 +6881,7 @@ function renderProjPageBody(){
     <td><input value="${a.owner||''}" placeholder="Owner" style="width:90px" oninput="ppAIChange('${a.id}','owner',this.value)"></td>
     <td><input value="${a.description||''}" placeholder="Action item" oninput="ppAIChange('${a.id}','description',this.value)"></td>
     <td><input type="date" value="${a.due_date||''}" oninput="ppAIChange('${a.id}','due_date',this.value)"></td>
+    <td><select onchange="ppAIChange('${a.id}','side',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)"><option value="">—</option><option value="Signifi"${a.side==='Signifi'?' selected':''}>Signifi</option><option value="Client"${a.side==='Client'?' selected':''}>Client</option></select></td>
     <td><select class="pp-status-sel ${a.status==='Done'?'status-done':a.status==='At Risk'?'status-risk':a.status==='On Hold'?'status-hold':'status-open'}" oninput="ppAIChange('${a.id}','status',this.value);this.className='pp-status-sel '+(this.value==='Done'?'status-done':this.value==='At Risk'?'status-risk':this.value==='On Hold'?'status-hold':'status-open')">
       <option${a.status==='Open'?' selected':''}>Open</option>
       <option${a.status==='Done'?' selected':''}>Done</option>
@@ -7128,7 +7137,7 @@ function renderProjPageBody(){
       <div class="pp-card-head"><span class="pp-card-title">Open action items</span><span style="font-size:11px;color:var(--gray-500)">${ppData.actions.filter(a=>a.status!=='Done').length} open</span></div>
       <div style="overflow-x:auto">
         <table class="pp-table">
-          <thead><tr><th style="width:90px">Owner</th><th>Action item</th><th style="width:110px">Due date</th><th style="width:90px">Status</th><th style="width:28px"></th></tr></thead>
+          <thead><tr><th style="width:90px">Owner</th><th>Action item</th><th style="width:110px">Due date</th><th style="width:80px">Side</th><th style="width:90px">Status</th><th style="width:28px"></th></tr></thead>
           <tbody id="pp-actions">${aiHtml}</tbody>
         </table>
       </div>
@@ -7682,6 +7691,12 @@ async function ppAddDec(){
 }
 async function ppDelDec(id){await sb.from('decisions').delete().eq('id',id);ppData.decisions=ppData.decisions.filter(d=>d.id!==id);document.querySelector(`#pp-decisions [data-id="${id}"]`)?.remove();}
 let activeDocTab='install';
+let commsActiveDoc='kickoff'; // 'kickoff' | 'weekly-status'
+let wsrScopeMode='combined'; // 'combined' | 'individual' | 'custom'
+let wsrSelectedSO=''; // for 'individual' mode
+let wsrCustomSOs=[]; // for 'custom' mode
+let wsrPkg=null; // cached buildWeeklyStatusPackage() result for the current review session
+let wsrShowInternal=false;
 let selectedDocProjId=null;
 let selectedDocSO='';
 // docFormState keyed by projectId so switching projects preserves each project's data
@@ -7872,6 +7887,39 @@ function matchDeliverablesForRow(rowLabel,deliverables){
   return deliverables.filter(d=>!d.docKey&&normLabel(d.label)===nRow);
 }
 
+// Shared across every Communications document (kickoff deck, weekly status
+// report, and future ones) — resolves a project's stakeholders once, the
+// same way every time, so each generator doesn't re-implement this. Returns
+// canonical (the 5 always-present scalar roles), extra (project_team rows
+// not already covered by a canonical role), split into Signifi/Client using
+// the real project_team.side field, and any conflicts between the two
+// sources for the same role.
+function resolveProjectStakeholders(proj,team){
+  const ROLE_ALIASES={'project manager':'pm','pm':'pm','sdm':'sdm','solutions':'solutions','solutions / ux':'solutions','sales':'sales','account manager':'account_manager','am':'account_manager'};
+  const conflicts=[];
+  (team||[]).forEach(t=>{
+    const field=ROLE_ALIASES[(t.role||'').toLowerCase().trim()];
+    if(field&&proj[field]&&t.name&&t.name.trim()&&t.name.trim()!==String(proj[field]).trim()){
+      conflicts.push({role:t.role,scalarField:field,scalarValue:proj[field],teamValue:t.name});
+    }
+  });
+  const canonical=[
+    {role:'Project Manager',name:proj.pm,side:'Signifi'},{role:'SDM',name:proj.sdm,side:'Signifi'},
+    {role:'Solutions',name:proj.solutions,side:'Signifi'},{role:'Sales',name:proj.sales,side:'Signifi'},
+    {role:'Account Manager',name:proj.account_manager,side:'Signifi'},
+  ].filter(s=>s.name);
+  const canonicalNames=new Set(canonical.map(s=>s.name));
+  const extra=(team||[]).filter(t=>t.name&&!canonicalNames.has(t.name)).map(t=>({role:t.role||'Team member',name:t.name,organization:t.organization||'',email:t.email||'',side:t.side||null}));
+  const stakeholders=[...canonical,...extra];
+  const unclassified=extra.filter(t=>!t.side).length;
+  const stakeholdersSignifi=[...canonical,...extra.filter(t=>t.side==='Signifi')];
+  const stakeholdersClient=extra.filter(t=>t.side==='Client');
+  // Anyone without Side set is genuinely unclassified now (no more guessing
+  // from Organization text) — surfaced to the caller to flag, not silently
+  // dropped from either column and not silently guessed either.
+  return{stakeholders,stakeholdersSignifi,stakeholdersClient,conflicts,unclassifiedCount:unclassified};
+}
+
 async function buildProjectDocPackage(projId,soTag=''){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return null;
@@ -7904,44 +7952,12 @@ async function buildProjectDocPackage(projId,soTag=''){
   if(!title.client)flag('Client name','important');
   if(!proj.pm)flag('Project Manager','important');
 
-  // 2. Stakeholders. The five canonical roles are scalar columns on the
-  // project (always present, one source of truth); project_team is a
-  // separate free-form table. We merge + de-dupe by name, AND explicitly flag
-  // when the same role appears in both places with DIFFERENT names rather
-  // than silently picking one — per review feedback, conflicts must surface
-  // to the PM, not get resolved automatically. The scalar project field wins
-  // in the merged stakeholder list (documented precedence below); the
-  // project_team value is preserved in `conflicts` for the PM to see.
-  const ROLE_ALIASES={'project manager':'pm','pm':'pm','sdm':'sdm','solutions':'solutions','solutions / ux':'solutions','sales':'sales','account manager':'account_manager','am':'account_manager'};
-  const conflicts=[];
-  (team||[]).forEach(t=>{
-    const field=ROLE_ALIASES[(t.role||'').toLowerCase().trim()];
-    if(field&&proj[field]&&t.name&&t.name.trim()&&t.name.trim()!==String(proj[field]).trim()){
-      conflicts.push({role:t.role,scalarField:field,scalarValue:proj[field],teamValue:t.name});
-    }
-  });
+  // 2. Stakeholders — resolved once by the shared resolver every
+  // Communications document uses (see resolveProjectStakeholders above).
+  const{stakeholders,stakeholdersSignifi,stakeholdersClient,conflicts,unclassifiedCount}=resolveProjectStakeholders(proj,team);
   if(conflicts.length)flag(`${conflicts.length} stakeholder conflict(s) — same role, different name in project fields vs. team list (scalar project field used; see readiness panel)`,'important');
-  const canonical=[
-    {role:'Project Manager',name:proj.pm},{role:'SDM',name:proj.sdm},
-    {role:'Solutions',name:proj.solutions},{role:'Sales',name:proj.sales},
-    {role:'Account Manager',name:proj.account_manager},
-  ].filter(s=>s.name);
-  const canonicalNames=new Set(canonical.map(s=>s.name));
-  const extra=(team||[]).filter(t=>t.name&&!canonicalNames.has(t.name)).map(t=>({role:t.role||'Team member',name:t.name,organization:t.organization||'',email:t.email||''}));
-  const stakeholders=[...canonical,...extra];
   if(!stakeholders.length)flag('Stakeholders (no PM/SDM/Solutions/Sales/AM or team rows set)','important');
-  // Best-effort Signifi-vs-client split for the deck's two-column layout: the
-  // five canonical roles are always Signifi-side; project_team rows are
-  // classified by organization text when it clearly names Signifi, otherwise
-  // treated as client-side. This is a heuristic, not a real field — see the
-  // schema notes on why we didn't add one for this task.
-  const stakeholdersSignifi=[...canonical];
-  const stakeholdersClient=[];
-  extra.forEach(t=>{
-    const org=(t.organization||'').toLowerCase();
-    if(org.includes('signifi'))stakeholdersSignifi.push(t);else stakeholdersClient.push(t);
-  });
-  if(extra.length)flag('Signifi-vs-client classification on extra team members is guessed from the Organization text field, not a real flag — verify before sending','optional');
+  if(unclassifiedCount)flag(`${unclassifiedCount} team member(s) have no Side set (Signifi/Client) — won't appear in either column until set`,'optional');
 
   // 3. Scope of work
   const scope={
@@ -8410,23 +8426,225 @@ async function generateKickoffDeckFromTemplate(projId,soTag=''){
   showToast('📊 Kickoff deck generated ✓ — one complete, editable file. Review flagged items before sending.');
 }
 
+// ══════════════ WEEKLY STATUS REPORT — data layer ══════════════
+// Second Communications document. Follows the same shape as
+// buildProjectDocPackage: one function assembles everything the report
+// needs from live data, returns a `missing`/readiness summary alongside it,
+// and the renderer/generator never queries the database directly. Reuses
+// resolveProjectStakeholders (contacts), PIPELINE_STAGES + getProjectStage
+// (phase/timeline), and isMilestoneDone/isMilestoneOverdue/isMilestoneAtRisk
+// (health, completion) rather than re-deriving any of that.
+//
+// soScope: null/'' = combined report across every SO on the project.
+//          a specific SO tag = that SO's individual report.
+//          (Custom multi-SO selection is handled by the caller invoking this
+//          once per included SO and merging the deliverables/timeline/etc
+//          lists client-side — kept out of this function so it stays a
+//          single-scope builder, consistent with how buildProjectDocPackage
+//          takes one soTag at a time.)
+const WEEKLY_TIMELINE_PHASES=[
+  {label:'Kickoff',stageIds:['mo-release','parts-order']},
+  {label:'Production',stageIds:['parts-arrive','production']},
+  {label:'QA',stageIds:['qa']},
+  {label:'Shipping',stageIds:['shipping','delivered']},
+  {label:'Deployment',stageIds:['installation']},
+  {label:'Go Live',stageIds:['complete']},
+];
+function currentReportingPeriod(){
+  // Monday–Sunday of the current week, matching how the rest of Ops Hub
+  // (Pipeline Board, dept check-ins) already defines "this week."
+  const t=today();
+  const start=monday(t);
+  const end=addD(start,6);
+  return{start:isoD(start),end:isoD(end)};
+}
+
+async function buildWeeklyStatusPackage(projId,soScope=''){
+  const proj=projects.find(p=>p.id===projId);
+  if(!proj)return null;
+  const missing=[];
+  const flag=(text,severity='optional')=>missing.push({text,severity});
+  const period=currentReportingPeriod();
+
+  let team,pmTasks,actionItems,risks,decisions;
+  if(typeof ppProjId!=='undefined'&&ppProjId===projId&&typeof ppData!=='undefined'&&ppData){
+    team=ppData.team||[];pmTasks=ppData.pmtasks||[];actionItems=ppData.actions||[];risks=ppData.risks||[];decisions=ppData.decisions||[];
+  } else {
+    const[teamRes,pmtRes,aiRes,riskRes,decRes]=await Promise.all([
+      sb.from('project_team').select('*').eq('project_id',projId).order('sort_order'),
+      sb.from('pm_tasks').select('*').eq('project_id',projId).order('sort_order'),
+      sb.from('action_items').select('*').eq('project_id',projId).order('created_at'),
+      sb.from('risks').select('*').eq('project_id',projId).order('created_at'),
+      sb.from('decisions').select('*').eq('project_id',projId).order('decision_date',{ascending:false}),
+    ]);
+    [teamRes,pmtRes,aiRes,riskRes,decRes].forEach(r=>{if(r.error)console.warn('weekly status load error',r.error);});
+    team=teamRes.data||[];pmTasks=pmtRes.data||[];actionItems=aiRes.data||[];risks=riskRes.data||[];decisions=decRes.data||[];
+  }
+
+  const projMsAll=milestones.filter(m=>m.project_id===projId);
+  const projMs=soScope?projMsAll.filter(m=>!m.so_tag||m.so_tag===soScope):projMsAll;
+
+  // ── Header ──
+  const stage=getProjectStage(proj);
+  const stageInfo=PIPELINE_STAGES.find(s=>s.id===stage);
+  const overdueCount=projMs.filter(m=>isMilestoneOverdue(m)).length;
+  const atRiskCount=projMs.filter(m=>isMilestoneAtRisk(m)).length;
+  const overallHealth=overdueCount>0?'Red':atRiskCount>0?'Yellow':'Green';
+  const goLiveMs=projMs.find(m=>m.key==='go-live');
+  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const header={
+    projectName:proj.name||'',client:proj.client||'',
+    salesOrders:soScope?[soScope]:(soList.length?soList:[proj.so_number||'']).filter(Boolean),
+    reportingPeriod:period,pm:proj.pm||'',
+    currentPhase:stageInfo?.label||'—',
+    overallHealth,
+    targetGoLive:goLiveMs?.not_applicable?'N/A':(goLiveMs?.date?fmtFull(goLiveMs.date):'To Be Confirmed'),
+  };
+  if(!header.pm)flag('Project Manager','important');
+  if(!goLiveMs?.date&&!goLiveMs?.not_applicable)flag('Target Go-live date (add a milestone with type "Go-live", or mark N/A)','optional');
+
+  // ── Executive summary — saved per reporting period, loaded here so the
+  // review screen shows last-saved text (or blank) rather than starting
+  // empty every time the PM revisits the same week. ──
+  let executiveSummary='';
+  {
+    const{data,error}=await sb.from('weekly_status_summaries').select('summary_text')
+      .eq('project_id',projId).eq('so_scope',soScope||'').eq('period_start',period.start).maybeSingle();
+    if(error)console.warn('weekly_status_summaries load error',error);
+    executiveSummary=data?.summary_text||'';
+  }
+  if(!executiveSummary.trim())flag('Executive summary not yet written for this period','important');
+
+  // ── Client deliverables & commitments — pm_tasks, same source as the
+  // kickoff deck's deliverables slide, each with an include toggle
+  // defaulting to true (PM excludes via checkbox, not by deleting data). ──
+  const deliverables=(pmTasks||[]).map(t=>({
+    id:t.id,label:t.label||'',soTag:t.so_tag||'',targetDate:t.due_date?fmtFull(t.due_date):'',
+    status:t.status||'Pending',included:true,
+  })).filter(d=>!soScope||!d.soTag||d.soTag===soScope);
+
+  // ── Project snapshot ──
+  const doneCount=projMs.filter(m=>isMilestoneDone(m)).length;
+  const completionPct=projMs.length?Math.round(100*doneCount/projMs.length):0;
+  const nextMs=projMs.filter(m=>!isMilestoneDone(m)&&m.date&&!m.not_applicable).sort((a,b)=>(a.date||'').localeCompare(b.date||''))[0];
+  const shipMs=projMs.find(m=>m.key==='shipping');
+  const hwRes=await sb.from('hardware_line_items').select('quantity').eq('project_id',projId);
+  if(hwRes.error)console.warn('hardware_line_items load error (weekly status)',hwRes.error);
+  const machineCount=(hwRes.data||[]).reduce((sum,h)=>sum+(h.quantity||1),0);
+  const shipRes=await sb.from('shipping_locations').select('id').eq('project_id',projId);
+  if(shipRes.error)console.warn('shipping_locations load error (weekly status)',shipRes.error);
+  const shippingSiteCount=shipRes.data?.length||soList.length||(proj.location?1:0);
+  const snapshot={
+    completionPct,currentPhase:header.currentPhase,
+    nextMilestone:nextMs?`${TYPE_LBL[nextMs.key]||nextMs.label} — ${fmtFull(nextMs.date)}`:'—',
+    targetShipDate:shipMs?.date?fmtFull(shipMs.date):'To Be Confirmed',
+    targetGoLive:header.targetGoLive,
+    machines:machineCount,milestonesCompleted:`${doneCount} / ${projMs.length}`,
+    shippingSites:shippingSiteCount,
+  };
+  if(!machineCount)flag('No hardware line items recorded — Machines will show 0','optional');
+
+  // ── Project timeline — major client-facing phases only, mapped from the
+  // same PIPELINE_STAGES the Pipeline Board uses. ──
+  const stageOrder=PIPELINE_STAGES.map(s=>s.id);
+  const currentIdx=stageOrder.indexOf(stage);
+  const timeline=WEEKLY_TIMELINE_PHASES.map(phase=>{
+    const idxs=phase.stageIds.map(id=>stageOrder.indexOf(id));
+    const phaseStartIdx=Math.min(...idxs),phaseEndIdx=Math.max(...idxs);
+    const status=currentIdx>phaseEndIdx?'Complete':currentIdx<phaseStartIdx?'Upcoming':'In Progress';
+    // Date range: earliest/latest milestone date among the underlying pipeline stages this phase covers
+    const relevantKeys=PIPELINE_STAGES.filter(s=>phase.stageIds.includes(s.id)).map(s=>s.key);
+    const dates=projMs.filter(m=>relevantKeys.includes(m.key)&&m.date).map(m=>m.date).sort();
+    const completion=status==='Complete'?100:status==='Upcoming'?0:50;
+    return{label:phase.label,status,dateRange:dates.length?`${fmtFull(dates[0])}${dates.length>1?' – '+fmtFull(dates[dates.length-1]):''}`:'To Be Confirmed',owner:header.pm||'—',completion};
+  });
+
+  // ── Completed this week — milestones/pm_tasks/deliverables/client
+  // actions whose date falls in the current reporting period. Each gets an
+  // `included` toggle (default true); nothing here is auto-excluded. ──
+  const inPeriod=d=>d&&d>=period.start&&d<=period.end;
+  const completedThisWeek=[
+    ...projMs.filter(m=>isMilestoneDone(m)&&inPeriod(m.date)).map(m=>({description:TYPE_LBL[m.key]||m.label,date:fmtFull(m.date),owner:header.pm||'—',included:true,source:'milestone'})),
+    ...(pmTasks||[]).filter(t=>/complete|done/i.test(t.status||'')&&inPeriod(t.due_date)).map(t=>({description:t.label,date:fmtFull(t.due_date),owner:header.pm||'—',included:true,source:'deliverable'})),
+    ...(actionItems||[]).filter(a=>a.status==='Done'&&inPeriod(a.due_date)).map(a=>({description:a.description,date:a.due_date?fmtFull(a.due_date):'',owner:a.owner||'—',included:true,source:'action'})),
+  ];
+
+  // ── Upcoming activities — next 30 days, not yet done. Sorted on the raw
+  // ISO date (sortKey), never the human-formatted display string — "Aug 25"
+  // sorts before "Aug 5" lexicographically, which silently scrambles order. ──
+  const soon=isoD(addD(today(),30));
+  const upcoming=[
+    ...projMs.filter(m=>!isMilestoneDone(m)&&!m.not_applicable&&m.date&&m.date<=soon).map(m=>({activity:TYPE_LBL[m.key]||m.label,targetDate:fmtFull(m.date),sortKey:m.date,owner:header.pm||'—',included:true,source:'milestone'})),
+    ...(pmTasks||[]).filter(t=>!/complete|done/i.test(t.status||'')&&t.due_date&&t.due_date<=soon).map(t=>({activity:t.label,targetDate:fmtFull(t.due_date),sortKey:t.due_date,owner:header.pm||'—',included:true,source:'deliverable'})),
+    ...(actionItems||[]).filter(a=>a.status==='Open'&&a.due_date&&a.due_date<=soon).map(a=>({activity:a.description,targetDate:fmtFull(a.due_date),sortKey:a.due_date,owner:a.owner||'—',included:true,source:'action'})),
+  ].sort((a,b)=>(a.sortKey||'').localeCompare(b.sortKey||''));
+
+  // ── Client actions required — hidden entirely if empty, per spec. ──
+  const clientActionsRequired=(actionItems||[]).filter(a=>a.side==='Client'&&a.status==='Open').map(a=>({action:a.description,owner:a.owner||'—',dueDate:a.due_date?fmtFull(a.due_date):'To Be Confirmed',status:a.status}));
+  const unclassifiedOpenActions=(actionItems||[]).filter(a=>a.status==='Open'&&!a.side).length;
+  if(unclassifiedOpenActions)flag(`${unclassifiedOpenActions} open action item(s) have no Side set — won't appear in Client Actions Required until tagged`,'optional');
+
+  // ── Contacts — reuses the same resolver the kickoff deck uses. ──
+  const{stakeholders,stakeholdersSignifi,stakeholdersClient,conflicts}=resolveProjectStakeholders(proj,team);
+  if(conflicts.length)flag(`${conflicts.length} stakeholder conflict(s) — same role, different name in project fields vs. team list`,'important');
+  const findRole=(list,re)=>list.find(s=>re.test(s.role||''))?.name||'';
+  const contacts={
+    signifiPM:proj.pm||'',
+    clientPM:findRole(stakeholdersClient,/project manager|client lead/i),
+    deploymentLead:findRole(stakeholdersSignifi,/deployment/i),
+    supportContact:findRole(stakeholdersSignifi,/support/i)||proj.pm||'',
+    all:stakeholders,
+  };
+
+  // ── Internal review — PM/leadership only, never included in the client
+  // report. Schedule variance reuses milestone_history the same way the
+  // milestone edit modal already surfaces slippage. ──
+  const openRisks=(risks||[]).filter(r=>r.status==='Open'&&r.type==='risk');
+  const openIssues=(risks||[]).filter(r=>r.status==='Open'&&r.type==='issue');
+  const openActions=(actionItems||[]).filter(a=>a.status==='Open');
+  const now=new Date();
+  const actionAging=openActions.map(a=>({description:a.description,owner:a.owner||'—',ageDays:a.created_at?Math.round((now-new Date(a.created_at))/86400000):null}));
+  const slipped=projMs.filter(m=>m.original_date&&m.date&&m.original_date!==m.date);
+  const scheduleVariance=slipped.map(m=>({milestone:TYPE_LBL[m.key]||m.label,originalDate:fmtFull(m.original_date),currentDate:fmtFull(m.date),varianceDays:Math.round((new Date(m.date+'T00:00:00')-new Date(m.original_date+'T00:00:00'))/86400000)}));
+  const internalReview={
+    openRisks,openIssues,scheduleVariance,
+    decisions:(decisions||[]).slice(0,10),
+    dependencies:[], // not tracked anywhere in Ops Hub today — shown as "not tracked" rather than fabricated
+    actionItemAging:actionAging,
+  };
+  flag('Dependencies are not tracked anywhere in Ops Hub yet — Internal Review will show this section empty','optional');
+
+  return{proj,header,executiveSummary,deliverables,snapshot,timeline,completedThisWeek,upcoming,clientActionsRequired,contacts,internalReview,missing,
+    readiness:{missingImportant:missing.filter(m=>m.severity==='important'),missingOptional:missing.filter(m=>m.severity==='optional')}};
+}
+
+async function saveWeeklyStatusSummary(projId,soScope,text){
+  const period=currentReportingPeriod();
+  const{error}=await sb.from('weekly_status_summaries').upsert({
+    project_id:projId,so_scope:soScope||'',period_start:period.start,period_end:period.end,
+    summary_text:text,updated_by:currentUserName,updated_at:new Date().toISOString(),
+  },{onConflict:'project_id,so_scope,period_start'});
+  if(error){showToast('⚠ Summary save failed: '+error.message);return false;}
+  return true;
+}
+
 function renderCommsTab(){
   if(!selectedDocProjId)return'<div class="empty-state">Select a project above.</div>';
   const FUTURE_DOCS=[
     {key:'implementation-plan',label:'Client Implementation Plan'},
-    {key:'weekly-status',label:'Weekly Status Report'},
     {key:'executive-summary',label:'Executive Summary'},
     {key:'deployment-package',label:'Deployment Package'},
   ];
   return`<div style="padding:16px 0">
     <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius);padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--gray-600)">
-      <b>Communications</b> — generates the complete approved Kickoff Deck (all 20 slides, one editable .pptx) with the project-specific sections auto-filled from live Ops Hub data.
+      <b>Communications</b> — generates client-facing documents straight from live project data.
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
-      <button class="doc-tab active" style="cursor:default">🎬 Kickoff Deck</button>
+      <button class="doc-tab${commsActiveDoc==='kickoff'?' active':''}" onclick="commsActiveDoc='kickoff';renderGenDocs()">🎬 Kickoff Deck</button>
+      <button class="doc-tab${commsActiveDoc==='weekly-status'?' active':''}" onclick="commsActiveDoc='weekly-status';wsrPkg=null;renderGenDocs()">📊 Weekly Status Report</button>
       ${FUTURE_DOCS.map(d=>`<button class="doc-tab" disabled style="opacity:0.45;cursor:not-allowed" title="Coming in a later phase">${esc(d.label)} · soon</button>`).join('')}
     </div>
-    <div id="comms-kickoff-preview" style="font-size:12px;color:var(--gray-500)">Loading readiness summary…</div>
+    ${commsActiveDoc==='kickoff'?`<div id="comms-kickoff-preview" style="font-size:12px;color:var(--gray-500)">Loading readiness summary…</div>`:renderWeeklyStatusSection()}
   </div>`;
 }
 
@@ -8456,6 +8674,224 @@ async function renderKickoffPreview(){
     </div>`:''}
     ${!r.missingImportant.length&&!r.missingOptional.length?`<div style="background:var(--green-bg,#f0fdf4);border:1px solid #86efac;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:#166534">✓ All fields ready</div>`:''}
     <button onclick="generateKickoffDeckFromTemplate('${selectedDocProjId}','${selectedDocSO||''}')" style="font-size:13px;padding:9px 20px;border-radius:var(--radius);border:none;background:var(--black);color:white;cursor:pointer;font-family:var(--font);font-weight:600">⚡ Generate Complete Kickoff Deck (.pptx)</button>`;
+}
+
+// ══════════════ WEEKLY STATUS REPORT — UI ══════════════
+function renderWeeklyStatusSection(){
+  const proj=projects.find(p=>p.id===selectedDocProjId);
+  const soList=(proj?.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const isMultiSO=soList.length>1;
+  return`<div id="wsr-scope" class="wsr-no-print">
+    ${isMultiSO?`<div class="pp-card" style="margin-bottom:12px"><div class="pp-card-head"><span class="pp-card-title">Report scope</span></div>
+      <div class="pp-card-body" style="font-size:12px">
+        <div style="display:flex;gap:16px;margin-bottom:10px">
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="wsr-scope" value="combined"${wsrScopeMode==='combined'?' checked':''} onchange="wsrScopeMode='combined';wsrPkg=null;renderGenDocs()"> Combined (all SOs)</label>
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="wsr-scope" value="individual"${wsrScopeMode==='individual'?' checked':''} onchange="wsrScopeMode='individual';wsrSelectedSO='${soList[0]}';wsrPkg=null;renderGenDocs()"> One SO at a time</label>
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="wsr-scope" value="custom"${wsrScopeMode==='custom'?' checked':''} onchange="wsrScopeMode='custom';wsrPkg=null;renderGenDocs()"> Custom selection</label>
+        </div>
+        ${wsrScopeMode==='combined'?`<div style="font-size:11px;color:var(--gray-500)">Sales Orders: ${soList.join(', ')}</div>`:''}
+        ${wsrScopeMode==='individual'?`<select onchange="wsrSelectedSO=this.value;wsrPkg=null;renderGenDocs()" style="font-size:12px;padding:6px 9px;border:1px solid var(--gray-300);border-radius:var(--radius)">${soList.map(so=>`<option value="${so}"${wsrSelectedSO===so?' selected':''}>${so}</option>`).join('')}</select>`:''}
+        ${wsrScopeMode==='custom'?`<div style="display:flex;flex-wrap:wrap;gap:8px">${soList.map(so=>`<label style="display:flex;align-items:center;gap:5px;font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:14px;cursor:pointer"><input type="checkbox" value="${so}"${wsrCustomSOs.includes(so)?' checked':''} onchange="wsrToggleCustomSO('${so}',this.checked)">${so}</label>`).join('')}</div>`:''}
+      </div>
+    </div>`:''}
+    <div id="wsr-review">Loading…</div>
+  </div>
+  <div id="wsr-print-area"></div>`;
+}
+function wsrToggleCustomSO(so,checked){
+  if(checked)wsrCustomSOs.push(so);else wsrCustomSOs=wsrCustomSOs.filter(s=>s!==so);
+  wsrPkg=null;renderGenDocs();
+}
+
+async function renderWeeklyStatusReview(){
+  const el=document.getElementById('wsr-review');
+  if(!el||!selectedDocProjId)return;
+  const soScope=wsrScopeMode==='individual'?wsrSelectedSO:''; // combined + custom both build the combined (all-SO) package for now — see note below
+  if(!wsrPkg){
+    wsrPkg=await buildWeeklyStatusPackage(selectedDocProjId,soScope);
+  }
+  if(!el.isConnected)return;
+  const pkg=wsrPkg;
+  if(!pkg){el.innerHTML='<div class="empty-state">Project not found.</div>';return;}
+  const r=pkg.readiness;
+
+  const itemRow=(item,listName,idx,labelField,dateField)=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--gray-50);font-size:12px">
+    <input type="checkbox"${item.included?' checked':''} onchange="wsrToggleItem('${listName}',${idx})">
+    <span style="flex:1">${esc(item[labelField])}</span>
+    <span style="color:var(--gray-400);font-size:11px">${esc(item[dateField]||'')}</span>
+    <span style="color:var(--gray-400);font-size:11px;width:80px;text-align:right">${esc(item.owner||'')}</span>
+  </div>`;
+
+  el.innerHTML=`
+    ${r.missingImportant.length?`<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:#991b1b">
+      <b>${r.missingImportant.length} important item(s):</b><br>${r.missingImportant.map(m=>'• '+esc(m.text)).join('<br>')}
+    </div>`:''}
+    ${r.missingOptional.length?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:#92600a">
+      <b>${r.missingOptional.length} optional item(s):</b><br>${r.missingOptional.map(m=>'• '+esc(m.text)).join('<br>')}
+    </div>`:''}
+
+    <div class="pp-card" style="margin-bottom:12px"><div class="pp-card-head"><span class="pp-card-title">Executive summary</span><span style="font-size:10px;color:var(--gray-400)">Reporting period: ${esc(pkg.header.reportingPeriod.start)} – ${esc(pkg.header.reportingPeriod.end)}</span></div>
+      <div class="pp-card-body">
+        <textarea id="wsr-summary" placeholder="What happened this week, in plain terms, for the client to read..." style="width:100%;min-height:90px;font-family:var(--font);font-size:13px;padding:9px;border:1px solid var(--gray-300);border-radius:var(--radius)">${esc(pkg.executiveSummary)}</textarea>
+        <button onclick="wsrSaveSummary()" style="margin-top:6px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer">Save summary</button>
+      </div>
+    </div>
+
+    <div class="pp-card" style="margin-bottom:12px"><div class="pp-card-head"><span class="pp-card-title">Client deliverables &amp; commitments</span></div>
+      <div class="pp-card-body">${pkg.deliverables.length?pkg.deliverables.map((d,i)=>itemRow(d,'deliverables',i,'label','targetDate')).join(''):'<div style="font-size:12px;color:var(--gray-400)">No deliverables recorded.</div>'}</div>
+    </div>
+
+    <div class="pp-card" style="margin-bottom:12px"><div class="pp-card-head"><span class="pp-card-title">Completed this week</span></div>
+      <div class="pp-card-body">${pkg.completedThisWeek.length?pkg.completedThisWeek.map((c,i)=>itemRow(c,'completedThisWeek',i,'description','date')).join(''):'<div style="font-size:12px;color:var(--gray-400)">Nothing completed in this period yet.</div>'}</div>
+    </div>
+
+    <div class="pp-card" style="margin-bottom:12px"><div class="pp-card-head"><span class="pp-card-title">Upcoming activities</span></div>
+      <div class="pp-card-body">${pkg.upcoming.length?pkg.upcoming.map((u,i)=>itemRow(u,'upcoming',i,'activity','targetDate')).join(''):'<div style="font-size:12px;color:var(--gray-400)">Nothing scheduled in the next 30 days.</div>'}</div>
+    </div>
+
+    ${pkg.clientActionsRequired.length?`<div class="pp-card" style="margin-bottom:12px"><div class="pp-card-head"><span class="pp-card-title">Client actions required</span></div>
+      <div class="pp-card-body">${pkg.clientActionsRequired.map(a=>`<div style="font-size:12px;padding:5px 0;border-bottom:1px solid var(--gray-50)">${esc(a.action)} — <span style="color:var(--gray-500)">${esc(a.owner)}, due ${esc(a.dueDate)}</span></div>`).join('')}</div>
+    </div>`:''}
+
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:12px;cursor:pointer"><input type="checkbox"${wsrShowInternal?' checked':''} onchange="wsrShowInternal=this.checked;renderWeeklyStatusPreviewPane()"> Show Internal Review page (not included in client export)</label>
+
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+      <button onclick="window.print()" style="font-size:13px;padding:9px 18px;border-radius:var(--radius);border:none;background:var(--black);color:white;cursor:pointer;font-family:var(--font);font-weight:600">🖨️ Print / Save as PDF</button>
+      <button onclick="wsrCopyToClipboard()" style="font-size:13px;padding:9px 18px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer;font-family:var(--font)">📋 Copy to clipboard</button>
+      <button disabled style="font-size:13px;padding:9px 18px;border-radius:var(--radius);border:1px solid var(--gray-200);background:var(--gray-50);color:var(--gray-400);cursor:not-allowed" title="Coming in a later phase">✉️ Send via Email · soon</button>
+    </div>
+
+    <div class="pp-card-head" style="margin-bottom:8px"><span class="pp-card-title">Live preview</span></div>
+    <div id="wsr-preview-pane" style="border:1px solid var(--gray-200);border-radius:var(--radius);overflow:hidden"></div>`;
+
+  renderWeeklyStatusPreviewPane();
+}
+
+function wsrToggleItem(listName,idx){
+  if(!wsrPkg||!wsrPkg[listName]||!wsrPkg[listName][idx])return;
+  wsrPkg[listName][idx].included=!wsrPkg[listName][idx].included;
+  renderWeeklyStatusPreviewPane();
+}
+
+async function wsrSaveSummary(){
+  const text=document.getElementById('wsr-summary')?.value||'';
+  const soScope=wsrScopeMode==='individual'?wsrSelectedSO:'';
+  const ok=await saveWeeklyStatusSummary(selectedDocProjId,soScope,text);
+  if(ok){wsrPkg.executiveSummary=text;showToast('Summary saved ✓');renderWeeklyStatusPreviewPane();}
+}
+
+// Builds the client-facing report HTML — used for both the on-screen
+// preview and the print/PDF output (same markup, #wsr-print-area is just
+// hidden on screen via CSS and shown by the browser's print dialog).
+function renderWeeklyStatusReportHTML(pkg){
+  if(!pkg)return'';
+  const h=pkg.header;
+  const healthColor=h.overallHealth==='Green'?'#16a34a':h.overallHealth==='Yellow'?'#d97706':'#dc2626';
+  const sec=(title,body)=>body?`<div style="margin-bottom:22px"><div style="font-size:11px;font-weight:700;color:#E22F4A;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;border-bottom:2px solid #1a1a1a;padding-bottom:4px">${esc(title)}</div>${body}</div>`:'';
+  const table=(headers,rows)=>`<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>${headers.map(h=>`<th style="text-align:left;padding:5px 8px;background:#f3f4f6;font-size:10px;text-transform:uppercase;color:#6b6b6b">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
+
+  const deliverableRows=pkg.deliverables.filter(d=>d.included).map(d=>`<tr><td style="padding:6px 8px;border-top:1px solid #eee">${esc(d.label)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(d.soTag||'—')}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(d.targetDate||'TBC')}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(d.status)}</td></tr>`).join('');
+  const completedRows=pkg.completedThisWeek.filter(c=>c.included).map(c=>`<tr><td style="padding:6px 8px;border-top:1px solid #eee">${esc(c.description)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(c.date)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(c.owner)}</td></tr>`).join('');
+  const upcomingRows=pkg.upcoming.filter(u=>u.included).map(u=>`<tr><td style="padding:6px 8px;border-top:1px solid #eee">${esc(u.activity)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(u.targetDate)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(u.owner)}</td></tr>`).join('');
+
+  const timelineHtml=pkg.timeline.map(t=>`<div style="flex:1;min-width:110px;text-align:center;padding:10px 6px;border-radius:8px;background:${t.status==='Complete'?'#f0fdf4':t.status==='In Progress'?'#fffaf0':'#f9fafb'};border:1px solid ${t.status==='Complete'?'#86efac':t.status==='In Progress'?'#fde68a':'#e5e7eb'}">
+    <div style="font-size:10px;font-weight:700;color:#6b6b6b;text-transform:uppercase">${esc(t.label)}</div>
+    <div style="font-size:11px;margin:4px 0;color:#1a1a1a;font-weight:600">${esc(t.status)}</div>
+    <div style="font-size:10px;color:#999">${esc(t.dateRange)}</div>
+  </div>`).join('');
+
+  const snapshotHtml=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+    ${[['Completion',pkg.snapshot.completionPct+'%'],['Current Phase',pkg.snapshot.currentPhase],['Next Milestone',pkg.snapshot.nextMilestone],['Target Ship',pkg.snapshot.targetShipDate],['Target Go-Live',pkg.snapshot.targetGoLive],['Machines',pkg.snapshot.machines],['Milestones',pkg.snapshot.milestonesCompleted],['Shipping Sites',pkg.snapshot.shippingSites]]
+      .map(([label,val])=>`<div style="padding:10px;background:#f9fafb;border-radius:8px"><div style="font-size:9px;color:#999;text-transform:uppercase">${esc(label)}</div><div style="font-size:15px;font-weight:700;color:#1a1a1a;margin-top:2px">${esc(String(val))}</div></div>`).join('')}
+  </div>`;
+
+  const contactsHtml=`<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:12px">
+    ${[['Signifi PM',pkg.contacts.signifiPM],['Client PM',pkg.contacts.clientPM],['Deployment Lead',pkg.contacts.deploymentLead],['Support Contact',pkg.contacts.supportContact]]
+      .map(([label,val])=>`<div><span style="color:#999">${esc(label)}:</span> <b>${esc(val||'To Be Confirmed')}</b></div>`).join('')}
+  </div>`;
+
+  const clientBody=`<div style="font-family:var(--font,Arial,sans-serif);max-width:900px;margin:0 auto;background:white;color:#1a1a1a">
+    <div style="background:#1a1a1a;color:white;padding:24px 28px;display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div style="font-size:11px;letter-spacing:0.08em;color:#E22F4A;font-weight:700;text-transform:uppercase">Weekly Status Report</div>
+        <div style="font-size:24px;font-weight:800;margin-top:4px">${esc(h.projectName)}</div>
+        <div style="font-size:12px;color:#aaa;margin-top:4px">${esc(h.client)} · ${esc(h.salesOrders.join(', '))}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:10px;color:#aaa">REPORTING PERIOD</div>
+        <div style="font-size:13px;font-weight:600">${esc(h.reportingPeriod.start)} – ${esc(h.reportingPeriod.end)}</div>
+        <div style="margin-top:8px;display:inline-block;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;background:${healthColor};color:white">${esc(h.overallHealth)}</div>
+      </div>
+    </div>
+    <div style="padding:24px 28px">
+      <div style="display:flex;gap:20px;font-size:12px;color:#666;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid #eee">
+        <div><b style="color:#1a1a1a">PM:</b> ${esc(h.pm)}</div>
+        <div><b style="color:#1a1a1a">Phase:</b> ${esc(h.currentPhase)}</div>
+        <div><b style="color:#1a1a1a">Target Go-Live:</b> ${esc(h.targetGoLive)}</div>
+      </div>
+      ${sec('Executive Summary',pkg.executiveSummary?`<div style="font-size:13px;line-height:1.6;white-space:pre-wrap">${esc(pkg.executiveSummary)}</div>`:'<div style="font-size:12px;color:#999;font-style:italic">No summary written for this period yet.</div>')}
+      ${sec('Client Deliverables & Commitments',deliverableRows?table(['Deliverable','SO','Target Date','Status'],deliverableRows):'')}
+      ${sec('Project Snapshot',snapshotHtml)}
+      ${sec('Project Timeline',`<div style="display:flex;gap:8px;flex-wrap:wrap">${timelineHtml}</div>`)}
+      ${sec('Completed This Week',completedRows?table(['Description','Date','Owner'],completedRows):'<div style="font-size:12px;color:#999;font-style:italic">Nothing completed in this period.</div>')}
+      ${sec('Upcoming Activities',upcomingRows?table(['Activity','Target Date','Owner'],upcomingRows):'')}
+      ${pkg.clientActionsRequired.length?sec('Client Actions Required',table(['Action','Owner','Due Date','Status'],pkg.clientActionsRequired.map(a=>`<tr><td style="padding:6px 8px;border-top:1px solid #eee">${esc(a.action)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(a.owner)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(a.dueDate)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(a.status)}</td></tr>`).join(''))):''}
+      ${sec('Project Contacts',contactsHtml)}
+      <div style="margin-top:24px;padding-top:14px;border-top:1px solid #eee;font-size:10px;color:#aaa;text-align:center">SIGNIFI SOLUTIONS · CONFIDENTIAL — PREPARED FOR ${esc(h.client).toUpperCase()}</div>
+    </div>
+  </div>`;
+
+  const internalBody=wsrShowInternal?`<div style="font-family:var(--font,Arial,sans-serif);max-width:900px;margin:24px auto 0;background:#fffaf0;border:2px dashed #d97706;padding:20px 28px">
+    <div style="font-size:11px;font-weight:700;color:#d97706;text-transform:uppercase;margin-bottom:14px">⚠ Internal Review — PM &amp; leadership only, not sent to client</div>
+    ${sec('Open Risks',pkg.internalReview.openRisks.length?pkg.internalReview.openRisks.map(r=>`<div style="font-size:12px;padding:4px 0">• ${esc(r.description)} <span style="color:#999">(${esc(r.owner||'unassigned')})</span></div>`).join(''):'<div style="font-size:12px;color:#999">None open.</div>')}
+    ${sec('Open Issues',pkg.internalReview.openIssues.length?pkg.internalReview.openIssues.map(r=>`<div style="font-size:12px;padding:4px 0">• ${esc(r.description)} <span style="color:#999">(${esc(r.owner||'unassigned')})</span></div>`).join(''):'<div style="font-size:12px;color:#999">None open.</div>')}
+    ${sec('Schedule Variance',pkg.internalReview.scheduleVariance.length?table(['Milestone','Original','Current','Variance'],pkg.internalReview.scheduleVariance.map(v=>`<tr><td style="padding:6px 8px;border-top:1px solid #eee">${esc(v.milestone)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(v.originalDate)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${esc(v.currentDate)}</td><td style="padding:6px 8px;border-top:1px solid #eee">${v.varianceDays>0?'+':''}${v.varianceDays}d</td></tr>`).join('')):'<div style="font-size:12px;color:#999">No slipped milestones.</div>')}
+    ${sec('Action Item Aging',pkg.internalReview.actionItemAging.length?pkg.internalReview.actionItemAging.map(a=>`<div style="font-size:12px;padding:4px 0">• ${esc(a.description)} — <span style="color:#999">${a.ageDays===null?'age unknown':a.ageDays+'d old'}, ${esc(a.owner)}</span></div>`).join(''):'<div style="font-size:12px;color:#999">No open action items.</div>')}
+    ${sec('Dependencies',pkg.internalReview.dependencies.length?'':'<div style="font-size:12px;color:#999;font-style:italic">Not tracked anywhere in Ops Hub yet.</div>')}
+  </div>`:'';
+
+  return clientBody+internalBody;
+}
+
+function renderWeeklyStatusPreviewPane(){
+  const pane=document.getElementById('wsr-preview-pane');
+  const printArea=document.getElementById('wsr-print-area');
+  const html=renderWeeklyStatusReportHTML(wsrPkg);
+  if(pane)pane.innerHTML=`<div style="transform:scale(0.85);transform-origin:top left;width:117.6%">${html}</div>`;
+  if(printArea)printArea.innerHTML=html;
+}
+
+async function wsrCopyToClipboard(){
+  if(!wsrPkg)return;
+  const p=wsrPkg,h=p.header;
+  const lines=[
+    `WEEKLY STATUS REPORT — ${h.projectName}`,
+    `${h.client} · ${h.salesOrders.join(', ')}`,
+    `Reporting period: ${h.reportingPeriod.start} – ${h.reportingPeriod.end}`,
+    `PM: ${h.pm} · Phase: ${h.currentPhase} · Health: ${h.overallHealth} · Target Go-Live: ${h.targetGoLive}`,
+    '',
+    'EXECUTIVE SUMMARY',
+    p.executiveSummary||'(none written for this period)',
+    '',
+    'CLIENT DELIVERABLES & COMMITMENTS',
+    ...p.deliverables.filter(d=>d.included).map(d=>`• ${d.label} — ${d.targetDate||'TBC'} — ${d.status}`),
+    '',
+    'COMPLETED THIS WEEK',
+    ...p.completedThisWeek.filter(c=>c.included).map(c=>`• ${c.description} — ${c.date} (${c.owner})`),
+    '',
+    'UPCOMING ACTIVITIES',
+    ...p.upcoming.filter(u=>u.included).map(u=>`• ${u.activity} — ${u.targetDate} (${u.owner})`),
+  ];
+  if(p.clientActionsRequired.length){
+    lines.push('','CLIENT ACTIONS REQUIRED',...p.clientActionsRequired.map(a=>`• ${a.action} — ${a.owner}, due ${a.dueDate}`));
+  }
+  try{
+    await navigator.clipboard.writeText(lines.join('\n'));
+    showToast('📋 Copied to clipboard ✓');
+  }catch(e){
+    console.warn('clipboard write failed',e);
+    showToast('⚠ Could not copy — your browser may be blocking clipboard access');
+  }
 }
 
 function renderGenDocs(){
@@ -8509,7 +8945,10 @@ function renderGenDocs(){
       </div>
     </div>`;
   restoreDocFormState();
-  if(activeDocTab==='comms'&&selectedDocProjId)renderKickoffPreview();
+  if(activeDocTab==='comms'&&selectedDocProjId){
+    if(commsActiveDoc==='kickoff')renderKickoffPreview();
+    else if(commsActiveDoc==='weekly-status')renderWeeklyStatusReview();
+  }
 }
 
 function getDocProj(){return projects.find(p=>p.id===selectedDocProjId)||{};}
