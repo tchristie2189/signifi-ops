@@ -8,6 +8,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <style>
 :root{--red:#C8102E;--red-light:#fdf0f2;--red-mid:#f5c2cb;--black:#0f0f0f;--gray-900:#1a1a1a;--gray-700:#3d3d3d;--gray-500:#6b6b6b;--gray-300:#c4c4c4;--gray-200:#e0e0e0;--gray-100:#f2f2f2;--gray-50:#f8f8f8;--white:#fff;--success:#1a7a4a;--success-bg:#eaf5ef;--warning:#8a5a00;--warning-bg:#fff8e6;--purple:#7c3aed;--purple-bg:#ede9fe;--blue:#2563eb;--blue-bg:#eff6ff;--font:'DM Sans',sans-serif;--mono:'DM Mono',monospace;--radius:6px;--radius-lg:10px;}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
@@ -622,8 +623,8 @@ async function fetchAllRows(table,opts={}){
   return{data:results.flatMap(r=>r.data||[]),error:null};
 }
 
-const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end','final-qc':'Final QC',uat:'UAT',installation:'Installation',uninstallation:'Uninstallation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','po-release':'PO Release','mo-release':'MO Release',other:'Other'};
-const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa','final-qc':'ev-fqc',uat:'ev-uat',installation:'ev-inst',uninstallation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
+const TYPE_LBL={shipping:'Shipping',arrival:'Arrival','production-start':'Prod start','production-end':'Prod end','quality-start':'QA start','quality-end':'QA end','final-qc':'Final QC',uat:'UAT',installation:'Installation',uninstallation:'Uninstallation',delivery:'Delivery',vinyl:'Vinyl','training':'Training','go-live':'Go-live','po-release':'PO Release','mo-release':'MO Release',other:'Other'};
+const TYPE_CLS={shipping:'ev-ship',arrival:'ev-arr','production-start':'ev-prod','production-end':'ev-prod','quality-start':'ev-qa','quality-end':'ev-qa','final-qc':'ev-fqc',uat:'ev-uat',installation:'ev-inst',uninstallation:'ev-inst',delivery:'ev-inst',vinyl:'ev-arr',training:'ev-other','go-live':'ev-other','po-release':'ev-other','mo-release':'ev-other',other:'ev-other'};
 const VINYL_TYPES=['Decal','Partial Vinyl','Full Vinyl'];
 const STATUS_OPTS=['Scheduled','In progress','Complete','On hold','Needs date','Print Day','Vacation'];
 const SHIP_STATUS_OPTS=['Pending','Scheduled','Picked up','Shipped','Delivered'];
@@ -711,6 +712,26 @@ function monday(dt){let r=new Date(dt);let d=r.getDay();r.setDate(r.getDate()+(d
 function addD(dt,n){let r=new Date(dt);r.setDate(r.getDate()+n);return r;}
 function sameDay(a,b){return a.toDateString()===b.toDateString();}
 function isoD(dt){return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');}
+// Escapes free-text values before they're interpolated into innerHTML template
+// strings, so a pasted "<script>" or "onerror=" in a label/notes/address field
+// can't execute for other users viewing the same project. Always wrap
+// user-entered strings with this before putting them in a template literal
+// that gets assigned to .innerHTML.
+function esc(s){if(s===null||s===undefined)return'';return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+// For values embedded as a JS string argument inside an inline onclick="fn('...')"
+// attribute. esc() alone isn't enough here: the browser HTML-decodes the
+// attribute before the inline JS runs, so an escaped apostrophe (&#39;) just
+// turns back into a literal ' and still breaks out of the JS string. This
+// escapes backslash/quote/newline for the JS string first, then HTML-escapes
+// the result for the surrounding double-quoted attribute.
+function escJsAttr(s){return String(s===null||s===undefined?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,'\\n').replace(/\r/g,'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// Prevents duplicate writes when a button gets double-clicked before its
+// first request finishes. Usage: at the top of an async handler,
+// `if(!guardStart('someKey'))return;` then `guardEnd('someKey')` in a
+// finally block (or right before each return).
+const _busyKeys=new Set();
+function guardStart(key){if(_busyKeys.has(key))return false;_busyKeys.add(key);return true;}
+function guardEnd(key){_busyKeys.delete(key);}
 function fmt(s){if(!s)return'—';return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});}
 function fmtFull(s){if(!s)return'—';return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}
 function fmtTime(s){if(!s)return'';try{return new Date(s).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
@@ -840,7 +861,7 @@ async function saveShippingStatus(projId,soTag,status){
   if(soTag){
     const existing=soDetails.find(d=>d.project_id===projId&&d.so_tag===soTag);
     if(existing){await sb.from('so_details').update({shipping_status:status,updated_at:new Date().toISOString()}).eq('id',existing.id);existing.shipping_status=status;}
-    else{const proj=projects.find(p=>p.id===projId);const{data}=await sb.from('so_details').insert({project_id:projId,so_tag:soTag,shipping_status:status,address:proj?.address||'',naming_convention:proj?.naming_convention||''}).select().single();if(data)soDetails.push(data);}
+    else{const proj=projects.find(p=>p.id===projId);const{data,error}=await sb.from('so_details').insert({project_id:projId,so_tag:soTag,shipping_status:status,address:proj?.address||'',naming_convention:proj?.naming_convention||''}).select().single();if(error){console.warn('so_details insert error',error);showToast('⚠ Save failed: '+error.message);return;}if(data)soDetails.push(data);}
   } else {
     await sb.from('projects').update({shipping_status:status}).eq('id',projId);
     const p=projects.find(x=>x.id===projId);if(p)p.shipping_status=status;
@@ -952,7 +973,8 @@ async function toggleMilestoneDone(mid,pid,e){
     await sb.from('milestone_done').delete().eq('milestone_id',mid);
     delete milestoneDone[mid];
   } else {
-    const{data}=await sb.from('milestone_done').insert({milestone_id:mid,project_id:pid,marked_by:currentUserName}).select().single();
+    const{data,error}=await sb.from('milestone_done').insert({milestone_id:mid,project_id:pid,marked_by:currentUserName}).select().single();
+    if(error){console.warn('milestone_done insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data)milestoneDone[mid]=data;
   }
   showToast(isDone?'Marked as not done':'Marked as done ✓');
@@ -1497,7 +1519,7 @@ function renderPipeline(){
       ${bottlenecks.map(b=>`
         <div style="background:white;border:1px solid ${b.late>0?'#fecaca':'var(--gray-100)'};border-left:3px solid ${b.color};border-radius:8px;padding:8px 12px;cursor:pointer" onclick="document.getElementById('pipeline-col-${b.id}').scrollIntoView({behavior:'smooth',block:'nearest'})">
           <div style="font-size:18px;font-weight:700;color:${b.late>0?'var(--red)':'var(--black)'}">${b.count}</div>
-          <div style="font-size:10px;font-weight:600;color:${b.color};margin-top:1px">${b.label}</div>
+          <div style="font-size:10px;font-weight:600;color:${b.color};margin-top:1px">${esc(b.label)}</div>
           ${b.late>0?`<div style="font-size:10px;color:var(--red);margin-top:2px">⚠ ${b.late} late</div>`:''}
         </div>`).join('')}
     </div>`;
@@ -1515,7 +1537,7 @@ function renderPipeline(){
         ${pmDropdown('renderPipeline')}
         <select style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onchange="pipelineStageFilter=this.value;renderPipeline()">
           <option value="">All stages</option>
-          ${PIPELINE_STAGES.map(s=>`<option value="${s.id}"${pipelineStageFilter===s.id?' selected':''}>${s.icon} ${s.label}</option>`).join('')}
+          ${PIPELINE_STAGES.map(s=>`<option value="${s.id}"${pipelineStageFilter===s.id?' selected':''}>${s.icon} ${esc(s.label)}</option>`).join('')}
         </select>
         <button class="btn-export" onclick="exportToExcel()">⬇ Excel</button>
       </div>
@@ -1562,13 +1584,13 @@ function renderPipeline(){
           <span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:8px;background:${health==='red'?'#fee2e2':health==='amber'?'#fef3c7':'#dcfce7'};color:${healthColor}">${days}d in stage</span>
         </div>
         ${endDate?`<div style="margin-top:5px;font-size:10px;color:${d!==null&&d<0?'var(--red)':d!==null&&d<=3?'#d97706':'var(--gray-500)'}">Due: ${fmt(endDate)}${d!==null&&d<0?' ⚠ '+Math.abs(d)+'d late':''}</div>`:''}
-        ${upcoming&&upcoming.key!==endKey?`<div style="margin-top:3px;font-size:10px;color:var(--gray-400)">Next: ${upcoming.label} ${fmt(upcoming.date)}</div>`:''}
+        ${upcoming&&upcoming.key!==endKey?`<div style="margin-top:3px;font-size:10px;color:var(--gray-400)">Next: ${esc(upcoming.label)} ${fmt(upcoming.date)}</div>`:''}
       </div>`;
     }).join('');
     return`<div id="pipeline-col-${stage.id}" style="min-width:${pipelineStageFilter?'100%':'220px'};max-width:${pipelineStageFilter?'100%':'260px'};flex-shrink:0">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid ${stage.color}">
         <span style="font-size:14px">${stage.icon}</span>
-        <span style="font-size:12px;font-weight:700;color:${stage.color}">${stage.label}</span>
+        <span style="font-size:12px;font-weight:700;color:${stage.color}">${esc(stage.label)}</span>
         <span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;background:${stage.color}18;color:${stage.color}">${projs.length}</span>
         ${lateCount>0?`<span style="font-size:10px;font-weight:600;color:var(--red);margin-left:auto">⚠ ${lateCount} late</span>`:''}
       </div>
@@ -1845,7 +1867,7 @@ function renderCapacity(){
     const v=w.dept[d.key].length-limits[d.key];
     if(v>biggestRiskVal){biggestRiskVal=v;biggestRiskIdx=i;biggestRiskDept=d;}
   }));
-  const biggestRisk=biggestRiskVal>0?{label:`${biggestRiskDept.label} · ${capacityWeekLabel(biggestRiskIdx,matrix[biggestRiskIdx])}`,over:biggestRiskVal}:null;
+  const biggestRisk=biggestRiskVal>0?{label:`${esc(biggestRiskDept.label)} · ${capacityWeekLabel(biggestRiskIdx,matrix[biggestRiskIdx])}`,over:biggestRiskVal}:null;
 
   const delayDept=getMostLikelyDelayDept();
   const recommendation=getBoardRecommendation(weeks,limit);
@@ -1860,7 +1882,7 @@ function renderCapacity(){
       <div style="padding:14px 16px;border-right:1px solid var(--gray-100)">
         <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Tightest department</div>
         <div style="font-size:22px;font-weight:700;margin-top:4px">${bottleneck.icon} ${bottleneck.count} / ${bottleneck.limit}</div>
-        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${bottleneck.label} this week</div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${esc(bottleneck.label)} this week</div>
       </div>
       <div style="padding:14px 16px;border-right:1px solid var(--gray-100)">
         <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Biggest risk</div>
@@ -1891,7 +1913,7 @@ function renderCapacity(){
     ${CAP_DEPTS.map(d=>{
       const list=selWeek.dept[d.key];
       return`<div>
-        <div style="font-size:10.5px;font-weight:700;margin-bottom:4px">${d.icon} ${d.label} <span style="color:var(--gray-400);font-weight:500">(${list.length}/${limits[d.key]})</span></div>
+        <div style="font-size:10.5px;font-weight:700;margin-bottom:4px">${d.icon} ${esc(d.label)} <span style="color:var(--gray-400);font-weight:500">(${list.length}/${limits[d.key]})</span></div>
         ${list.length?list.map(p=>`<div onclick="goToProjPage('${p.id}')" style="font-size:11px;padding:3px 0;cursor:pointer;color:var(--gray-700)">• ${p.name}</div>`).join(''):`<div style="font-size:10.5px;color:var(--gray-300)">Nothing entering</div>`}
       </div>`;
     }).join('')}
@@ -1903,7 +1925,7 @@ function renderCapacity(){
         <thead><tr style="border-bottom:1px solid var(--gray-100)">
           <th style="text-align:left;padding:6px 10px;font-size:10px;color:var(--gray-500)">Week</th>
           ${CAP_DEPTS.map(d=>`<th style="padding:6px 10px;font-size:10px;color:var(--gray-500)">
-            ${d.icon} ${d.label}<br><input type="number" min="1" value="${limits[d.key]}" onclick="event.stopPropagation()" onchange="event.stopPropagation();saveCapacityLimit('${d.key}',this.value)" style="width:42px;font-family:var(--font);font-size:10px;padding:2px 3px;border:1px solid var(--gray-300);border-radius:4px;text-align:center;margin-top:2px">
+            ${d.icon} ${esc(d.label)}<br><input type="number" min="1" value="${limits[d.key]}" onclick="event.stopPropagation()" onchange="event.stopPropagation();saveCapacityLimit('${d.key}',this.value)" style="width:42px;font-family:var(--font);font-size:10px;padding:2px 3px;border:1px solid var(--gray-300);border-radius:4px;text-align:center;margin-top:2px">
           </th>`).join('')}
         </tr></thead>
         <tbody>${matrixRows}</tbody>
@@ -1916,7 +1938,7 @@ function renderCapacity(){
     const list=w[key];
     if(!list.length)return'';
     return`<div style="margin-bottom:8px">
-      <div style="font-size:10px;font-weight:700;color:${color};margin-bottom:4px">${icon} ${label} <span style="color:var(--gray-400);font-weight:500">(${list.length})</span></div>
+      <div style="font-size:10px;font-weight:700;color:${color};margin-bottom:4px">${icon} ${esc(label)} <span style="color:var(--gray-400);font-weight:500">(${list.length})</span></div>
       ${list.map(planCard).join('')}
     </div>`;
   };
@@ -2128,7 +2150,8 @@ async function setMilestoneDoneState(mid,pid,wantDone){
   const isDone=!!milestoneDone[mid];
   if(wantDone===isDone)return;
   if(wantDone){
-    const{data}=await sb.from('milestone_done').insert({milestone_id:mid,project_id:pid,marked_by:currentUserName}).select().single();
+    const{data,error}=await sb.from('milestone_done').insert({milestone_id:mid,project_id:pid,marked_by:currentUserName}).select().single();
+    if(error){console.warn('milestone_done insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data)milestoneDone[mid]=data;
   } else {
     await sb.from('milestone_done').delete().eq('milestone_id',mid);
@@ -2248,7 +2271,7 @@ function queueCard(p,boardKey){
     ${photoBlock}
     <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
       <div style="font-size:12px;font-weight:700;line-height:1.3">${p.name}</div>
-      <span style="font-size:12px;flex-shrink:0" title="${fam.label}">${fam.icon}</span>
+      <span style="font-size:12px;flex-shrink:0" title="${esc(fam.label)}">${fam.icon}</span>
     </div>
     ${detail?`<div style="font-size:10px;color:var(--gray-500);margin-top:2px">${detail}</div>`:''}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-top:5px">
@@ -2293,14 +2316,14 @@ function renderQueueBoard(boardKey){
       ${cfg.zones.map(z=>`
         <div onclick="document.getElementById('${cfg.tabId}-col-${z.key}').scrollIntoView({behavior:'smooth',block:'nearest'})" style="background:white;border:1px solid var(--gray-100);border-left:3px solid ${z.color};border-radius:8px;padding:8px 12px;cursor:pointer">
           <div style="font-size:18px;font-weight:700">${zones[z.key].length}</div>
-          <div style="font-size:10px;font-weight:600;color:${z.color};margin-top:1px">${z.icon} ${z.label}</div>
+          <div style="font-size:10px;font-weight:600;color:${z.color};margin-top:1px">${z.icon} ${esc(z.label)}</div>
         </div>`).join('')}
     </div>`;
 
   const fam=queueFamilyFilter[boardKey]||'';
   const familyFilterHtml=`<select onchange="queueFamilyFilter['${boardKey}']=this.value;renderQueueBoard('${boardKey}')" style="font-family:var(--font);font-size:12px;padding:4px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)">
     <option value="">All families</option>
-    ${PROD_FAMILIES.map(f=>`<option value="${f.key}"${fam===f.key?' selected':''}>${f.icon} ${f.label}</option>`).join('')}
+    ${PROD_FAMILIES.map(f=>`<option value="${f.key}"${fam===f.key?' selected':''}>${f.icon} ${esc(f.label)}</option>`).join('')}
   </select>`;
   const addAdHocBtn=isAdHocDept?`<button onclick="openAdHocModal('${boardKey}')" style="font-size:12px;font-weight:600;padding:6px 14px;border:none;border-radius:var(--radius);background:var(--black);color:white;cursor:pointer;font-family:var(--font)">+ Add ${boardKey==='shipping'?'shipment':'installation'}</button>`:'';
 
@@ -2309,7 +2332,7 @@ function renderQueueBoard(boardKey){
     return`<div id="${cfg.tabId}-col-${z.key}" class="q-zone" ondragover="queueZoneOver(event)" ondragleave="queueZoneLeave(event)" ondrop="queueDrop(event,'${boardKey}','${z.key}')" style="min-width:230px;max-width:260px;flex-shrink:0;background:var(--gray-50);border:1px dashed var(--gray-200);border-radius:8px;padding:10px;transition:background 0.1s">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid ${z.color}">
         <span style="font-size:13px">${z.icon}</span>
-        <span style="font-size:12px;font-weight:700;color:${z.color}">${z.label}</span>
+        <span style="font-size:12px;font-weight:700;color:${z.color}">${esc(z.label)}</span>
         <span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;background:${z.color}18;color:${z.color};margin-left:auto">${list.length}</span>
       </div>
       ${list.length?list.map(p=>queueCard(p,boardKey)).join(''):`<div style="text-align:center;padding:1.5rem 0;color:var(--gray-300);font-size:11px">Nothing here</div>`}
@@ -2550,7 +2573,7 @@ function renderProductionBoardView(){
     const more=s.key==='shipped'&&shippedTotal>pbHubShippedLimit
       ?`<button class="btn" style="width:100%;font-size:11px" onclick="pbHubShippedLimit+=20;renderProductionQueue()">Load 20 more (${shippedTotal-pbHubShippedLimit} hidden)</button>`:'';
     return`<div class="pb-col">
-      <div class="pb-col-head" style="color:${s.color}">${s.label}<span class="pb-col-cnt">${s.key==='shipped'?shippedTotal:cards.length}</span></div>
+      <div class="pb-col-head" style="color:${s.color}">${esc(s.label)}<span class="pb-col-cnt">${s.key==='shipped'?shippedTotal:cards.length}</span></div>
       <div class="pb-col-body">${cardHtml||'<div style="text-align:center;font-size:12px;color:var(--gray-400);padding:24px 0">—</div>'}${more}</div>
     </div>`;
   }).join('');
@@ -2607,7 +2630,7 @@ function renderProductionReports(){
     const arr=byStage[s.key]||[];
     const avg=arr.length?Math.round(arr.reduce((a,b)=>a+b,0)/arr.length):null;
     const max=arr.length?Math.max(...arr):null;
-    return`<tr><td style="padding:5px 10px 5px 0"><b style="color:${s.color}">${s.label}</b></td>
+    return`<tr><td style="padding:5px 10px 5px 0"><b style="color:${s.color}">${esc(s.label)}</b></td>
       <td style="padding:5px 10px;text-align:right">${pbHubDur(avg)}</td>
       <td style="padding:5px 10px;text-align:right;color:var(--gray-500)">${pbHubDur(max)}</td>
       <td style="padding:5px 0;text-align:right;color:var(--gray-500)">${arr.length}</td></tr>`;
@@ -2656,7 +2679,7 @@ function renderProductionReports(){
   }
   const maxAvg=Math.max(1,...weeks.map(w=>w.avg));
   const trendRows=weeks.map(w=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-    <span style="width:56px;font-size:10px;color:var(--gray-500);flex-shrink:0">${w.label}</span>
+    <span style="width:56px;font-size:10px;color:var(--gray-500);flex-shrink:0">${esc(w.label)}</span>
     <div style="flex:1;background:var(--gray-100);border-radius:4px;height:16px;overflow:hidden"><div style="width:${w.avg?Math.max(3,w.avg/maxAvg*100):0}%;height:100%;background:#7c3aed"></div></div>
     <span style="width:70px;font-size:10px;color:var(--gray-500);text-align:right;flex-shrink:0">${w.count?pbHubDur(w.avg):'—'}</span>
   </div>`).join('');
@@ -2923,7 +2946,7 @@ function renderProcurementCC(){
     const days=getDaysUntilProduction(p);
     const status=stage==='done'?{label:'✅ Ready',color:'var(--success)',bg:'var(--success-bg)'}:days<=3?{label:'🔴 Blocked',color:'var(--red)',bg:'var(--red-light)'}:{label:'🟡 At Risk',color:'var(--warning)',bg:'var(--warning-bg)'};
     return`<div onclick="goToProjPage('${p.id}')" style="background:${status.bg};border-left:3px solid ${status.color};border-radius:8px;padding:10px 12px;cursor:pointer">
-      <div style="display:flex;justify-content:space-between;gap:8px"><span style="font-size:12px;font-weight:700">${p.name}</span><span style="font-size:10px;font-weight:700;color:${status.color}">${status.label}</span></div>
+      <div style="display:flex;justify-content:space-between;gap:8px"><span style="font-size:12px;font-weight:700">${p.name}</span><span style="font-size:10px;font-weight:700;color:${status.color}">${esc(status.label)}</span></div>
       <div style="font-size:10.5px;color:var(--gray-500);margin-top:2px">${days}d to production · ${p.pm||'—'}</div>
     </div>`;
   };
@@ -2991,7 +3014,7 @@ function renderProcurementCC(){
         <div style="flex-shrink:0;text-align:center;min-width:90px;background:var(--gray-50);border-top:3px solid ${s.color};border-radius:8px;padding:10px 8px">
           <div style="font-size:18px">${s.icon}</div>
           <div style="font-size:16px;font-weight:700;margin-top:2px">${s.count}</div>
-          <div style="font-size:9.5px;color:var(--gray-500)">${s.label}</div>
+          <div style="font-size:9.5px;color:var(--gray-500)">${esc(s.label)}</div>
         </div>`).join('')}
     </div>
   </div>`;
@@ -3195,7 +3218,7 @@ function renderStdFilterBar(dept,opts={}){
   const rerender=opts.rerenderCall||`renderDeptView('${dept}')`;
   const searchVal=(f.search||'').replace(/"/g,'&quot;');
   const selStyle='font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)';
-  const opt=(val,label,cur)=>`<option value="${val}"${cur===val?' selected':''}>${label}</option>`;
+  const opt=(val,label,cur)=>`<option value="${val}"${cur===val?' selected':''}>${esc(label)}</option>`;
   let bar='<div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">';
   bar+=`<input placeholder="Search..." style="${selStyle};width:190px" value="${searchVal}" id="sf-search-${dept}">`;
   bar+=`<select style="${selStyle}" id="sf-status-${dept}">${opt('','All statuses',f.status)}${opt('active','Active',f.status)}${opt('on-hold','On hold',f.status)}${opt('complete','Complete',f.status)}</select>`;
@@ -3346,16 +3369,16 @@ function renderGlance(){
       if(allDone){pct=100;}
       else if(sd){const s=new Date(sd+'T00:00:00');const e=ed?new Date(ed+'T00:00:00'):s;const t=today();if(t>e)pct=100;else if(t>=s){const total=(e-s)||86400000;pct=Math.min(100,Math.round((t-s)/total*100));}}
       const barColor=allDone?'var(--success)':hasOverdue||hasEscalation?'var(--red)':hasRisk?'var(--warning)':stage.color;
-      return `<div class="cycle-stage"><div class="cycle-stage-name">${stage.label}</div><div class="cycle-bar-wrap"><div class="cycle-bar" style="width:${pct}%;background:${pct>0?barColor:'var(--gray-200)'}"></div></div><div style="text-align:right"><span class="stage-chip ${chipCls}">${chipLbl}</span></div></div>`;
+      return `<div class="cycle-stage"><div class="cycle-stage-name">${esc(stage.label)}</div><div class="cycle-bar-wrap"><div class="cycle-bar" style="width:${pct}%;background:${pct>0?barColor:'var(--gray-200)'}"></div></div><div style="text-align:right"><span class="stage-chip ${chipCls}">${chipLbl}</span></div></div>`;
     }).filter(Boolean).join('');
     // Notes section
     const notes=(p.notes||'').trim();
     const notesHtml=notes?`<div class="glance-notes">
       <div class="glance-notes-preview" onclick="toggleNotes('notes-${p.id}')">
-        <span>📝</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${notes.split('\n')[0].slice(0,60)}${notes.length>60?'…':''}</span>
+        <span>📝</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(notes.split('\n')[0].slice(0,60))}${notes.length>60?'…':''}</span>
         <span style="font-size:10px;color:var(--gray-300)">▾</span>
       </div>
-      <div class="glance-notes-body" id="notes-${p.id}">${notes}</div>
+      <div class="glance-notes-body" id="notes-${p.id}">${esc(notes)}</div>
     </div>`:'';
     // Archive/complete button
     const isComplete=p.status==='complete';
@@ -3378,7 +3401,7 @@ function renderGlance(){
             })()}
             ${isChild(p)?`<span style="font-size:9px;padding:1px 7px;border-radius:10px;background:#ede9fe;color:#7c3aed;font-weight:700">⬡ Child · ${getMaster(p.id)?.name||''}</span>`:''}
           </div>
-          <div class="glance-proj-meta"><span class="glance-so" title="${p.so_number||''}">${truncateSO(p.so_number)}</span><span class="glance-client">${p.client||''}</span>${p.naming_convention?`<span class="glance-client" style="font-family:var(--mono);font-size:9px;color:var(--gray-400)">${p.naming_convention}</span>`:''}</div>
+          <div class="glance-proj-meta"><span class="glance-so" title="${p.so_number||''}">${truncateSO(p.so_number)}</span><span class="glance-client">${p.client||''}</span>${p.naming_convention?`<span class="glance-client" style="font-family:var(--mono);font-size:9px;color:var(--gray-400)">${esc(p.naming_convention)}</span>`:''}</div>
           ${overallStart&&overallEnd?`<div style="margin-top:7px"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="font-size:9px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em">Overall progress</span><span style="font-size:9px;color:var(--gray-500)">${overallPct}%</span></div><div style="background:var(--gray-100);border-radius:3px;height:4px"><div style="height:4px;border-radius:3px;background:linear-gradient(90deg,#7c3aed,#e22f4a);width:${overallPct}%"></div></div></div>`:''}
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
@@ -3488,7 +3511,7 @@ function getReadinessData(){
   add('red-checkins','Red check-ins','critical','operations',red,'Department escalations requiring immediate attention.');
   add('yellow-checkins','Yellow check-ins','warning','operations',yellow,'Department items marked in trouble.');
 
-  const overdue=milestones.filter(m=>isMilestoneOverdue(m)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{project_id:m.project_id,name:p?.name||'Unknown project',so:m.so_tag||p?.so_number||'',pm:p?.pm||'',sales:p?.sales||'',detail:`${m.label} · ${fmtFull(m.date)}`};});
+  const overdue=milestones.filter(m=>isMilestoneOverdue(m)).map(m=>{const p=projects.find(x=>x.id===m.project_id);return{project_id:m.project_id,name:p?.name||'Unknown project',so:m.so_tag||p?.so_number||'',pm:p?.pm||'',sales:p?.sales||'',detail:`${esc(m.label)} · ${fmtFull(m.date)}`};});
   add('overdue-milestones','Overdue milestones','critical','operations',overdue,'Milestones past due and not completed.');
 
   const missingInstall=[],missingDelivery=[],badSequence=[];
@@ -3537,13 +3560,13 @@ function renderReadiness(){
   const critical=visible.filter(i=>i.severity==='critical').reduce((n,i)=>n+i.items.length,0);
   const warning=visible.filter(i=>i.severity==='warning').reduce((n,i)=>n+i.items.length,0);
   const issueCount=visible.filter(i=>i.items.length).length;
-  const groupBtn=(id,label)=>`<button class="ftab${readinessFilter===id?' active':''}" onclick="setReadinessGroup('${id}')">${label}</button>`;
+  const groupBtn=(id,label)=>`<button class="ftab${readinessFilter===id?' active':''}" onclick="setReadinessGroup('${id}')">${esc(label)}</button>`;
   const cards=visible.map(i=>{
     const color=i.severity==='critical'?'#ef4444':'#d97706';
     const bg=i.severity==='critical'?'#fef2f2':'#fffbeb';
     const examples=i.items.slice(0,3).map(x=>`<div style="font-size:11px;color:var(--gray-700);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.name}${x.detail?` · ${x.detail}`:''}</div>`).join('');
     return`<button onclick="setReadinessIssue('${i.id}')" style="text-align:left;background:${bg};border:1px solid ${color}33;border-left:4px solid ${color};border-radius:var(--radius-lg);padding:14px;cursor:pointer;font-family:var(--font);min-height:128px">
-      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><div style="font-size:12px;font-weight:700;color:var(--black)">${i.label}</div><div style="font-size:24px;font-weight:700;color:${color}">${i.items.length}</div></div>
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><div style="font-size:12px;font-weight:700;color:var(--black)">${esc(i.label)}</div><div style="font-size:24px;font-weight:700;color:${color}">${i.items.length}</div></div>
       <div style="font-size:10px;color:var(--gray-500);margin:4px 0 8px">${i.why}</div>${examples||'<div style="font-size:11px;color:var(--success);font-weight:600">✓ Clear</div>'}
       ${i.items.length>3?`<div style="font-size:10px;color:${color};font-weight:600;margin-top:4px">+${i.items.length-3} more</div>`:''}
     </button>`;
@@ -3565,7 +3588,7 @@ function renderReadiness(){
       ?`<input onclick="event.stopPropagation()" placeholder="SO number…" onkeydown="if(event.key==='Enter'){rqaSetSO('${r.project_id}',this.value);this.blur();}" onblur="if(this.value.trim())rqaSetSO('${r.project_id}',this.value)" style="font-family:var(--mono);font-size:11px;padding:3px 6px;border:1px solid #fde68a;border-radius:4px;width:110px;background:#fffbeb">`
       :(r.so||'—');
     return`<tr onclick="openReadinessProject('${r.project_id||''}')" style="cursor:${r.project_id?'pointer':'default'}">
-    <td><span style="font-size:10px;font-weight:700;color:${r.issue.severity==='critical'?'#ef4444':'#d97706'}">${r.issue.label}</span></td>
+    <td><span style="font-size:10px;font-weight:700;color:${r.issue.severity==='critical'?'#ef4444':'#d97706'}">${esc(r.issue.label)}</span></td>
     <td style="font-weight:600">${r.name||'—'}</td><td class="date-cell">${soCell}</td><td>${pmCell}</td><td>${salesCell}</td><td>${r.detail||'—'}</td></tr>`;
   }).join('');
   el.innerHTML=`
@@ -3653,7 +3676,8 @@ async function syncProjectFieldsToSingleSO(projId,updates){
   }else{
     const row={project_id:projId,so_tag:so};
     SHARED_CONFIG_FIELDS.forEach(f=>row[f]=Object.prototype.hasOwnProperty.call(clean,f)?clean[f]:(proj[f]||''));
-    const{data}=await sb.from('so_details').insert(row).select().single();
+    const{data,error}=await sb.from('so_details').insert(row).select().single();
+    if(error){console.warn('so_details insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data)soDetails.push(data);
   }
 }
@@ -3704,8 +3728,8 @@ function renderOverview(){
         <div class="ms-type">${TYPE_LBL[m.key]||m.key}</div>
         <button onclick="toggleMilestoneDone('${m.id}','${m.project_id}',event)" style="background:${isManualDone?'var(--success)':'transparent'};border:1px solid ${isManualDone?'var(--success)':'var(--gray-300)'};border-radius:10px;padding:1px 7px;font-size:10px;cursor:pointer;color:${isManualDone?'white':'var(--gray-500)'};font-family:var(--font);flex-shrink:0">${isManualDone?'✓ Done':'Mark done'}</button>
       </div>
-      <div class="ms-label" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}','${m.so_tag||''}','${m.project_id||''}')" style="cursor:pointer">${m.label}${slDot}${slippageTag}${flagBadge}</div>
-      <div class="ms-date" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}','${m.so_tag||''}','${m.project_id||''}')" style="cursor:pointer">${fmtFull(m.date)}</div>
+      <div class="ms-label" onclick="openEditMs('${m.id}','${escJsAttr(m.label)}','${m.date||''}','${m.so_tag||''}','${m.project_id||''}')" style="cursor:pointer">${esc(m.label)}${slDot}${slippageTag}${flagBadge}</div>
+      <div class="ms-date" onclick="openEditMs('${m.id}','${escJsAttr(m.label)}','${m.date||''}','${m.so_tag||''}','${m.project_id||''}')" style="cursor:pointer">${fmtFull(m.date)}</div>
       <div class="ms-days ${st.dcls}">${st.txt}</div>
       ${hist.length&&origDate?`<div style="font-size:9px;color:var(--gray-400);margin-top:1px">Orig: ${fmt(origDate)}</div>`:''}
     </div>`;
@@ -3781,7 +3805,7 @@ function renderOverview(){
           </details>
         </div>
       </div>
-      ${(()=>{const c=getProjectCompletion(proj);if(c)return`<div style="padding:8px 14px;background:var(--success-bg);border-bottom:1px solid #cfe8da;font-size:11.5px;color:var(--success);font-weight:600">✓ Project complete — Installed${c.date?' '+fmt(c.date):''}</div>`;const b=getProjectBlocker(proj);if(!b)return'';return`<div style="padding:8px 14px;background:${b.overdue?'var(--red-light)':'var(--gray-50)'};border-bottom:1px solid var(--gray-100);font-size:11.5px;color:${b.overdue?'var(--red)':'var(--gray-600)'}">🔗 ${b.blockedStage.label} is blocked by ${b.blockingStage.label} · ${b.estimate}</div>`;})()}
+      ${(()=>{const c=getProjectCompletion(proj);if(c)return`<div style="padding:8px 14px;background:var(--success-bg);border-bottom:1px solid #cfe8da;font-size:11.5px;color:var(--success);font-weight:600">✓ Project complete — Installed${c.date?' '+fmt(c.date):''}</div>`;const b=getProjectBlocker(proj);if(!b)return'';return`<div style="padding:8px 14px;background:${b.overdue?'var(--red-light)':'var(--gray-50)'};border-bottom:1px solid var(--gray-100);font-size:11.5px;color:${b.overdue?'var(--red)':'var(--gray-600)'}">🔗 ${esc(b.blockedStage.label)} is blocked by ${esc(b.blockingStage.label)} · ${b.estimate}</div>`;})()}
       ${(()=>{
         const swItems=swSummaryFor(proj.id);
         if(!swItems.length)return'';
@@ -3824,7 +3848,7 @@ function renderOverview(){
         const byLabel={};
         projMs.forEach(m=>{const k=(m.label||'')+'|'+(m.so_tag||'');byLabel[k]=byLabel[k]||[];byLabel[k].push(m);});
         const dupes=Object.values(byLabel).filter(arr=>arr.length>1);
-        const dupeWarning=dupes.length?`<div style="padding:6px 14px;background:#fef3c7;border-bottom:1px solid #fde68a;font-size:11px;color:#92400e">⚠ ${dupes.length} duplicate milestone${dupes.length>1?'s':''} detected: ${dupes.map(arr=>`"${arr[0].label}" (${arr.length}×)`).join(', ')} — likely leftover from an SO split. Check the DB if these need cleanup.</div>`:'';
+        const dupeWarning=dupes.length?`<div style="padding:6px 14px;background:#fef3c7;border-bottom:1px solid #fde68a;font-size:11px;color:#92400e">⚠ ${dupes.length} duplicate milestone${dupes.length>1?'s':''} detected: ${dupes.map(arr=>`"${esc(arr[0].label)}" (${arr.length}×)`).join(', ')} — likely leftover from an SO split. Check the DB if these need cleanup.</div>`:'';
         return`<div style="padding:5px 14px;font-size:10.5px;color:var(--gray-400);border-bottom:1px solid var(--gray-50)">${total} milestone${total!==1?'s':''} total for this project${hiddenCount?` · ${hiddenCount} hidden (completed) · ${shownCount} shown`:''}</div>${dupeWarning}`;
       })()}
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
@@ -3962,7 +3986,7 @@ function renderWeek(){
       <span>⚠ ${overdueMs.length} overdue milestone${overdueMs.length>1?'s':''} (last 14 days)</span>
       <span style="font-size:10px;font-weight:400">click to expand ▾</span>
     </summary>
-    <div style="padding:4px 13px 10px">${overdueMs.map(m=>`<div style="font-size:11px;color:var(--red);padding:2px 0">${m.label}${m._adhoc?' <span style="font-size:9px;background:var(--blue);color:white;padding:1px 4px;border-radius:6px">Ad hoc</span>':''} — ${m.projectName} (was ${fmt(m.date)})</div>`).join('')}</div>
+    <div style="padding:4px 13px 10px">${overdueMs.map(m=>`<div style="font-size:11px;color:var(--red);padding:2px 0">${esc(m.label)}${m._adhoc?' <span style="font-size:9px;background:var(--blue);color:white;padding:1px 4px;border-radius:6px">Ad hoc</span>':''} — ${m.projectName} (was ${fmt(m.date)})</div>`).join('')}</div>
   </details>`:'';
   const DAY=['Monday','Tuesday','Wednesday','Thursday','Friday'];
   const t=today();
@@ -3994,7 +4018,7 @@ function renderWeek(){
         const namingLine=namingConv?`<div style="font-family:var(--mono);font-size:9px;color:var(--gray-500);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${namingConv.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}">${namingConv}</div>`:'';
         const pmName=e._adhoc?(e._raw?.pm||''):(e._pm||'');
         const pmLine=pmName?`<div style="font-size:9px;color:var(--gray-500);margin-top:1px;opacity:0.9">PM: ${pmName}</div>`:'';
-        return`<div class="ev ${isDone?'ev-done':TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${e.label}</div><div class="ev-proj">${projLink}${e._adhoc?' 📦':''}</div>${soLine}${namingLine}${pmLine}${statusSel}</div>`;
+        return`<div class="ev ${isDone?'ev-done':TYPE_CLS[e.key]||'ev-other'}"><div class="ev-type">${e._adhoc?'Ad hoc':TYPE_LBL[e.key]||e.key}</div><div class="ev-name">${esc(e.label)}</div><div class="ev-proj">${projLink}${e._adhoc?' 📦':''}</div>${soLine}${namingLine}${pmLine}${statusSel}</div>`;
       }).join(''):'<div class="empty-day">—</div>'}</div></div>`;
   }).join('');
   el.innerHTML=`
@@ -4362,7 +4386,7 @@ function renderScheduleFilterBar(dept,opts={}){
   const f=deptFilter[dept];
   const selStyle='font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white)';
   const searchVal=(f.search||'').replace(/"/g,'&quot;');
-  const opt=(val,label,cur)=>`<option value="${val}"${cur===val?' selected':''}>${label}</option>`;
+  const opt=(val,label,cur)=>`<option value="${val}"${cur===val?' selected':''}>${esc(label)}</option>`;
   let bar='<div style="display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--gray-50);border-bottom:1px solid var(--gray-100);flex-wrap:wrap">';
   bar+=`<input placeholder="${opts.searchPlaceholder||'Search...'}" style="${selStyle};width:220px" value="${searchVal}" id="sf-search-${dept}">`;
   bar+=`<select style="${selStyle}" id="sf-status-${dept}"><option value="">All statuses</option>${(opts.statusOptions||[]).map(s=>opt(s,s,f.status)).join('')}</select>`;
@@ -4799,7 +4823,7 @@ async function vinylDateSync(idOrIdx,val,type){
   item[field]=val;
   // If no DB row exists yet, insert one first
   if(!item.id){
-    const{data}=await sb.from('vinyl_schedule').insert({
+    const{data,error}=await sb.from('vinyl_schedule').insert({
       project_id:item.project_id||null,
       name:item.name||'',so:item.so||'',client:item.client||'',
       vinyl_type:item.vinylType||'',pm:item.pm||'',
@@ -4807,6 +4831,7 @@ async function vinylDateSync(idOrIdx,val,type){
       [dbField]:val||null,priority:item.priority||99,
       is_standalone:item.is_standalone||false,updated_at:new Date().toISOString()
     }).select().single();
+    if(error){console.warn('vinyl_schedule insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data){item.id=data.id;}
   } else {
     // Always update by row ID
@@ -5091,7 +5116,7 @@ function renderCheckinOverview(){
               </div>
               <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                 <span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:8px;background:${dateBg};color:${dateColor}">${dateLabel}</span>
-                <span style="font-size:11px;color:var(--gray-500)">${m.label}</span>
+                <span style="font-size:11px;color:var(--gray-500)">${esc(m.label)}</span>
                 ${whoChecked}
               </div>
               ${noteHtml}
@@ -5113,7 +5138,7 @@ function renderCheckinOverview(){
 
     return`<div class="section" style="margin-bottom:12px">
       <div class="section-head">
-        <div class="section-title">${w.label} — ${fmt(isoD(w.start))} to ${fmt(isoD(addD(w.start,4)))}</div>
+        <div class="section-title">${esc(w.label)} — ${fmt(isoD(w.start))} to ${fmt(isoD(addD(w.start,4)))}</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           ${reds>0?`<span style="font-size:11px;font-weight:600;color:#ef4444">🔴 ${reds} escalation${reds>1?'s':''}</span>`:''}
           ${yellows>0?`<span style="font-size:11px;font-weight:600;color:#eab308">🟡 ${yellows} in trouble</span>`:''}
@@ -5237,7 +5262,7 @@ function openExtensionReview(reqId){
   const{proj,trigger,rows}=preview;
   const violations=rows.filter(r=>r.violation);
   const rowsHtml=rows.map(r=>`<div style="display:grid;grid-template-columns:1fr 90px 14px 90px;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--gray-50);font-size:12px${r.shifts?'':';opacity:0.45'}">
-    <div>${r.label}${r.violation?` <span title="${r.violation.replace(/"/g,'&quot;')}" style="color:var(--red);font-size:11px">⚠️</span>`:''}</div>
+    <div>${esc(r.label)}${r.violation?` <span title="${r.violation.replace(/"/g,'&quot;')}" style="color:var(--red);font-size:11px">⚠️</span>`:''}</div>
     <div style="font-family:var(--mono);font-size:11px">${fmt(r.oldDate)}</div>
     <div style="text-align:center;color:var(--gray-300)">${r.shifts?'→':''}</div>
     <input type="date" value="${r.newDate}" id="extprev-${r.milestoneId}" ${r.shifts?'':'disabled'} style="font-size:11px;padding:3px 5px;border:1px solid var(--gray-300);border-radius:4px;${r.shifts?'':'background:var(--gray-50);color:var(--gray-400)'}">
@@ -5246,7 +5271,7 @@ function openExtensionReview(reqId){
     <div class="modal-head"><span class="modal-title">⏳ Extension request — ${proj.name}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
       <div style="font-size:12px;background:var(--gray-50);border-radius:var(--radius);padding:10px 12px;margin-bottom:12px">
-        <strong>${req.dept}</strong> requested <strong>+${req.days} day${req.days>1?'s':''}</strong> on <strong>${trigger.label}</strong>${req.so_tag?' (SO '+req.so_tag+')':''}
+        <strong>${req.dept}</strong> requested <strong>+${req.days} day${req.days>1?'s':''}</strong> on <strong>${esc(trigger.label)}</strong>${req.so_tag?' (SO '+req.so_tag+')':''}
         <div style="margin-top:4px;font-style:italic;color:var(--gray-600)">💬 "${req.reason.replace(/</g,'&lt;')}"</div>
         <div style="margin-top:4px;font-size:11px;color:var(--gray-400)">Requested by ${req.requested_by||'—'} · ${new Date(req.created_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</div>
       </div>
@@ -5328,7 +5353,7 @@ function renderBriefing(){
     return{...p,currentStage:currentStage?currentStage.label:'—',nextMs,health:h};
   });
   const DAY=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const msRow=m=>`<tr style="border-bottom:1px solid var(--gray-50)${m._adhoc?';background:var(--blue-bg)':''}"><td style="padding:6px 12px;font-weight:500;white-space:nowrap;font-size:12px">${DAY[new Date(m.date+'T00:00:00').getDay()]} ${fmt(m.date)}</td><td style="padding:6px 12px;font-size:12px">${m.projectName}${m._adhoc?' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 4px;border-radius:6px">Ad hoc</span>':''}</td><td style="padding:6px 12px;font-family:var(--mono);font-size:10px;color:var(--gray-500)">${m.so||''}</td><td style="padding:6px 12px;font-size:12px">${m.label}</td><td style="padding:6px 12px;font-size:10px;color:var(--gray-500)">${m._adhoc?'Ad hoc':TYPE_LBL[m.key]||m.key}</td></tr>`;
+  const msRow=m=>`<tr style="border-bottom:1px solid var(--gray-50)${m._adhoc?';background:var(--blue-bg)':''}"><td style="padding:6px 12px;font-weight:500;white-space:nowrap;font-size:12px">${DAY[new Date(m.date+'T00:00:00').getDay()]} ${fmt(m.date)}</td><td style="padding:6px 12px;font-size:12px">${m.projectName}${m._adhoc?' <span style="font-size:10px;background:var(--blue);color:white;padding:1px 4px;border-radius:6px">Ad hoc</span>':''}</td><td style="padding:6px 12px;font-family:var(--mono);font-size:10px;color:var(--gray-500)">${m.so||''}</td><td style="padding:6px 12px;font-size:12px">${esc(m.label)}</td><td style="padding:6px 12px;font-size:10px;color:var(--gray-500)">${m._adhoc?'Ad hoc':TYPE_LBL[m.key]||m.key}</td></tr>`;
   const thS='font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;padding:7px 12px;text-align:left;border-bottom:1px solid var(--gray-100);background:var(--gray-50)';
   el.innerHTML=`<div>
     <div style="background:var(--black);color:white;padding:18px 24px;border-radius:var(--radius-lg);margin-bottom:14px;display:flex;align-items:center;justify-content:space-between" class="briefing-header">
@@ -5355,7 +5380,7 @@ function renderBriefing(){
         <td style="padding:8px 12px;font-weight:600;font-size:12px">${p.name}<div style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:400">${p.so_number||''}</div></td>
         <td style="padding:8px 12px;font-size:12px">${p.client||'—'}</td>
         <td style="padding:8px 12px;font-size:12px">${p.currentStage}</td>
-        <td style="padding:8px 12px;font-size:12px">${p.nextMs?`${p.nextMs.label}<div style="font-size:10px;color:var(--gray-500)">${fmt(p.nextMs.date)}</div>`:'—'}</td>
+        <td style="padding:8px 12px;font-size:12px">${p.nextMs?`${esc(p.nextMs.label)}<div style="font-size:10px;color:var(--gray-500)">${fmt(p.nextMs.date)}</div>`:'—'}</td>
         <td style="padding:8px 12px">${p.health?`<span style="font-size:13px;font-weight:700;color:${p.health.color}">${p.health.score}</span><span style="font-size:10px;color:var(--gray-500)">/100</span>`:'—'}</td>
       </tr>`).join('')}</tbody></table>
     </div>
@@ -5375,7 +5400,7 @@ function renderBriefing(){
           const ci=checkinStatus[m.id];
           const p=projects.find(x=>x.id===m.project_id);
           const sl=ci?.stoplight==='red'?'🔴':'🟡';
-          return`<tr style="border-bottom:1px solid var(--gray-50)"><td style="padding:6px 12px;font-size:12px">${sl}</td><td style="padding:6px 12px;font-size:12px;font-weight:500">${p?.name||m.projectName||''}</td><td style="padding:6px 12px;font-size:12px">${m.label}</td><td style="padding:6px 12px;font-size:11px;font-family:var(--mono);color:var(--gray-500)">${fmt(m.date)}</td></tr>`;
+          return`<tr style="border-bottom:1px solid var(--gray-50)"><td style="padding:6px 12px;font-size:12px">${sl}</td><td style="padding:6px 12px;font-size:12px;font-weight:500">${p?.name||m.projectName||''}</td><td style="padding:6px 12px;font-size:12px">${esc(m.label)}</td><td style="padding:6px 12px;font-size:11px;font-family:var(--mono);color:var(--gray-500)">${fmt(m.date)}</td></tr>`;
         }).join('')}</tbody></table></div>`;
     })()}
     ${overdueMs.length?`<div class="section" style="margin-bottom:12px;border-left:4px solid var(--red)"><div class="section-head"><div class="section-title" style="color:var(--red)">Overdue / unconfirmed</div></div><table style="width:100%;border-collapse:collapse"><tbody>${overdueMs.map(msRow).join('')}</tbody></table></div>`:''}
@@ -5680,12 +5705,12 @@ function openEditProj(id){
       const soMs=projMs.filter(m=>m.so_tag===so).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
       if(!soMs.length)return'';
       const header=`<div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em;margin:14px 0 6px;border-left:3px solid var(--red);padding-left:6px">SO: ${so}</div>`;
-      const rows=soMs.map(m=>`<div id="msrow-${m.id}" style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${m.label}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="markMsForDelete('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></div>`).join('');
+      const rows=soMs.map(m=>`<div id="msrow-${m.id}" style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${esc(m.label)}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="markMsForDelete('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></div>`).join('');
       return header+rows;
     }).join('');
     msRows=`<div style="font-size:10px;color:var(--blue);background:var(--blue-bg);border-radius:6px;padding:8px 10px;margin-bottom:8px">💡 This project has ${allSOs.length} SOs. For per-SO naming, address, and "Push to all" tools, use the <strong>Project Page</strong> instead — it has the full SO-aware editor.</div>`+msRows;
   } else {
-    msRows=projMs.map(m=>`<div id="msrow-${m.id}" style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${m.label}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="markMsForDelete('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></div>`).join('');
+    msRows=projMs.map(m=>`<div id="msrow-${m.id}" style="display:grid;grid-template-columns:1fr 130px 28px;gap:7px;align-items:center;margin-bottom:7px"><div style="font-size:12px;font-weight:500">${esc(m.label)}</div><input type="date" value="${m.date||''}" id="ms-${m.id}" style="font-size:11px;padding:4px 7px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><button onclick="markMsForDelete('${m.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button></div>`).join('');
   }
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:560px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
     <div class="modal-head"><span class="modal-title">Edit project</span><button class="modal-close" onclick="closeModal()">✕</button></div>
@@ -5988,14 +6013,14 @@ async function saveEditProj(id){
     if(deltaDays!==0&&later.length){
       closeModal();
       const shiftDate=(d,n)=>{const dt=new Date(d+'T00:00:00');dt.setDate(dt.getDate()+n);return isoD(dt);};
-      const previewRows=later.map(m=>`<tr><td style="padding:3px 8px 3px 0;color:var(--gray-700)">${m.label}</td><td style="padding:3px 8px;color:var(--gray-400)">${fmt(m.date)}</td><td style="padding:3px 0;color:var(--gray-700)">→ ${fmt(shiftDate(m.date,deltaDays))}</td></tr>`).join('');
+      const previewRows=later.map(m=>`<tr><td style="padding:3px 8px 3px 0;color:var(--gray-700)">${esc(m.label)}</td><td style="padding:3px 8px;color:var(--gray-400)">${fmt(m.date)}</td><td style="padding:3px 0;color:var(--gray-700)">→ ${fmt(shiftDate(m.date,deltaDays))}</td></tr>`).join('');
       window._cascadeData={later:later.map(m=>({id:m.id,label:m.label,oldDate:m.date,newDate:shiftDate(m.date,deltaDays)})),projId:id,deltaDays,sourceLabel:srcMs.label};
       document.getElementById('modal-root').innerHTML=`
       <div class="modal-backdrop">
         <div class="modal" style="width:480px" onclick="event.stopPropagation()">
           <div class="modal-head"><span class="modal-title">📅 Update following milestones?</span><button class="modal-close" onclick="closeModal();loadAll()">×</button></div>
           <div style="padding:16px;font-size:13px;color:var(--gray-600)">
-            <strong>${srcMs.label}</strong> moved ${deltaDays>0?'+':''}${deltaDays}d (${fmt(oldDate)} → ${fmt(newDate)}).<br>
+            <strong>${esc(srcMs.label)}</strong> moved ${deltaDays>0?'+':''}${deltaDays}d (${fmt(oldDate)} → ${fmt(newDate)}).<br>
             Shift the ${later.length} milestone${later.length>1?'s':''} after it by the same amount?
             <table style="margin-top:10px;font-size:12px;border-collapse:collapse">${previewRows}</table>
           </div>
@@ -6128,7 +6153,7 @@ async function saveEditMs(id,oldLabel,oldDate){
     if(deltaDays!==0&&later.length){
       closeModal();
       const shiftDate=(d,n)=>{const dt=new Date(d+'T00:00:00');dt.setDate(dt.getDate()+n);return isoD(dt);};
-      const previewRows=later.map(m=>`<tr><td style="padding:3px 8px 3px 0;color:var(--gray-700)">${m.label}</td><td style="padding:3px 8px;color:var(--gray-400)">${fmt(m.date)}</td><td style="padding:3px 0;color:var(--gray-700)">→ ${fmt(shiftDate(m.date,deltaDays))}</td></tr>`).join('');
+      const previewRows=later.map(m=>`<tr><td style="padding:3px 8px 3px 0;color:var(--gray-700)">${esc(m.label)}</td><td style="padding:3px 8px;color:var(--gray-400)">${fmt(m.date)}</td><td style="padding:3px 0;color:var(--gray-700)">→ ${fmt(shiftDate(m.date,deltaDays))}</td></tr>`).join('');
       window._cascadeData={later:later.map(m=>({id:m.id,label:m.label,oldDate:m.date,newDate:shiftDate(m.date,deltaDays)})),projId:proj.id,deltaDays,sourceLabel:newLabel};
       document.getElementById('modal-root').innerHTML=`
       <div class="modal-backdrop">
@@ -6787,11 +6812,11 @@ function renderProjPageBody(){
     const dev=ppProj?.parent_project_id?milestoneDeviations[ppProjId]?.[m.key]:null;
     const devTag=dev?`<span style="font-size:9px;padding:1px 5px;border-radius:8px;background:#ede9fe;color:#7c3aed;font-weight:600;margin-left:4px" title="Deviated from master">🔀 deviated</span>`:'';
     return`<tr>
-      <td style="font-weight:500">${m.label}${slDot}${devTag}</td>
+      <td style="font-weight:500">${esc(m.label)}${slDot}${devTag}</td>
       <td class="date-cell">${fmt(m.date)}</td>
       <td><span class="status-chip ${chip}">${lbl}</span></td>
       <td style="display:flex;gap:4px;align-items:center">
-        <button class="pp-del" style="color:var(--blue);font-size:11px" onclick="openEditMs('${m.id}','${m.label}','${m.date||''}','${m.so_tag||''}','${ppProjId}')">edit</button>
+        <button class="pp-del" style="color:var(--blue);font-size:11px" onclick="openEditMs('${m.id}','${escJsAttr(m.label)}','${m.date||''}','${m.so_tag||''}','${ppProjId}')">edit</button>
         <button onclick="toggleMilestoneDone('${m.id}','${ppProjId}',event)" style="background:${isManualDone?'var(--success)':'transparent'};border:1px solid ${isManualDone?'var(--success)':'var(--gray-300)'};border-radius:10px;padding:1px 6px;font-size:10px;cursor:pointer;color:${isManualDone?'white':'var(--gray-500)'};font-family:var(--font)">${isManualDone?'✓':'done'}</button>
       </td>
     </tr>`;
@@ -6877,11 +6902,11 @@ function renderProjPageBody(){
           <span>👤 PM: <strong>${proj.pm||'—'}</strong></span>
           <span>🏢 ${proj.client||'—'}</span>
           ${proj.product_type?`<span>📦 ${proj.product_type}</span>`:''}
-          ${proj.naming_convention?`<span>🏷 ${proj.naming_convention}</span>`:''}
-          ${proj.address?`<span>📍 ${proj.address}</span>`:''}
+          ${proj.naming_convention?`<span>🏷 ${esc(proj.naming_convention)}</span>`:''}
+          ${proj.address?`<span>📍 ${esc(proj.address)}</span>`:''}
           ${proj.location&&proj.location!==proj.address?`<span>🗺 <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(proj.location)}" target="_blank" style="color:#93c5fd;text-decoration:underline">${proj.location}</a></span>`:''}
           ${goLive?`<span>🎯 Go-live: <strong>${fmt(goLive)}</strong></span>`:''}
-          ${(()=>{const b=getProjectBlocker(proj);if(!b)return'';return`<span style="color:${b.overdue?'#fca5a5':'#93c5fd'}">🔗 ${b.blockedStage.label} blocked by ${b.blockingStage.label} · ${b.estimate}</span>`;})()}
+          ${(()=>{const b=getProjectBlocker(proj);if(!b)return'';return`<span style="color:${b.overdue?'#fca5a5':'#93c5fd'}">🔗 ${esc(b.blockedStage.label)} blocked by ${esc(b.blockingStage.label)} · ${b.estimate}</span>`;})()}
         </div>
         <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <select class="pp-status ${statusCls}" style="border:none;cursor:pointer;font-family:var(--font);font-size:12px;font-weight:600;padding:4px 12px;border-radius:20px" onchange="savePPSection('status',this.value);this.className='pp-status '+(this.value==='on-track'?'pp-status-green':this.value==='at-risk'?'pp-status-amber':'pp-status-red')">
@@ -6937,7 +6962,7 @@ function renderProjPageBody(){
             <div class="pp-card-head"><span class="pp-card-title">Intake notes</span><span style="font-size:10px;color:var(--gray-400)">From project intake</span></div>
             <div class="pp-card-body" style="display:flex;flex-direction:column;gap:10px">
               ${populated.map(s=>`<div>
-                <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">${s.label}</div>
+                <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">${esc(s.label)}</div>
                 <textarea class="pp-textarea" onchange="savePPSection('${s.key}',this.value)" style="min-height:50px">${getSection(s.key)}</textarea>
               </div>`).join('')}
               <div>
@@ -6947,7 +6972,7 @@ function renderProjPageBody(){
               ${empty.length?`<details style="font-size:11px;color:var(--gray-400)"><summary style="cursor:pointer">+ Add ${empty.length} more note type${empty.length>1?'s':''}</summary>
                 <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
                   ${empty.map(s=>`<div>
-                    <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">${s.label}</div>
+                    <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">${esc(s.label)}</div>
                     <textarea class="pp-textarea" placeholder="Add ${s.label.toLowerCase()}..." onchange="savePPSection('${s.key}',this.value)" style="min-height:44px"></textarea>
                   </div>`).join('')}
                 </div>
@@ -7172,7 +7197,7 @@ async function saveSODetail(projId,so,field,val){
     existing[field]=val;
   } else {
     const proj=projects.find(p=>p.id===projId);
-    const{data}=await sb.from('so_details').insert({
+    const{data,error}=await sb.from('so_details').insert({
       project_id:projId,so_tag:so,
       address:field==='address'?val:(proj?.address||''),
       naming_convention:field==='naming_convention'?val:(proj?.naming_convention||''),
@@ -7182,6 +7207,7 @@ async function saveSODetail(projId,so,field,val){
       install_ticket_url:field==='install_ticket_url'?val:(proj?.install_ticket_url||''),
       ui_task_url:field==='ui_task_url'?val:(proj?.ui_task_url||''),
     }).select().single();
+    if(error){console.warn('so_details insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data)soDetails.push(data);
   }
   await syncSingleSOFieldsToProject(projId,so,{[field]:val});
@@ -7258,11 +7284,12 @@ async function saveSOConfig(projId,so){
     Object.assign(existing,updates);
   } else {
     const proj=projects.find(p=>p.id===projId);
-    const{data}=await sb.from('so_details').insert({
+    const{data,error}=await sb.from('so_details').insert({
       project_id:projId,so_tag:so,
       address:proj?.address||'',naming_convention:proj?.naming_convention||'',
       ...updates,
     }).select().single();
+    if(error){console.warn('so_details insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data)soDetails.push(data);
   }
   await syncSingleSOFieldsToProject(projId,so,updates);
@@ -7286,7 +7313,8 @@ async function savePPSection(key,value){
     await sb.from('project_sections').update({content:value,updated_by:currentUserName,updated_at:new Date().toISOString()}).eq('id',existing.id);
     ppData.sections[key]={...existing,content:value};
   } else {
-    const{data}=await sb.from('project_sections').insert({project_id:ppProjId,section_key:key,content:value,updated_by:currentUserName}).select().single();
+    const{data,error}=await sb.from('project_sections').insert({project_id:ppProjId,section_key:key,content:value,updated_by:currentUserName}).select().single();
+    if(error){console.warn('project_sections insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data)ppData.sections[key]=data;
   }
   if(!globalSections[ppProjId])globalSections[ppProjId]={};
@@ -7309,7 +7337,8 @@ async function syncQuickLinkToHub(label,url){
       await sb.from('so_details').update({[hubField]:cleanUrl,updated_at:new Date().toISOString()}).eq('id',existingSO.id);
       existingSO[hubField]=cleanUrl;
     } else {
-      const{data}=await sb.from('so_details').insert({project_id:ppProjId,so_tag:singleSO,address:proj?.address||'',naming_convention:proj?.naming_convention||'',form_factor:proj?.form_factor||'',qa_task_url:hubField==='qa_task_url'?cleanUrl:(proj?.qa_task_url||''),odoo_url:hubField==='odoo_url'?cleanUrl:(proj?.odoo_url||''),install_ticket_url:hubField==='install_ticket_url'?cleanUrl:(proj?.install_ticket_url||''),ui_task_url:hubField==='ui_task_url'?cleanUrl:(proj?.ui_task_url||'')}).select().single();
+      const{data,error}=await sb.from('so_details').insert({project_id:ppProjId,so_tag:singleSO,address:proj?.address||'',naming_convention:proj?.naming_convention||'',form_factor:proj?.form_factor||'',qa_task_url:hubField==='qa_task_url'?cleanUrl:(proj?.qa_task_url||''),odoo_url:hubField==='odoo_url'?cleanUrl:(proj?.odoo_url||''),install_ticket_url:hubField==='install_ticket_url'?cleanUrl:(proj?.install_ticket_url||''),ui_task_url:hubField==='ui_task_url'?cleanUrl:(proj?.ui_task_url||'')}).select().single();
+      if(error){console.warn('so_details insert error',error);showToast('⚠ Save failed: '+error.message);return;}
       if(data)soDetails.push(data);
     }
   }
@@ -7345,7 +7374,8 @@ async function savePPLink(label,url){
     await sb.from('project_links').update({url}).eq('id',existing.id);
     existing.url=url;
   } else {
-    const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:DEFAULT_CUSTOM.includes(label)?'custom':'',sort_order:ppData.links.length}).select().single();
+    const{data,error}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:DEFAULT_CUSTOM.includes(label)?'custom':'',sort_order:ppData.links.length}).select().single();
+    if(error){console.warn('project_links insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data)ppData.links.push(data);
   }
   showPPSaved();
@@ -7366,7 +7396,7 @@ async function updatePPLink(label,linkId,url){
   } else {
     const row=ppData.links.find(l=>l.id===linkId);
     if(row){await sb.from('project_links').update({url}).eq('id',linkId);row.url=url;}
-    else{const{data}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:'',sort_order:ppData.links.length}).select().single();if(data)ppData.links.push(data);}
+    else{const{data,error}=await sb.from('project_links').insert({project_id:ppProjId,label,url,category:'',sort_order:ppData.links.length}).select().single();if(error){console.warn('project_links insert error',error);showToast('⚠ Save failed: '+error.message);return;}if(data)ppData.links.push(data);}
   }
   await syncQuickLinkToHub(label,url);
   showPPSaved();
@@ -7448,7 +7478,8 @@ async function savePMTask(pid,taskId,field,val){
     // Brand new user-added row — insert with label from input
     const label=document.getElementById('pmt-label-'+taskId)?.value.trim()||'Task';
     if(!label||label==='Task')return;
-    const{data}=await sb.from('pm_tasks').insert({project_id:pid,label,due_date:field==='due_date'?val||null:null,status:field==='status'?val:'Pending',sort_order:ppData.pmtasks.length}).select().single();
+    const{data,error}=await sb.from('pm_tasks').insert({project_id:pid,label,due_date:field==='due_date'?val||null:null,status:field==='status'?val:'Pending',sort_order:ppData.pmtasks.length}).select().single();
+    if(error){console.warn('pm_tasks insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data){
       ppData.pmtasks.push(data);
       const el=document.getElementById('pmt-row-'+taskId);
@@ -7462,7 +7493,8 @@ async function savePMTask(pid,taskId,field,val){
   } else if(taskId.startsWith('def-')){
     // Default task — insert into DB first
     const label=document.getElementById('pmt-row-'+taskId)?.querySelector('span')?.textContent||taskId.replace('def-','').replace(/-/g,' ');
-    const{data}=await sb.from('pm_tasks').insert({project_id:pid,label,due_date:field==='due_date'?val||null:null,status:field==='status'?val:'Pending',sort_order:ppData.pmtasks.length}).select().single();
+    const{data,error}=await sb.from('pm_tasks').insert({project_id:pid,label,due_date:field==='due_date'?val||null:null,status:field==='status'?val:'Pending',sort_order:ppData.pmtasks.length}).select().single();
+    if(error){console.warn('pm_tasks insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data){
       ppData.pmtasks.push(data);
       // Update row ID and all event handlers to use real DB id
@@ -7561,7 +7593,10 @@ async function ppTeamChange(id,field,val){
   },600);
 }
 async function ppAddTeam(){
-  const{data}=await sb.from('project_team').insert({project_id:ppProjId,role:'',name:'',organization:'',email:'',sort_order:ppData.team.length}).select().single();
+  if(!guardStart('ppAddTeam'))return;
+  const{data,error}=await sb.from('project_team').insert({project_id:ppProjId,role:'',name:'',organization:'',email:'',sort_order:ppData.team.length}).select().single();
+  guardEnd('ppAddTeam');
+  if(error){console.warn('project_team insert error',error);showToast('⚠ Save failed: '+error.message);return;}
   if(data){ppData.team.push(data);renderProjPageBody();}
 }
 async function ppDelTeam(id){
@@ -7577,7 +7612,10 @@ async function ppAIChange(id,field,val){
   showPPSaved();
 }
 async function ppAddAI(){
-  const{data}=await sb.from('action_items').insert({project_id:ppProjId,owner:'',description:'',status:'Open',created_by:currentUserName}).select().single();
+  if(!guardStart('ppAddAI'))return;
+  const{data,error}=await sb.from('action_items').insert({project_id:ppProjId,owner:'',description:'',status:'Open',created_by:currentUserName}).select().single();
+  guardEnd('ppAddAI');
+  if(error){console.warn('action_items insert error',error);showToast('⚠ Save failed: '+error.message);return;}
   if(data){ppData.actions.push(data);renderProjPageBody();}
 }
 async function ppDelAI(id){await sb.from('action_items').delete().eq('id',id);ppData.actions=ppData.actions.filter(a=>a.id!==id);document.querySelector(`#pp-actions [data-id="${id}"]`)?.remove();}
@@ -7589,7 +7627,10 @@ async function ppRiskChange(id,field,val){
   showPPSaved();
 }
 async function ppAddRisk(type){
-  const{data}=await sb.from('risks').insert({project_id:ppProjId,type,description:'',impact:'',mitigation:'',owner:'',status:'Open'}).select().single();
+  if(!guardStart('ppAddRisk'+type))return;
+  const{data,error}=await sb.from('risks').insert({project_id:ppProjId,type,description:'',impact:'',mitigation:'',owner:'',status:'Open'}).select().single();
+  guardEnd('ppAddRisk'+type);
+  if(error){console.warn('risks insert error',error);showToast('⚠ Save failed: '+error.message);return;}
   if(data){ppData.risks.push(data);renderProjPageBody();}
 }
 async function ppDelRisk(id){await sb.from('risks').delete().eq('id',id);ppData.risks=ppData.risks.filter(r=>r.id!==id);document.querySelector(`[data-id="${id}"]`)?.remove();}
@@ -7603,7 +7644,10 @@ async function ppDecChange(id,field,val){
   showPPSaved();
 }
 async function ppAddDec(){
-  const{data}=await sb.from('decisions').insert({project_id:ppProjId,decision_date:isoD(today()),description:'',approved_by:''}).select().single();
+  if(!guardStart('ppAddDec'))return;
+  const{data,error}=await sb.from('decisions').insert({project_id:ppProjId,decision_date:isoD(today()),description:'',approved_by:''}).select().single();
+  guardEnd('ppAddDec');
+  if(error){console.warn('decisions insert error',error);showToast('⚠ Save failed: '+error.message);return;}
   if(data){ppData.decisions.unshift(data);renderProjPageBody();}
 }
 async function ppDelDec(id){await sb.from('decisions').delete().eq('id',id);ppData.decisions=ppData.decisions.filter(d=>d.id!==id);document.querySelector(`#pp-decisions [data-id="${id}"]`)?.remove();}
@@ -7753,6 +7797,621 @@ function renderUATDocTab(){
     `:`<div class="empty-state">No active template for ${window._uatDocSelectedType} yet — build one in UAT checklists (Admin).</div>`}
   </div>`;
 }
+// ══════════════ COMMUNICATIONS / DOCUMENT GENERATION FRAMEWORK (Phase 1) ══════════════
+// buildProjectDocPackage() is the single reusable data-assembly layer for every
+// generated client-facing document (Kickoff Deck now; Client Implementation Plan,
+// Weekly Status Report, Executive Summary, and Deployment Package in later phases).
+// It reads only from existing Ops Hub tables/helpers — no new fields, no duplicate
+// storage. Each generator (e.g. generateKickoffDeckFromTemplate) should consume this package
+// rather than re-querying the database itself, so adding a new document type later
+// is "write a renderer for this data", not "figure out how to get the data again".
+// The kickoff deck's two fixed deliverable-row taxonomies (slide 16 and
+// slide 19 use slightly different sets — see the original template audit).
+// Hoisted to module scope so both buildProjectDocPackage (readiness/ambiguity
+// checks) and generateKickoffDeckFromTemplate (actual slide population) use
+// the exact same lists — duplicating them was how slide 19 got missed
+// entirely in an earlier pass.
+const ROW_LABELS_16=['Branding Guidelines','Merchant Info','Product Template','Sample Products','Sample Badges','Employee List','Facility Survey','IT Survey','Pre-Deployment Checklist'];
+const ROW_LABELS_19=['UI/ UX Requirements','Vinyl Requirements','Merchant Info','Product Template','Sample Products','Sample Badges','Employee List','Facility Survey','IT Survey','Pre-Deployment Checklist'];
+// Maps each stable doc_key to the row label(s) it can satisfy across both
+// taxonomies. A tagged pm_tasks row matches by doc_key regardless of its
+// current label text; an untagged row falls back to exact label matching
+// (case/whitespace-insensitive), same as before doc_key existed.
+const DOC_KEY_ROW_LABELS={
+  ui_ux_requirements:['UI/ UX Requirements','UI/UX Requirements'],
+  vinyl_requirements:['Vinyl Requirements'],
+  branding_guidelines:['Branding Guidelines'],
+  merchant_info:['Merchant Info'],
+  product_template:['Product Template'],
+  sample_products:['Sample Products'],
+  sample_badges:['Sample Badges'],
+  employee_list:['Employee List'],
+  facility_survey:['Facility Survey'],
+  it_survey:['IT Survey'],
+  pre_deployment_checklist:['Pre-Deployment Checklist'],
+};
+function normLabel(s){return(s||'').toLowerCase().replace(/\s+/g,' ').trim();}
+// Finds every deliverable that could fill a given slide row label, via
+// doc_key first, then label fallback. Returns an array — callers use [0] as
+// the match but check .length>1 to detect and flag ambiguity, rather than
+// silently picking one of several equally-plausible candidates.
+function matchDeliverablesForRow(rowLabel,deliverables){
+  const nRow=normLabel(rowLabel);
+  const byKey=deliverables.filter(d=>d.docKey&&(DOC_KEY_ROW_LABELS[d.docKey]||[]).some(l=>normLabel(l)===nRow));
+  if(byKey.length)return byKey;
+  return deliverables.filter(d=>!d.docKey&&normLabel(d.label)===nRow);
+}
+
+async function buildProjectDocPackage(projId,soTag=''){
+  const proj=projects.find(p=>p.id===projId);
+  if(!proj)return null;
+  const soList=(proj.so_number||'').split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+  const effectiveSO=soTag||(soList.length===1?soList[0]:'');
+  const cfg=effectiveSO?getSOConfigSummary(proj,effectiveSO):effectiveProjectConfig(proj);
+  const TBC='To Be Confirmed';
+  // missing[] entries are {text, severity}. severity:'important' means the deck
+  // is still usable without it (never blocks generation — only an unusable
+  // file would), but the PM should treat it as a real gap before sending.
+  // severity:'optional' is fine to send as-is.
+  const missing=[];
+  const flag=(text,severity='optional')=>missing.push({text,severity});
+
+  let team,pmTasks;
+  if(typeof ppProjId!=='undefined'&&ppProjId===projId&&typeof ppData!=='undefined'&&ppData){
+    team=ppData.team||[];pmTasks=ppData.pmtasks||[];
+  } else {
+    const[teamRes,pmtRes]=await Promise.all([
+      sb.from('project_team').select('*').eq('project_id',projId).order('sort_order'),
+      sb.from('pm_tasks').select('*').eq('project_id',projId).order('sort_order'),
+    ]);
+    if(teamRes.error)console.warn('project_team load error (doc package)',teamRes.error);
+    if(pmtRes.error)console.warn('pm_tasks load error (doc package)',pmtRes.error);
+    team=teamRes.data||[];pmTasks=pmtRes.data||[];
+  }
+
+  // 1. Title
+  const title={client:proj.client||'',projectNumber:effectiveSO||proj.so_number||'',date:fmtFull(isoD(today())),pm:proj.pm||''};
+  if(!title.client)flag('Client name','important');
+  if(!proj.pm)flag('Project Manager','important');
+
+  // 2. Stakeholders. The five canonical roles are scalar columns on the
+  // project (always present, one source of truth); project_team is a
+  // separate free-form table. We merge + de-dupe by name, AND explicitly flag
+  // when the same role appears in both places with DIFFERENT names rather
+  // than silently picking one — per review feedback, conflicts must surface
+  // to the PM, not get resolved automatically. The scalar project field wins
+  // in the merged stakeholder list (documented precedence below); the
+  // project_team value is preserved in `conflicts` for the PM to see.
+  const ROLE_ALIASES={'project manager':'pm','pm':'pm','sdm':'sdm','solutions':'solutions','solutions / ux':'solutions','sales':'sales','account manager':'account_manager','am':'account_manager'};
+  const conflicts=[];
+  (team||[]).forEach(t=>{
+    const field=ROLE_ALIASES[(t.role||'').toLowerCase().trim()];
+    if(field&&proj[field]&&t.name&&t.name.trim()&&t.name.trim()!==String(proj[field]).trim()){
+      conflicts.push({role:t.role,scalarField:field,scalarValue:proj[field],teamValue:t.name});
+    }
+  });
+  if(conflicts.length)flag(`${conflicts.length} stakeholder conflict(s) — same role, different name in project fields vs. team list (scalar project field used; see readiness panel)`,'important');
+  const canonical=[
+    {role:'Project Manager',name:proj.pm},{role:'SDM',name:proj.sdm},
+    {role:'Solutions',name:proj.solutions},{role:'Sales',name:proj.sales},
+    {role:'Account Manager',name:proj.account_manager},
+  ].filter(s=>s.name);
+  const canonicalNames=new Set(canonical.map(s=>s.name));
+  const extra=(team||[]).filter(t=>t.name&&!canonicalNames.has(t.name)).map(t=>({role:t.role||'Team member',name:t.name,organization:t.organization||'',email:t.email||''}));
+  const stakeholders=[...canonical,...extra];
+  if(!stakeholders.length)flag('Stakeholders (no PM/SDM/Solutions/Sales/AM or team rows set)','important');
+  // Best-effort Signifi-vs-client split for the deck's two-column layout: the
+  // five canonical roles are always Signifi-side; project_team rows are
+  // classified by organization text when it clearly names Signifi, otherwise
+  // treated as client-side. This is a heuristic, not a real field — see the
+  // schema notes on why we didn't add one for this task.
+  const stakeholdersSignifi=[...canonical];
+  const stakeholdersClient=[];
+  extra.forEach(t=>{
+    const org=(t.organization||'').toLowerCase();
+    if(org.includes('signifi'))stakeholdersSignifi.push(t);else stakeholdersClient.push(t);
+  });
+  if(extra.length)flag('Signifi-vs-client classification on extra team members is guessed from the Organization text field, not a real flag — verify before sending','optional');
+
+  // 3. Scope of work
+  const scope={
+    formFactor:cfg.form_factor||'',voltage:proj.voltage||'',plugType:proj.plug_type||'',
+    connectivity:projectConnectivitySummary(proj),hosting:proj.hosting||'',
+    authentication:projectAuthenticationSummary(proj),
+    workflow:Array.isArray(proj.workflow_types)?proj.workflow_types.join(', '):'',workflowNotes:proj.workflow_notes||'',
+    language:Array.isArray(proj.languages)?proj.languages.join(', '):'',languageNotes:proj.language_notes||'',
+    namingConvention:cfg.naming_convention||'',powerRequirements:proj.power_requirements||'',
+    // Still not tracked anywhere in Ops Hub — unchanged from the prior audit.
+    peripherals:null,deploymentType:null,shippingMethod:null,shippingMode:null,shippingPackaging:null,shippingService:null,
+  };
+  if(!scope.formFactor)flag('Configuration / form factor','important');
+  if(scope.peripherals===null)flag('Peripheral devices (no field exists yet)','optional');
+  if(scope.deploymentType===null)flag('Deployment type (no field exists yet)','optional');
+  if(scope.shippingMethod===null)flag('Shipping method/mode/packaging/service (no fields exist yet — shipping_status tracks progress, not method)','optional');
+
+  // 3a. Hardware line items — new normalized table (hardware_line_items),
+  // falling back to the single legacy quantity/product_type captured at
+  // intake if no line items have been entered yet.
+  let hardware=[];
+  {
+    const hwRes=await sb.from('hardware_line_items').select('*').eq('project_id',projId).order('sort_order');
+    if(hwRes.error)console.warn('hardware_line_items load error',hwRes.error);
+    hardware=(hwRes.data||[]).filter(h=>!effectiveSO||!h.so_tag||h.so_tag===effectiveSO)
+      .map(h=>({model:h.model||'',quantity:h.quantity||1,screenSize:h.screen_size||'',peripherals:h.peripherals||''}));
+    if(!hardware.length&&proj.quantity){
+      hardware=[{model:proj.product_type||cfg.form_factor||'',quantity:proj.quantity,screenSize:'',peripherals:'',_legacy:true}];
+      flag('Hardware detail is falling back to the single legacy quantity/product_type from intake — no model/screen size/peripherals recorded in the new hardware line items table','optional');
+    }
+    if(!hardware.length)flag('Hardware line items (none recorded)','important');
+  }
+
+  // 4. Timeline — reads milestones directly via PIPELINE_STAGES key ordering.
+  // IMPORTANT AUDIT NOTE: several of the deck's requested phases have no
+  // corresponding milestone key anywhere in Ops Hub today (Kickoff, a UAT
+  // *plan* date, Training, Go-live are not tracked as milestones — UAT has
+  // its own session-based table with no forward-looking plan date field).
+  // Those are marked "To Be Confirmed" rather than invented.
+  const projMs=milestones.filter(m=>m.project_id===projId&&(!effectiveSO||!m.so_tag||m.so_tag===effectiveSO));
+  const byKey=k=>projMs.find(m=>m.key===k);
+  const byLabel=re=>projMs.find(m=>re.test(m.label||''));
+  const timeline=PIPELINE_STAGES.map(stage=>{
+    const m=projMs.find(x=>x.key===stage.key);
+    return m?{label:stage.label,icon:stage.icon,date:m.date?fmtFull(m.date):'',rawDate:m.date||''}:null;
+  }).filter(Boolean);
+  if(!timeline.length)flag('Milestones (none set for this project yet)','important');
+
+  const uiMs=byLabel(/\bui\b|user interface/i);
+  const arrivalMs=byKey('arrival'),prodStart=byKey('production-start'),prodEnd=byKey('production-end');
+  const poRelease=byKey('po-release'),moRelease=byKey('mo-release');
+  const qStart=byKey('quality-start'),qEnd=byKey('quality-end');
+  const shipMs=byKey('shipping'),delMs=byKey('delivery'),instMs=byKey('installation');
+  // UAT and Training already exist as canonical milestone keys (I'd missed
+  // this in the first audit pass — corrected here). Go-live did not exist
+  // anywhere; added as a new canonical key (TYPE_LBL/TYPE_CLS) rather than a
+  // projects-table column, so it lives in the same per-project multi-row
+  // milestone engine as everything else — no new table, no duplicate date
+  // storage, and it's immediately available to future documents the same
+  // way every other milestone is. Each of the three is read independently;
+  // Go-live is NOT backfilled from Installation.
+  const uatMs=byKey('uat'),trainingMs=byKey('training'),goLiveMs=byKey('go-live');
+  const timelinePhases={
+    kickoff:fmtFull(isoD(today())), // no milestone key for this — today's date (the meeting itself) is the only defensible default
+    kickoffRaw:isoD(today()),
+    uiDev:uiMs?.date?fmtFull(uiMs.date):TBC,
+    planogramBuild:(prodStart?.date||arrivalMs?.date)&&prodEnd?.date?`${fmtFull(prodStart?.date||arrivalMs.date)} – ${fmtFull(prodEnd.date)}`:TBC,
+    procurement:poRelease?.date?fmtFull(poRelease.date):(moRelease?.date?fmtFull(moRelease.date):TBC),
+    qaqc:qStart?.date&&qEnd?.date?`${fmtFull(qStart.date)} – ${fmtFull(qEnd.date)}`:TBC,
+    uat:uatMs?.date?fmtFull(uatMs.date):TBC,uatRaw:uatMs?.date||'',
+    packShip:shipMs?.date?fmtFull(shipMs.date):TBC,
+    delivery:delMs?.date?fmtFull(delMs.date):TBC,delRaw:delMs?.date||'',
+    installation:instMs?.date?fmtFull(instMs.date):TBC,instRaw:instMs?.date||'',
+    training:trainingMs?.date?fmtFull(trainingMs.date):TBC,trainingRaw:trainingMs?.date||'',
+    goLive:goLiveMs?.date?fmtFull(goLiveMs.date):TBC,goLiveRaw:goLiveMs?.date||'',
+  };
+  if(timelinePhases.uiDev===TBC)flag('UI development date (no milestone labeled UI)','optional');
+  if(timelinePhases.qaqc===TBC)flag('QA/QC date range','optional');
+  if(timelinePhases.uat===TBC)flag('UAT planned date (add a milestone with type "UAT")','optional');
+  if(timelinePhases.training===TBC)flag('Training date (add a milestone with type "Training")','optional');
+  if(timelinePhases.goLive===TBC)flag('Go-live date (add a milestone with type "Go-live") — not inferred from Installation','optional');
+
+  // 5. Shipping locations — new normalized table (shipping_locations) with
+  // real contact fields, falling back to the existing per-SO address logic
+  // (no contacts available there) if nothing's been entered yet.
+  let shipping=[];
+  {
+    const shRes=await sb.from('shipping_locations').select('*').eq('project_id',projId).order('delivery_sequence');
+    if(shRes.error)console.warn('shipping_locations load error',shRes.error);
+    const rows=(shRes.data||[]).filter(s=>!effectiveSO||!s.so_tag||s.so_tag===effectiveSO);
+    if(rows.length){
+      shipping=rows.map((s,i)=>({siteName:s.site_name||'',address:s.address||'',sequence:s.delivery_sequence||i+1,contactName:s.contact_name||'',contactEmail:s.contact_email||'',contactPhone:s.contact_phone||''}));
+    } else {
+      const shippingSOs=soList.length?soList:[effectiveSO].filter(Boolean);
+      shipping=(shippingSOs.length?shippingSOs:[null]).map((so,i)=>{
+        const c=so?getSOConfigSummary(proj,so):cfg;
+        return{siteName:so||proj.name||'',address:c.address||proj.location||'',sequence:i+1,contactName:'',contactEmail:'',contactPhone:''};
+      }).filter(s=>s.address);
+      if(shipping.length)flag('Shipping site names/contacts are inferred from SO address data — no dedicated shipping_locations rows entered yet','optional');
+    }
+    if(!shipping.length)flag('Shipping address(es)','important');
+    else if(shipping.some(s=>!s.contactName))flag('Site contact name/email/phone missing for one or more sites','optional');
+  }
+
+  // 6. Client deliverables — matched by stable doc_key where the task has been
+  // tagged, falling back to label matching for anything not yet tagged (see
+  // migration: pm_tasks.doc_key, nullable, additive). Client-facing labels in
+  // the PowerPoint are unchanged either way — doc_key only changes how we
+  // find the right pm_tasks row, never what's printed on the slide.
+  const deliverables=(pmTasks||[]).map(t=>({label:t.label||'',dueDate:t.due_date?fmtFull(t.due_date):'',status:t.status||'Pending',notes:t.notes||'',docKey:t.doc_key||null}));
+  if(!deliverables.length)flag('Client deliverables (no PM tasks recorded for this project yet)','optional');
+  else{
+    const untagged=deliverables.filter(d=>!d.docKey);
+    if(untagged.length)flag(`${untagged.length} deliverable(s) not tagged with a stable doc_key — matched by label text, which breaks silently if the label is edited`,'optional');
+    const allRows=[...ROW_LABELS_16,...ROW_LABELS_19];
+    const ambiguousRows=[];
+    const matchedDeliverableIds=new Set();
+    allRows.forEach(row=>{
+      const matches=matchDeliverablesForRow(row,deliverables);
+      if(matches.length>1)ambiguousRows.push(row);
+      matches.forEach(m=>matchedDeliverableIds.add(m.label+'|'+m.dueDate+'|'+m.docKey));
+    });
+    if(ambiguousRows.length)flag(`Ambiguous deliverable match — more than one task matches: ${ambiguousRows.join(', ')}`,'important');
+    const unmatched=deliverables.filter(d=>!matchedDeliverableIds.has(d.label+'|'+d.dueDate+'|'+d.docKey));
+    if(unmatched.length)flag(`${unmatched.length} deliverable(s) don't match any slot on the Client Deliverables slides and won't appear: ${unmatched.map(d=>d.label).join(', ')}`,'optional');
+  }
+
+  const readiness={
+    readyCount:missing.length===0?'all':undefined,
+    missingImportant:missing.filter(m=>m.severity==='important'),
+    missingOptional:missing.filter(m=>m.severity==='optional'),
+    conflicts,siteCount:shipping.length,hardwareCount:hardware.length,
+    milestoneCount:timeline.length,milestoneTotal:PIPELINE_STAGES.length,
+  };
+
+  return{proj,title,stakeholders,stakeholdersSignifi,stakeholdersClient,scope,hardware,timeline,timelinePhases,shipping,deliverables,conflicts,missing,readiness};
+}
+
+// ══════════════ TEMPLATE-BASED GENERATOR ══════════════
+// Edits the actual approved deck's XML directly (unzip → replace specific
+// <a:t> text runs → re-zip) instead of recreating slides in a library. This
+// is the only approach that guarantees 100% visual fidelity to the approved
+// template — every font, color, image, and static/educational slide is
+// preserved byte-for-byte except the specific runs we target. Requires the
+// approved .pptx to be uploaded once to Supabase Storage — see
+// KICKOFF_TEMPLATE_PATH below; this does not happen automatically.
+//
+// REQUIRED ONE-TIME SETUP (do this before Generate will work):
+//   1. Create a bucket named "doc-templates" in Supabase Storage. Set it
+//      PRIVATE — do not make it public. Public would expose the approved
+//      kickoff deck (and every future document template) to anyone with the
+//      URL, with no auth.
+//   2. Add a storage policy granting SELECT on that bucket to the role this
+//      app authenticates as (the anon key is used for createSignedUrl here,
+//      matching how every other table already reads). Example SQL:
+//        create policy "doc-templates read" on storage.objects
+//          for select using (bucket_id = 'doc-templates');
+//      (Scope this further to specific roles/users if that's ever needed —
+//      a signed URL is time-limited either way, but the policy still gates
+//      who can mint one.)
+//   3. Upload the approved file to that bucket at the exact path:
+//        doc-templates/Project_Kickoff_Deck.pptx
+//      Re-upload (same path) any time the approved template changes — no
+//      code change needed on this end.
+const KICKOFF_TEMPLATE_PATH='Project_Kickoff_Deck.pptx';
+async function getKickoffTemplateSignedUrl(){
+  const{data,error}=await sb.storage.from('doc-templates').createSignedUrl(KICKOFF_TEMPLATE_PATH,300); // 5 min, generated fresh per download
+  if(error)throw new Error('Could not get a signed URL for the template — is the doc-templates bucket set up? ('+error.message+')');
+  return data.signedUrl;
+}
+
+function docxEsc(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');}
+function replaceNextRun(xml,cursor,oldText,newText){
+  const marker=`<a:t>${oldText}</a:t>`;
+  const idx=xml.indexOf(marker,cursor);
+  if(idx===-1){console.warn(`replaceNextRun: "${oldText}" not found at/after cursor ${cursor}`);return{xml,cursor};}
+  const newRun=`<a:t>${docxEsc(newText)}</a:t>`;
+  return{xml:xml.slice(0,idx)+newRun+xml.slice(idx+marker.length),cursor:idx+newRun.length};
+}
+function replaceAllRuns(xml,oldText,newText){
+  return xml.split(`<a:t>${oldText}</a:t>`).join(`<a:t>${docxEsc(newText)}</a:t>`);
+}
+
+// ---- Slide duplication for continuation slides. Full OOXML package
+// bookkeeping (new slideN.xml + .rels, [Content_Types].xml override,
+// presentation.xml.rels relationship, <p:sldId> insertion) — ported from and
+// verified against the pptx skill's add_slide.py logic, tested in Node with
+// the skill's own validate.py before being adapted here. ----
+function getNextSlideNumber(zip){
+  const nums=Object.keys(zip.files).map(f=>f.match(/^ppt\/slides\/slide(\d+)\.xml$/)).filter(Boolean).map(m=>parseInt(m[1]));
+  return Math.max(...nums)+1;
+}
+function findSlideRid(presRelsXml,slideFileName){
+  const re=new RegExp(`<Relationship\\b[^>]*Target="(?:/ppt/)?slides/${slideFileName}"[^>]*>`);
+  const m=presRelsXml.match(re);
+  if(!m)return null;
+  const idm=m[0].match(/\bId="([^"]+)"/);
+  return idm?idm[1]:null;
+}
+async function duplicateSlideAfter(zip,sourceNum,afterRid){
+  const slidesPrefix='ppt/slides/';
+  const nextNum=getNextSlideNumber(zip);
+  const destName=`slide${nextNum}.xml`;
+  const srcName=`slide${sourceNum}.xml`;
+
+  const srcXml=await zip.file(slidesPrefix+srcName).async('string');
+  zip.file(slidesPrefix+destName,srcXml);
+
+  const srcRelsFile=zip.file(slidesPrefix+`_rels/${srcName}.rels`);
+  if(srcRelsFile){
+    let relsXml=await srcRelsFile.async('string');
+    relsXml=relsXml.replace(/<Relationship\b[^>]*?(?:\/>|>[\s\S]*?<\/Relationship\s*>)/g,m=>/Type="[^"]*\/relationships\/notesSlide"/.test(m)?'':m);
+    zip.file(slidesPrefix+`_rels/${destName}.rels`,relsXml);
+  }
+
+  const ctPath='[Content_Types].xml';
+  let ct=await zip.file(ctPath).async('string');
+  const overrideTag=`<Override PartName="/ppt/slides/${destName}" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`;
+  if(!ct.includes(`PartName="/ppt/slides/${destName}"`)){ct=ct.replace('</Types>',`${overrideTag}</Types>`);zip.file(ctPath,ct);}
+
+  const presRelsPath='ppt/_rels/presentation.xml.rels';
+  let presRels=await zip.file(presRelsPath).async('string');
+  const presXmlPath='ppt/presentation.xml';
+  let presXml=await zip.file(presXmlPath).async('string');
+  const usedRids=new Set();
+  [...presRels.matchAll(/\bId="rId(\d+)"/g)].forEach(m=>usedRids.add(parseInt(m[1])));
+  [...presXml.matchAll(/\br:id="rId(\d+)"/g)].forEach(m=>usedRids.add(parseInt(m[1])));
+  const newRid=`rId${usedRids.size?Math.max(...usedRids)+1:1}`;
+  const newRel=`<Relationship Id="${newRid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/${destName}"/>`;
+  presRels=presRels.replace('</Relationships>',`${newRel}</Relationships>`);
+  zip.file(presRelsPath,presRels);
+
+  const usedIds=new Set([...presXml.matchAll(/<p:sldId\b[^>]*\bid="(\d+)"/g)].map(m=>parseInt(m[1])));
+  let newId=256;
+  while(usedIds.has(newId))newId++;
+  const entry=`<p:sldId id="${newId}" r:id="${newRid}"/>`;
+  const openTagRe=new RegExp(`<p:sldId\\b[^>]*r:id="${afterRid}"[^>]*>`);
+  const m=presXml.match(openTagRe);
+  if(!m)throw new Error('duplicateSlideAfter: afterRid not found in sldIdLst: '+afterRid);
+  let insertPos=m.index+m[0].length;
+  if(!m[0].endsWith('/>')){const close=presXml.indexOf('</p:sldId>',insertPos);insertPos=close+'</p:sldId>'.length;}
+  presXml=presXml.slice(0,insertPos)+entry+presXml.slice(insertPos);
+  zip.file(presXmlPath,presXml);
+
+  return{destName,destNum:nextNum,rid:newRid};
+}
+
+function fillShippingSlot(xml,site,slotNum,TBC){
+  if(slotNum===1){
+    xml=replaceAllRuns(xml,'Mississauga',site?(site.siteName||TBC):'');
+    xml=replaceAllRuns(xml,'ON, Canada',site?(site.address?site.address.split(',').slice(-2).join(',').trim():TBC):'');
+    xml=replaceAllRuns(xml,' &amp; Team','');
+    xml=replaceAllRuns(xml,'1705 Tech Ave, Mississauga, ON L4W 4S1',site?(site.address||TBC):'');
+    if(!site)xml=replaceAllRuns(xml,'01','');
+  } else {
+    if(site){
+      xml=replaceAllRuns(xml,'State, Country',site.siteName||TBC);
+      xml=replaceAllRuns(xml,'&amp; Team Summary',site.address?site.address.split(',').slice(-2).join(',').trim():'');
+      xml=replaceAllRuns(xml,'Full Address',site.address||TBC);
+    } else {
+      xml=replaceAllRuns(xml,'State, Country','');
+      xml=replaceAllRuns(xml,'&amp; Team Summary','');
+      xml=replaceAllRuns(xml,'Full Address','');
+      xml=replaceAllRuns(xml,'02','');
+    }
+  }
+  return xml;
+}
+
+// Populates shipping location(s), inserting "Shipping Locations — Continued"
+// slides as needed so every site is included — never silently drops sites
+// past the template's 2-per-slide capacity. If slide duplication itself
+// fails for any reason, generation is aborted with a clear error (see
+// caller) rather than shipping a file with missing sites or corrupt
+// structure — per the requirement to fail loudly, not silently truncate.
+async function populateShippingSlides(zip,pkg){
+  const TBC='To Be Confirmed';
+  const sites=pkg.shipping;
+  const pairs=[];
+  for(let i=0;i<sites.length;i+=2)pairs.push(sites.slice(i,i+2));
+  if(!pairs.length)pairs.push([]);
+
+  // Every slide fills in from this ONE pristine copy, never from another
+  // already-filled slide — otherwise a later slide's replaceAllRuns calls
+  // are hunting for placeholder text the earlier slide already overwrote,
+  // silently no-op, and the "duplicate" just repeats the first slide's data.
+  const pristineXml=await zip.file('ppt/slides/slide12.xml').async('string');
+
+  const destNames=['slide12.xml'];
+  if(pairs.length>1){
+    const presRels=await zip.file('ppt/_rels/presentation.xml.rels').async('string');
+    let afterRid=findSlideRid(presRels,'slide12.xml');
+    for(let p=1;p<pairs.length;p++){
+      const{destName,rid}=await duplicateSlideAfter(zip,12,afterRid);
+      destNames.push(destName);
+      afterRid=rid;
+    }
+  }
+
+  destNames.forEach((destName,idx)=>{
+    let xml=pristineXml;
+    if(idx>0)xml=replaceAllRuns(xml,'Shipping location(s)','Shipping Locations — Continued');
+    xml=fillShippingSlot(xml,pairs[idx][0],1,TBC);
+    xml=fillShippingSlot(xml,pairs[idx][1],2,TBC);
+    zip.file('ppt/slides/'+destName,xml);
+  });
+}
+
+async function generateKickoffDeckFromTemplate(projId,soTag=''){
+  const pkg=await buildProjectDocPackage(projId,soTag);
+  if(!pkg){showToast('⚠ Project not found');return;}
+  if(typeof JSZip==='undefined'){showToast('⚠ Deck library failed to load — check your connection and retry');return;}
+  showToast('Generating deck…');
+  let buf;
+  try{
+    const signedUrl=await getKickoffTemplateSignedUrl();
+    const res=await fetch(signedUrl);
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    buf=await res.arrayBuffer();
+  }catch(e){
+    console.warn('kickoff template fetch failed',e);
+    showToast('⚠ '+(e.message||'Could not load the approved template'));
+    return;
+  }
+  const zip=await JSZip.loadAsync(buf);
+  const TBC='To Be Confirmed';
+  const getSlide=async n=>await zip.file(`ppt/slides/slide${n}.xml`).async('string');
+  const setSlide=(n,xml)=>zip.file(`ppt/slides/slide${n}.xml`,xml);
+
+  try{
+    // Slide 1 — Title
+    let xml=await getSlide(1);
+    xml=replaceAllRuns(xml,'{ Company Name }',pkg.title.client||TBC);
+    xml=replaceAllRuns(xml,'S#####',pkg.title.projectNumber||TBC);
+    xml=replaceAllRuns(xml,'Month DD, YYYY',pkg.title.date);
+    setSlide(1,xml);
+
+    // Slide 3 — Stakeholders (positional: { Name } repeats 10x, 5 Signifi + 5 client)
+    xml=await getSlide(3);
+    let nameCursor=0;
+    const slot=st=>{const r=replaceNextRun(xml,nameCursor,'{ Name }',st?.name||TBC);xml=r.xml;nameCursor=r.cursor;};
+    for(let i=0;i<5;i++)slot(pkg.stakeholdersSignifi[i]);
+    for(let i=0;i<5;i++)slot(pkg.stakeholdersClient[i]);
+    xml=replaceAllRuns(xml,'{ Company Name }',pkg.title.client||TBC);
+    setSlide(3,xml);
+
+    // Slide 4 — Scope of work (every field is a unique string, safe to global-replace)
+    xml=await getSlide(4);
+    const hw=pkg.hardware;
+    const hwLine1=hw.length?hw.map(h=>`${h.quantity||1} × ${h.model||TBC}`).join('; '):TBC;
+    const hwLine2=hw.length?hw.map(h=>h.screenSize||TBC).join('; '):TBC;
+    const hwLine3=hw.length?hw.map(h=>[pkg.scope.voltage,pkg.scope.plugType].filter(Boolean).join(', ')||TBC).join('; '):TBC;
+    const periphs=hw.length&&hw[0].peripherals?hw[0].peripherals.split(',').map(s=>s.trim()):[];
+    xml=replaceAllRuns(xml,'1 × Gen 5 High Density Locker (96 Compartments)',hwLine1);
+    xml=replaceAllRuns(xml,'15” Screen',hwLine2);
+    xml=replaceAllRuns(xml,'110v, PT(B)',hwLine3);
+    xml=replaceAllRuns(xml,'English',pkg.scope.language||TBC);
+    xml=replaceAllRuns(xml,'USB charging',periphs[0]||TBC);
+    xml=replaceAllRuns(xml,'UBIE boards',periphs[1]||'');
+    xml=replaceAllRuns(xml,'White lights',periphs[2]||'');
+    xml=replaceAllRuns(xml,'Standard Kiosk Vinyl/ Paint',pkg.scope.branding||TBC);
+    xml=replaceAllRuns(xml,'Wi-Fi',pkg.scope.connectivity||TBC);
+    xml=replaceAllRuns(xml,'Default multi-tenant hosting',pkg.scope.hosting||TBC);
+    xml=replaceAllRuns(xml,'LTL: ',(pkg.scope.shippingMethod||TBC)+': ');
+    xml=replaceAllRuns(xml,'Land',pkg.scope.shippingMode||TBC);
+    xml=replaceAllRuns(xml,'Crate ',(pkg.scope.shippingPackaging||TBC)+' ');
+    xml=replaceAllRuns(xml,'White-glove ',(pkg.scope.shippingService||TBC)+' ');
+    xml=replaceAllRuns(xml,'Workflows: Check-In / Check-Out ','Workflows: '+(pkg.scope.workflow||TBC));
+    xml=replaceAllRuns(xml,'Authentication: Employee ID','Authentication: '+(pkg.scope.authentication||TBC));
+    xml=replaceAllRuns(xml,'Vision & UI Training',pkg.scope.deploymentType||TBC);
+    xml=replaceAllRuns(xml,'Relocation of existing unit to new location (address tbc)',pkg.scope.workflowNotes||'');
+    xml=replaceAllRuns(xml,'Delivery and installation of new Kiosk','');
+    xml=replaceAllRuns(xml,'S#####',pkg.title.projectNumber||TBC);
+    xml=replaceAllRuns(xml,'Client Name',pkg.title.client||TBC);
+    setSlide(4,xml);
+
+    // Slide 12 (+ continuation slides) — every shipping site included, none dropped
+    await populateShippingSlides(zip,pkg);
+
+    // Slide 16 — Client deliverables (doc_key matching, label fallback)
+    xml=await getSlide(16);
+    let dateCursor=0,statusCursor=0;
+    ROW_LABELS_16.forEach(label=>{
+      const matches=matchDeliverablesForRow(label,pkg.deliverables);
+      const match=matches[0];
+      let r=replaceNextRun(xml,dateCursor,'{ date }',match?match.dueDate:TBC);xml=r.xml;dateCursor=r.cursor;
+      r=replaceNextRun(xml,statusCursor,'PENDING',match?match.status.toUpperCase():'PENDING');xml=r.xml;statusCursor=r.cursor;
+    });
+    setSlide(16,xml);
+
+    // Slide 17 — Timeline. Month headers and the horizontal date-axis are
+    // removed rather than repositioned: accurately repositioning them per
+    // project's real date range is shape-geometry surgery, not text
+    // replacement, and shipping that without much more testing risks the
+    // exact "text contradicts visual position" failure this item exists to
+    // prevent. Blanking the headers removes the only textual date claim on
+    // the axis; each phase card still shows its own accurate date, and the
+    // cards stay in the template's left-to-right order, which already
+    // matches true chronological order — so no information is lost, only
+    // the (unreliable) precise date-scale implication.
+    xml=await getSlide(17);
+    const tl=pkg.timelinePhases;
+    xml=replaceAllRuns(xml,'May','');
+    xml=replaceAllRuns(xml,'June','');
+    xml=replaceAllRuns(xml,'July','');
+    xml=replaceAllRuns(xml,'August','');
+    xml=replaceAllRuns(xml,'May 14',tl.kickoff||TBC);
+    xml=replaceAllRuns(xml,'Requirements confirmed &amp; parts ordered','Requirements confirmed & parts ordered');
+    xml=replaceAllRuns(xml,'May – June',tl.uiDev||TBC);
+    xml=replaceAllRuns(xml,'May 14 – Jul 8',tl.planogramBuild||TBC);
+    xml=replaceAllRuns(xml,'Jul 16 – 24',tl.qaqc||TBC);
+    xml=replaceAllRuns(xml,'Jul 25',tl.uat||TBC);
+    xml=replaceAllRuns(xml,'Jul 26',tl.packShip||TBC);
+    xml=replaceAllRuns(xml,'Aug 12',tl.goLive||TBC);
+    xml=replaceAllRuns(xml,'Delivery Late Jul',tl.delivery||TBC);
+    xml=replaceAllRuns(xml,'Install: Early Aug',tl.installation||TBC);
+    setSlide(17,xml);
+
+    // Slide 19 — Next Steps (mirror of 16, different fixed row-label set)
+    xml=await getSlide(19);
+    let dateCursor19=0,statusCursor19=0;
+    ROW_LABELS_19.forEach(label=>{
+      const matches=matchDeliverablesForRow(label,pkg.deliverables);
+      const match=matches[0];
+      let r=replaceNextRun(xml,dateCursor19,'{ date }',match?match.dueDate:TBC);xml=r.xml;dateCursor19=r.cursor;
+      r=replaceNextRun(xml,statusCursor19,'PENDING',match?match.status.toUpperCase():'PENDING');xml=r.xml;statusCursor19=r.cursor;
+    });
+    setSlide(19,xml);
+
+    // Slide 20 — Closing / PM contact
+    xml=await getSlide(20);
+    xml=replaceAllRuns(xml,'{ PM Name }',pkg.title.pm||TBC);
+    xml=replaceAllRuns(xml,'{ pm@signifi.com }',pkg.title.pm?`${pkg.title.pm.toLowerCase().replace(/\s+/g,'.')}@signifisolutions.com`:TBC);
+    setSlide(20,xml);
+  }catch(e){
+    // Continuation-slide XML surgery is the one part of this pipeline that
+    // can leave the package structurally broken if it fails partway through
+    // — abort and say so clearly rather than offer a possibly-corrupt file.
+    console.error('kickoff deck generation failed',e);
+    showToast('⚠ Deck generation failed and was stopped: '+(e.message||e)+'. No file was produced.');
+    return;
+  }
+
+  const blob=await zip.generateAsync({type:'blob'});
+  const fname=`Kickoff Deck - ${(pkg.title.client||pkg.proj.name||'Project')} - ${pkg.title.projectNumber||''}.pptx`.replace(/[\\/:*?"<>|]/g,'');
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download=fname;document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),10000);
+  showToast('📊 Kickoff deck generated ✓ — one complete, editable file. Review flagged items before sending.');
+}
+
+function renderCommsTab(){
+  if(!selectedDocProjId)return'<div class="empty-state">Select a project above.</div>';
+  const FUTURE_DOCS=[
+    {key:'implementation-plan',label:'Client Implementation Plan'},
+    {key:'weekly-status',label:'Weekly Status Report'},
+    {key:'executive-summary',label:'Executive Summary'},
+    {key:'deployment-package',label:'Deployment Package'},
+  ];
+  return`<div style="padding:16px 0">
+    <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius);padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--gray-600)">
+      <b>Communications</b> — generates the complete approved Kickoff Deck (all 20 slides, one editable .pptx) with the project-specific sections auto-filled from live Ops Hub data.
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
+      <button class="doc-tab active" style="cursor:default">🎬 Kickoff Deck</button>
+      ${FUTURE_DOCS.map(d=>`<button class="doc-tab" disabled style="opacity:0.45;cursor:not-allowed" title="Coming in a later phase">${esc(d.label)} · soon</button>`).join('')}
+    </div>
+    <div id="comms-kickoff-preview" style="font-size:12px;color:var(--gray-500)">Loading readiness summary…</div>
+  </div>`;
+}
+
+async function renderKickoffPreview(){
+  const el=document.getElementById('comms-kickoff-preview');
+  if(!el||!selectedDocProjId)return;
+  const pkg=await buildProjectDocPackage(selectedDocProjId,selectedDocSO);
+  if(!el.isConnected)return;
+  if(!pkg){el.innerHTML='<div class="empty-state">Project not found.</div>';return;}
+  const r=pkg.readiness;
+  el.innerHTML=`
+    <div class="pp-card" style="margin-bottom:10px"><div class="pp-card-head"><span class="pp-card-title">Readiness summary</span></div>
+      <div class="pp-card-body" style="font-size:12px;line-height:1.9">
+        <b>${esc(pkg.title.client||pkg.proj.name)}</b> — ${esc(pkg.title.projectNumber)}<br>
+        ${r.siteCount} shipping site(s) · ${r.hardwareCount} hardware line item(s) · ${r.milestoneCount} of ${r.milestoneTotal} pipeline milestones set · ${pkg.stakeholders.length} stakeholder(s) · ${pkg.deliverables.length} deliverable(s)
+      </div>
+    </div>
+    ${r.conflicts.length?`<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:#991b1b">
+      <b>⚠ ${r.conflicts.length} stakeholder conflict(s) — not auto-resolved:</b><br>
+      ${r.conflicts.map(c=>`• ${esc(c.role)}: project field says "${esc(c.scalarValue)}", team list says "${esc(c.teamValue)}" — using the project field`).join('<br>')}
+    </div>`:''}
+    ${r.missingImportant.length?`<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:#991b1b">
+      <b>${r.missingImportant.length} important item(s) — deck will still generate, review before sending:</b><br>${r.missingImportant.map(m=>'• '+esc(m.text)).join('<br>')}
+    </div>`:''}
+    ${r.missingOptional.length?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:#92600a">
+      <b>${r.missingOptional.length} optional item(s):</b><br>${r.missingOptional.map(m=>'• '+esc(m.text)).join('<br>')}
+    </div>`:''}
+    ${!r.missingImportant.length&&!r.missingOptional.length?`<div style="background:var(--green-bg,#f0fdf4);border:1px solid #86efac;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:#166534">✓ All fields ready</div>`:''}
+    <button onclick="generateKickoffDeckFromTemplate('${selectedDocProjId}','${selectedDocSO||''}')" style="font-size:13px;padding:9px 20px;border-radius:var(--radius);border:none;background:var(--black);color:white;cursor:pointer;font-family:var(--font);font-weight:600">⚡ Generate Complete Kickoff Deck (.pptx)</button>`;
+}
+
 function renderGenDocs(){
   saveDocFormState();
   const el=document.getElementById('tab-gendocs');
@@ -7796,13 +8455,15 @@ function renderGenDocs(){
             <button class="doc-tab${activeDocTab==='ui'?' active':''}" onclick="saveDocFormState(true);activeDocTab='ui';renderGenDocs()">🖥 UI request</button>
             <button class="doc-tab${activeDocTab==='qa'?' active':''}" onclick="saveDocFormState(true);activeDocTab='qa';renderGenDocs()">✅ QA task</button>
             <button class="doc-tab${activeDocTab==='uat'?' active':''}" onclick="saveDocFormState(true);activeDocTab='uat';renderGenDocs()">📋 UAT checklist</button>
+            <button class="doc-tab${activeDocTab==='comms'?' active':''}" onclick="saveDocFormState(true);activeDocTab='comms';renderGenDocs()">📣 Communications</button>
           </div>
           <button onclick="saveDocFormState(true);showToast('Form saved ✓')" style="font-size:12px;padding:6px 14px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);color:var(--gray-700);cursor:pointer;font-family:var(--font)">💾 Save form</button><button onclick="saveDocFormState();generateAllDocs()" style="font-size:12px;padding:6px 16px;border-radius:var(--radius);border:none;background:var(--black);color:white;cursor:pointer;font-family:var(--font);font-weight:600">⚡ Generate all three →</button>
         </div>
-        ${activeDocTab==='install'?renderInstallForm():activeDocTab==='ui'?renderUIForm():activeDocTab==='qa'?renderQAForm():renderUATDocTab()}
+        ${activeDocTab==='install'?renderInstallForm():activeDocTab==='ui'?renderUIForm():activeDocTab==='qa'?renderQAForm():activeDocTab==='comms'?renderCommsTab():renderUATDocTab()}
       </div>
     </div>`;
   restoreDocFormState();
+  if(activeDocTab==='comms'&&selectedDocProjId)renderKickoffPreview();
 }
 
 function getDocProj(){return projects.find(p=>p.id===selectedDocProjId)||{};}
@@ -7828,13 +8489,13 @@ function getDocLink(label){
   return'';
 }
 function fld(id,label,placeholder,fullWidth,type='text',val=''){
-  return`<div class="field${fullWidth?' full':''}"><label>${label}</label><input id="${id}" type="${type}" placeholder="${placeholder}" value="${val}" style="font-size:12px" onblur="saveDocFormState(true)"></div>`;
+  return`<div class="field${fullWidth?' full':''}"><label>${esc(label)}</label><input id="${id}" type="${type}" placeholder="${placeholder}" value="${val}" style="font-size:12px" onblur="saveDocFormState(true)"></div>`;
 }
 function fldSelect(id,label,opts,val=''){
-  return`<div class="field"><label>${label}</label><select id="${id}" style="font-size:12px">${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
+  return`<div class="field"><label>${esc(label)}</label><select id="${id}" style="font-size:12px">${opts.map(o=>`<option${o===val?' selected':''}>${o}</option>`).join('')}</select></div>`;
 }
 function fldTA(id,label,placeholder,val=''){
-  return`<div class="field full"><label>${label}</label><textarea id="${id}" placeholder="${placeholder}" style="min-height:70px;font-size:12px" onblur="saveDocFormState(true)">${val}</textarea></div>`;
+  return`<div class="field full"><label>${esc(label)}</label><textarea id="${id}" placeholder="${placeholder}" style="min-height:70px;font-size:12px" onblur="saveDocFormState(true)">${val}</textarea></div>`;
 }
 
 const DEFAULT_INSTALL_SCOPE=`Scope of Work:
@@ -7873,7 +8534,7 @@ const DEFAULT_INSTALL_SCOPE=`Scope of Work:
 function pullField(label,val,editHint){
   // Read-only display for fields that must always reflect the live project record —
   // no separate doc input to drift out of sync. Edit via Project Page / Edit Project.
-  return`<div class="field full"><label>${label} <span style="font-size:10px;color:var(--gray-400);font-weight:400">(from project — ${editHint})</span></label>
+  return`<div class="field full"><label>${esc(label)} <span style="font-size:10px;color:var(--gray-400);font-weight:400">(from project — ${editHint})</span></label>
     <div style="font-size:12px;padding:8px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--gray-50);color:${val?'var(--gray-800)':'var(--gray-400)'};min-height:36px">${val||'— not set —'}</div>
   </div>`;
 }
@@ -8554,7 +9215,7 @@ function peopleListSection(key){
   const cfg=PEOPLE_LIST_CONFIG[key];
   const list=getPlWorking(key);
   return`<div style="padding-top:1.25rem;border-top:1px solid var(--gray-100);margin-top:1.25rem">
-    <div style="font-size:14px;font-weight:600;margin-bottom:4px">${cfg.label}</div>
+    <div style="font-size:14px;font-weight:600;margin-bottom:4px">${esc(cfg.label)}</div>
     <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">Used in dropdowns and filters across the hub — no code changes needed.</div>
     <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
       ${list.map((t,i)=>`<div style="display:flex;align-items:center;gap:8px">
@@ -8681,7 +9342,7 @@ function configMigrationSection(){
         <thead><tr><th>Field</th><th>Already set</th><th>Migratable (single/matching)</th><th>Conflicting</th><th>No legacy value</th></tr></thead>
         <tbody>
           ${PROJ_CONFIG_FIELDS.map(f=>`<tr>
-            <td>${f.label}</td>
+            <td>${esc(f.label)}</td>
             <td>${r.perField[f.key].alreadySet}</td>
             <td style="color:var(--success);font-weight:600">${r.perField[f.key].migrated}</td>
             <td style="color:${r.perField[f.key].conflicts?'var(--red)':'var(--gray-400)'};font-weight:${r.perField[f.key].conflicts?'600':'400'}">${r.perField[f.key].conflicts}</td>
@@ -8883,7 +9544,7 @@ function openPushAllDatesModal(masterId){
           return`<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--gray-50)">
             <input type="checkbox" id="push-ms-${m.id}" checked style="cursor:pointer">
             <div style="flex:1">
-              <span style="font-size:12px;font-weight:500">${m.label}</span>
+              <span style="font-size:12px;font-weight:500">${esc(m.label)}</span>
               ${devCount?`<span style="font-size:10px;color:var(--amber);margin-left:8px">⚠ ${devCount} child${devCount>1?'ren':''} deviated</span>`:''}
             </div>
             <span style="font-size:11px;font-family:var(--mono);color:var(--gray-500)">${m.date?fmt(m.date):'No date'}</span>
@@ -9045,7 +9706,8 @@ async function loadUATRunnerProject(projId){
   uatSessions=s.data||[];
   const sessionIds=uatSessions.map(x=>x.id);
   if(sessionIds.length){
-    const{data}=await sb.from('uat_answers').select('*').in('session_id',sessionIds);
+    const{data,error}=await sb.from('uat_answers').select('*').in('session_id',sessionIds);
+    if(error)console.warn('uat_answers load error',error);
     uatAnswers=data||[];
   } else uatAnswers=[];
   renderUAT();
@@ -9165,7 +9827,7 @@ function renderUATCompletionReview(session,qList,machine,proj){
   const isCompleted=session.status==='completed';
   return`<div style="max-width:520px">
     <div style="font-size:18px;font-weight:700;margin-bottom:4px">${isCompleted?'UAT Completed':'Review before completing'}</div>
-    <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">${machine.machine_label} · ${proj.so_number||''} · ${proj.client||''}</div>
+    <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">${esc(machine.machine_label)} · ${proj.so_number||''} · ${proj.client||''}</div>
     ${isCompleted?`<div style="font-size:13px;color:var(--gray-600);margin-bottom:12px">Completed by ${session.completed_by} on ${fmt(session.completed_date?session.completed_date.slice(0,10):'')}${session.override_reason?`<br><b>Override reason:</b> ${session.override_reason} (by ${session.override_by})`:''}</div>`:''}
     ${!isCompleted&&unanswered.length?`<div style="background:#fffaf0;border:1px solid #f5d99a;color:#92600a;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:13px">${unanswered.length} question${unanswered.length>1?'s':''} not yet answered.</div>`:''}
     ${failed.length?`
@@ -9204,7 +9866,7 @@ function renderUATSession(){
   const readOnly=session.status==='completed';
   return`<div style="max-width:520px">
     <div style="position:sticky;top:0;background:var(--white);z-index:5;padding:10px 0 12px;border-bottom:1px solid var(--gray-100);margin-bottom:16px">
-      <div style="font-size:11px;color:var(--gray-500)">${proj.so_number||''} · ${proj.client||''} · ${machine.machine_label} (${machine.machine_type})</div>
+      <div style="font-size:11px;color:var(--gray-500)">${proj.so_number||''} · ${proj.client||''} · ${esc(machine.machine_label)} (${machine.machine_type})</div>
       <div style="font-size:13px;font-weight:600;margin-top:2px">Section ${currentSectionNum} of ${sectionTitles.length} — ${q.sectionTitle}</div>
       <div style="font-size:11px;color:var(--gray-400)">${answeredCount} of ${qList.length} complete${readOnly?' · Completed (read-only)':''}</div>
       <div style="height:4px;background:var(--gray-100);border-radius:2px;margin-top:6px;overflow:hidden"><div style="height:100%;width:${qList.length?Math.round(answeredCount/qList.length*100):0}%;background:var(--success)"></div></div>
@@ -9238,7 +9900,7 @@ function renderUATSessionDetail(sessionId){
   const sectionTitles=[...new Set(qList.map(q=>q.sectionTitle))];
   return`<div style="max-width:640px">
     <button onclick="uatDetailSessionId=null;renderUAT()" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-bottom:12px">← Back</button>
-    <div style="font-size:18px;font-weight:700;margin-bottom:2px">${machine.machine_label} — Full checklist</div>
+    <div style="font-size:18px;font-weight:700;margin-bottom:2px">${esc(machine.machine_label)} — Full checklist</div>
     <div style="font-size:13px;color:var(--gray-500);margin-bottom:4px">${proj.so_number||''} · ${proj.client||''} · ${machine.machine_type}</div>
     <div style="font-size:12px;color:var(--gray-600);margin-bottom:16px">
       Result: <b style="color:${session.overall_result==='fail'?'var(--red)':'var(--success)'}">${session.overall_result==='fail'?'Failed':session.overall_result==='pass_with_override'?'Pass (Override)':'Pass'}</b>
@@ -9446,7 +10108,7 @@ async function exportUATSessionExcel(sessionId){
   ws.mergeCells('C'+r+':E'+r);
 
   // ── Footer: SO, machine, generator credit, page numbers ─
-  ws.headerFooter.oddFooter=`&L${soTag||proj.so_number||''} — ${machine.machine_label}&CGenerated by Signifi Ops Hub&RPage &P of &N`;
+  ws.headerFooter.oddFooter=`&L${soTag||proj.so_number||''} — ${esc(machine.machine_label)}&CGenerated by Signifi Ops Hub&RPage &P of &N`;
 
   const buf=await wb.xlsx.writeBuffer();
   const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
@@ -9495,8 +10157,8 @@ function renderUATRun(){
           const cfg=getSOConfigSummary(proj,so);
           return`<div onclick="uatSelectSOTag('${so.replace(/'/g,"\\'")}')" style="padding:12px 14px;border:1px solid var(--gray-200);border-radius:var(--radius);cursor:pointer">
             <div style="font-size:14px;font-weight:600;font-family:var(--mono)">${so}</div>
-            ${cfg.naming_convention?`<div style="font-size:11px;color:var(--gray-500);margin-top:2px">🏷 ${cfg.naming_convention}</div>`:''}
-            ${cfg.address?`<div style="font-size:11px;color:var(--gray-400);margin-top:2px">📍 ${cfg.address}</div>`:''}
+            ${cfg.naming_convention?`<div style="font-size:11px;color:var(--gray-500);margin-top:2px">🏷 ${esc(cfg.naming_convention)}</div>`:''}
+            ${cfg.address?`<div style="font-size:11px;color:var(--gray-400);margin-top:2px">📍 ${esc(cfg.address)}</div>`:''}
           </div>`;
         }).join('')}
       </div>
@@ -9511,8 +10173,8 @@ function renderUATRun(){
     ${soList.length>1?`<button onclick="uatRunnerSOTag='';renderUAT()" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-bottom:10px;margin-left:14px">← Change SO</button>`:''}
     <div style="font-size:15px;font-weight:600;margin-bottom:2px">${proj.name}</div>
     <div style="font-size:12px;color:var(--gray-500);margin-bottom:2px">${uatRunnerSOTag||proj.so_number||''} · ${proj.client||''}</div>
-    ${soCfg.naming_convention?`<div style="font-size:11px;color:var(--gray-500);margin-bottom:2px">🏷 ${soCfg.naming_convention}</div>`:''}
-    ${soCfg.address?`<div style="font-size:11px;color:var(--gray-400);margin-bottom:14px">📍 ${soCfg.address}</div>`:'<div style="margin-bottom:14px"></div>'}
+    ${soCfg.naming_convention?`<div style="font-size:11px;color:var(--gray-500);margin-bottom:2px">🏷 ${esc(soCfg.naming_convention)}</div>`:''}
+    ${soCfg.address?`<div style="font-size:11px;color:var(--gray-400);margin-bottom:14px">📍 ${esc(soCfg.address)}</div>`:'<div style="margin-bottom:14px"></div>'}
     <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-bottom:8px">Machines</div>
     ${scopedMachines.length?scopedMachines.map(m=>{
       const session=uatSessions.filter(s=>s.machine_id===m.id).sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||''))[0];
@@ -9522,7 +10184,7 @@ function renderUATRun(){
         :session.status==='completed'?`<span style="font-size:10px;font-weight:600;color:${session.overall_result==='fail'?'var(--red)':'var(--success)'}">✓ ${session.overall_result==='fail'?'Failed':session.overall_result==='pass_with_override'?'Pass (override)':'Pass'}</span>`
         :`<span style="font-size:10px;color:var(--blue)">${answeredCount}/${qCount} complete</span>`;
       return`<div onclick="uatOpenMachine('${m.id}')" style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border:1px solid var(--gray-200);border-radius:var(--radius);margin-bottom:8px;cursor:pointer">
-        <div><div style="font-size:14px;font-weight:600">${m.machine_label}</div><div style="font-size:11px;color:var(--gray-400)">${m.machine_type}</div></div>
+        <div><div style="font-size:14px;font-weight:600">${esc(m.machine_label)}</div><div style="font-size:11px;color:var(--gray-400)">${m.machine_type}</div></div>
         ${statusChip}
       </div>`;
     }).join(''):'<div style="font-size:12px;color:var(--gray-400);font-style:italic;margin-bottom:10px">No machines added yet.</div>'}
@@ -9568,7 +10230,7 @@ function renderUATManage(){
         <tbody>
           ${questions.map(q=>`<tr>
             <td><input value="${(q.question||'').replace(/"/g,'&quot;')}" placeholder="Question text..." onchange="uatUpdateQuestion('${q.id}','question',this.value)"></td>
-            <td><select onchange="uatUpdateQuestion('${q.id}','answer_type',this.value)">${UAT_ANSWER_TYPES.map(a=>`<option value="${a.value}"${a.value===q.answer_type?' selected':''}>${a.label}</option>`).join('')}</select></td>
+            <td><select onchange="uatUpdateQuestion('${q.id}','answer_type',this.value)">${UAT_ANSWER_TYPES.map(a=>`<option value="${a.value}"${a.value===q.answer_type?' selected':''}>${esc(a.label)}</option>`).join('')}</select></td>
             <td style="text-align:center"><input type="checkbox" ${q.required?'checked':''} onchange="uatUpdateQuestion('${q.id}','required',this.checked)"></td>
             <td><button onclick="uatToggleAdvanced('${q.id}')" style="background:none;border:1px solid var(--gray-200);border-radius:10px;padding:2px 8px;font-size:10px;color:var(--gray-500);cursor:pointer;font-family:var(--font)" title="Conditional visibility, expected value, help text">${q.condition_field||q.expected_field?'⚙ set':'⚙'}</button></td>
             <td class="pp-actions"><button class="pp-del" onclick="uatDeleteQuestion('${q.id}')">✕</button></td>
@@ -9840,15 +10502,24 @@ async function migrateCampaignToSO(masterId){
   for(const m of existingSoMs) await sb.from('milestones').delete().eq('id',m.id);
 
   // Copy each child's milestones onto master with so_tag, then delete child
+  const failedChildren=[];
   for(const child of children){
     const childMs=milestones.filter(m=>m.project_id===child.id);
     const so=child.so_number||child.name;
+    let childFailed=false;
     for(const m of childMs){
-      const{data}=await sb.from('milestones').insert({
+      const{data,error}=await sb.from('milestones').insert({
         project_id:masterId,key:m.key,label:m.label,date:m.date,
         original_date:m.original_date||m.date,so_tag:so,changed_by:currentUserName
       }).select().single();
+      if(error){console.warn('milestones insert error (SO split)',error);childFailed=true;continue;}
       if(data)inserted++;
+    }
+    if(childFailed){
+      // Don't delete this child — some of its milestones failed to copy, so
+      // deleting it now would lose data permanently. Leave it for a retry.
+      failedChildren.push(child.name||child.so_number||child.id);
+      continue;
     }
     // Delete all child data
     const cid=child.id;
@@ -9877,7 +10548,12 @@ async function migrateCampaignToSO(masterId){
   const mp=projects.find(p=>p.id===masterId);
   if(mp)mp.is_master=false;
 
-  showToast('Migrated '+inserted+' milestones, deleted '+children.length+' child projects ✓');
+  const deletedCount=children.length-failedChildren.length;
+  if(failedChildren.length){
+    showToast('⚠ Migrated '+inserted+' milestones, deleted '+deletedCount+' of '+children.length+' child projects. Skipped (retry needed): '+failedChildren.join(', '),6000);
+  } else {
+    showToast('Migrated '+inserted+' milestones, deleted '+deletedCount+' child projects ✓');
+  }
   await loadAll();
   renderSettings();
 }
@@ -9995,7 +10671,7 @@ function globalSearch(q){
         <div style="font-size:10px;color:#6b7280;margin-top:2px">${p.so_number||''} · ${p.client||''} · ${p.pm||'No PM'}</div>
       </div>
       <div style="text-align:right;flex-shrink:0;margin-left:10px">
-        ${next?`<div style="font-size:10px;color:#60a5fa">${next.label}</div><div style="font-size:9px;color:#6b7280">${fmt(next.date)}</div>`:'<div style="font-size:10px;color:#4b5563">No upcoming</div>'}
+        ${next?`<div style="font-size:10px;color:#60a5fa">${esc(next.label)}</div><div style="font-size:9px;color:#6b7280">${fmt(next.date)}</div>`:'<div style="font-size:10px;color:#4b5563">No upcoming</div>'}
       </div>
     </div>`;
   }).join('');
@@ -10029,7 +10705,7 @@ function cloneProject(id){
           <div style="font-size:11px;font-weight:600;color:var(--gray-500);margin-bottom:8px">MILESTONES TO CLONE (${origMs.length}) — dates will shift automatically</div>
           <div style="max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:4px">
             ${origMs.map(m=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--gray-100)">
-              <span style="color:var(--gray-700)">${m.label}</span>
+              <span style="color:var(--gray-700)">${esc(m.label)}</span>
               <span style="font-family:var(--mono);color:var(--gray-400)">${fmt(m.date)}</span>
             </div>`).join('')}
           </div>
@@ -10159,6 +10835,47 @@ async function confirmCloseProject(id){
   fireConfetti();
   showToast('🎉 Project complete!');
   await loadAll();
+  offerUATExcelDownload(id);
+}
+// Follow-up after closing a project — offers the UAT Excel report(s) if any
+// completed UAT sessions exist. Silently does nothing for projects that
+// never used UAT, so this never nags on a normal close.
+// uatMachines/uatSessions/uatAnswers are normally only populated when
+// someone opens the UAT runner for a specific project (loadUATRunnerProject)
+// — exportUATSessionExcel() depends on those globals rather than fetching
+// its own data, so this has to populate them itself first.
+async function offerUATExcelDownload(projId){
+  const{data:sessions,error:sessErr}=await sb.from('uat_sessions').select('*').eq('project_id',projId);
+  if(sessErr){console.warn('uat_sessions load error',sessErr);showToast('⚠ Could not load UAT sessions: '+sessErr.message);return;}
+  const completed=(sessions||[]).filter(s=>s.status==='completed');
+  if(!completed.length)return;
+  const{data:machines,error:machErr}=await sb.from('uat_machines').select('*').eq('project_id',projId);
+  if(machErr)console.warn('uat_machines load error',machErr);
+  uatMachines=machines||[];
+  uatSessions=sessions||[];
+  const{data:answers,error:ansErr}=await sb.from('uat_answers').select('*').in('session_id',completed.map(s=>s.id));
+  if(ansErr)console.warn('uat_answers load error',ansErr);
+  uatAnswers=answers||[];
+  const proj=projects.find(p=>p.id===projId);
+  const rows=completed.map(s=>{
+    const m=uatMachines.find(x=>x.id===s.machine_id);
+    const resultBadge=s.overall_result==='fail'?'<span style="color:var(--red);font-weight:600">Failed</span>':s.overall_result==='pass_with_override'?'<span style="color:var(--warning);font-weight:600">Pass (override)</span>':'<span style="color:var(--success);font-weight:600">Pass</span>';
+    return`<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--gray-100)">
+      <div><div style="font-size:13px;font-weight:600">${m?.machine_label||'Machine'}${m?.so_tag?' · '+m.so_tag:''}</div><div style="font-size:11px">${resultBadge}</div></div>
+      <button onclick="exportUATSessionExcel('${s.id}')" style="font-size:12px;padding:6px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);cursor:pointer;font-family:var(--font)">⬇ Excel</button>
+    </div>`;
+  }).join('');
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal" style="width:440px" onclick="event.stopPropagation()">
+      <div class="modal-head"><span class="modal-title">📋 UAT report${completed.length>1?'s':''} — ${proj?.name||''}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div class="modal-body">
+        <div style="font-size:12px;color:var(--gray-600);margin-bottom:10px">This project has ${completed.length} completed UAT checklist${completed.length>1?'s':''}. Download the Excel report${completed.length>1?'s':''} before wrapping up?</div>
+        <div>${rows}</div>
+      </div>
+      <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>
+    </div>
+  </div>`;
 }
 async function confirmMoveToSoftware(id){
   closeModal();
@@ -10308,13 +11025,14 @@ async function saveCustomLink(key,newName,newUrl){
     // Insert new row with both fields
     const DEFAULT_CUSTOM=['Custom link 1','Custom link 2','Custom link 3','Custom link 4','Custom link 5'];
     const defaultLabel=DEFAULT_CUSTOM[parseInt(key.split('_')[1])-1]||key;
-    const{data}=await sb.from('project_links').insert({
+    const{data,error}=await sb.from('project_links').insert({
       project_id:ppProjId,
       label:newName?.trim()||defaultLabel,
       url:newUrl?.trim()||'',
       category:key,
       sort_order:ppData.links.length
     }).select().single();
+    if(error){console.warn('project_links insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data)ppData.links.push(data);
   }
   showPPSaved();
@@ -10330,7 +11048,8 @@ async function renamePPLink(oldLabel,newLabel){
     }
   } else {
     // No row yet — insert a placeholder so the name persists
-    const{data}=await sb.from('project_links').insert({project_id:ppProjId,label:newLabel.trim(),url:'',category:'custom',sort_order:ppData.links.length}).select().single();
+    const{data,error}=await sb.from('project_links').insert({project_id:ppProjId,label:newLabel.trim(),url:'',category:'custom',sort_order:ppData.links.length}).select().single();
+    if(error){console.warn('project_links insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data)ppData.links.push(data);
   }
   showPPSaved();
@@ -10498,7 +11217,7 @@ function cdAddRow(){
   tr.id='cd-row-'+i;
   tr.style.borderBottom='1px solid var(--gray-50)';
   tr.innerHTML=`
-    <td style="padding:6px 8px"><input type="text" value="${labelVal}" id="cd-label-${i}" style="font-family:var(--font);font-size:12px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:140px"><input type="hidden" id="cd-key-${i}" value="${key}"></td>
+    <td style="padding:6px 8px"><input type="text" value="${esc(labelVal)}" id="cd-label-${i}" style="font-family:var(--font);font-size:12px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:140px"><input type="hidden" id="cd-key-${i}" value="${key}"></td>
     <td style="padding:4px 8px"><input type="date" id="cd-date-${i}" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:120px"></td>
     <td style="padding:4px 8px"><select id="cd-status-${i}" style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px"><option>Pending</option><option>In Progress</option><option>Complete</option><option>N/A</option></select></td>
     <td style="padding:4px 8px"><input type="text" id="cd-notes-${i}" placeholder="Notes..." style="font-family:var(--font);font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;width:100%"></td>
@@ -10567,7 +11286,7 @@ function openClientExport(){
     const chipLbl=isDone?'Complete':d===0?'Today':d<0?`${Math.abs(d)}d ago`:`${fmt(m.date)}`;
     return`<tr style="border-bottom:1px solid #f1f5f9">
       <td style="padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:10px">
-        <span style="width:10px;height:10px;border-radius:50%;background:${dotColor};display:inline-block;flex-shrink:0"></span>${m.label}
+        <span style="width:10px;height:10px;border-radius:50%;background:${dotColor};display:inline-block;flex-shrink:0"></span>${esc(m.label)}
       </td>
       <td style="padding:10px 16px;font-size:12px;color:#64748b;font-family:monospace">${fmt(m.date)}</td>
       <td style="padding:10px 16px"><span style="font-size:11px;padding:2px 10px;border-radius:12px;background:${chipBg};color:${chipColor};font-weight:500">${chipLbl}</span></td>
@@ -10584,7 +11303,7 @@ function openClientExport(){
 
   const linksHtml=clientLinks.map(l=>`
     <a href="${l.url}" target="_blank" style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:#f8fafc;border-radius:8px;text-decoration:none;color:#1d4ed8;font-size:13px;font-weight:500">
-      🔗 ${l.label}
+      🔗 ${esc(l.label)}
     </a>`).join('');
 
   const html=`<!DOCTYPE html>
@@ -10704,7 +11423,7 @@ body{font-family:'DM Sans',sans-serif;background:#f1f5f9;color:#0f172a;-webkit-p
     if(lastMonth>=0)monthCells.push({label:new Date(cols[cols.length-1].getFullYear(),lastMonth,1).toLocaleDateString('en-US',{month:'short'}),span:monthSpan,start:monthStart});
     // Colour per milestone key
     const COL={'po-release':'#8b5cf6','arrival':'#8b5cf6','production-start':'#7c3aed','production-end':'#7c3aed','other':'#0891b2','quality-start':'#d97706','quality-end':'#d97706','final-qc':'#0891b2','vinyl':'#db2777','uat':'#16a34a','shipping':'#059669','delivery':'#059669','training':'#f59e0b','installation':'#e11d48'};
-    const monthRow='<tr><td class="label-col"></td><td class="date-col"></td><td class="status-col"></td>'+monthCells.map(mc=>`<th colspan="${mc.span}" style="text-align:left;font-size:9px;font-weight:700;color:#64748b;padding:2px 0 4px 3px;letter-spacing:0.06em;text-transform:uppercase">${mc.label}</th>`).join('')+'</tr>';
+    const monthRow='<tr><td class="label-col"></td><td class="date-col"></td><td class="status-col"></td>'+monthCells.map(mc=>`<th colspan="${mc.span}" style="text-align:left;font-size:9px;font-weight:700;color:#64748b;padding:2px 0 4px 3px;letter-spacing:0.06em;text-transform:uppercase">${esc(mc.label)}</th>`).join('')+'</tr>';
     const dayRow='<tr style="border-bottom:1px solid #f1f5f9"><td class="label-col"></td><td class="date-col"></td><td class="status-col"></td>'+cols.map(d=>{const isT=sameDay(d,t);return`<th style="${isT?'color:#C8102E;font-weight:700':''}">${d.getDate()}</th>`;}).join('')+'</tr>';
     const msGanttRows=msDated.map(m=>{
       const isDone=isMilestoneEffectivelyDone(m);
@@ -10722,7 +11441,7 @@ body{font-family:'DM Sans',sans-serif;background:#f1f5f9;color:#0f172a;-webkit-p
         return`<td class="cell" style="background:${bg};${border};border-radius:${onMs?'3px':'0'}">${onMs?`<div style="height:16px;width:100%;border-radius:3px"></div>`:isT?`<div style="height:16px;border-left:1.5px solid rgba(200,16,46,0.25)"></div>`:''}</td>`;
       }).join('');
       return`<tr style="border-bottom:1px solid #f8fafc">
-        <td class="label-col"><span class="dot" style="background:${isDone?'#22c55e':d<0?'#f59e0b':barColor}"></span>${m.label}</td>
+        <td class="label-col"><span class="dot" style="background:${isDone?'#22c55e':d<0?'#f59e0b':barColor}"></span>${esc(m.label)}</td>
         <td class="date-col">${fmt(m.date)}</td>
         <td class="status-col"><span class="chip" style="background:${chipBg};color:${chipColor}">${chipLbl}</span></td>
         ${cells}
@@ -11479,7 +12198,7 @@ function renderProcPanel(pid){
     <div class="pp-card-head">
       <span class="pp-card-title">🛒 Procurement ${prio}</span>
       <span style="display:flex;gap:8px;align-items:center">
-        <span style="font-size:11px;font-weight:700;padding:4px 12px;border-radius:14px;background:${st.bg};color:${st.fg}">${st.label}</span>
+        <span style="font-size:11px;font-weight:700;padding:4px 12px;border-radius:14px;background:${st.bg};color:${st.fg}">${esc(st.label)}</span>
         ${list.length?`<span style="font-size:10px;color:var(--gray-500);font-family:var(--mono)">${recv}/${list.length} received</span>`:''}
       </span>
     </div>
