@@ -6653,21 +6653,38 @@ function renderProjPage(){
       <span id="pp-saved" class="pp-saved">Saved ✓</span>
     </div>
     <div id="pp-body"><div style="text-align:center;padding:3rem;color:var(--gray-500)"><div style="font-size:20px;margin-bottom:8px">⏳</div>Loading project page...</div></div>`;
+  // Wraps renderProjPageBody so a thrown error shows a visible, recoverable
+  // state instead of leaving #pp-body stuck on the loading placeholder
+  // forever — used by both branches below (the synchronous fast-path and
+  // the async reload path each need this, not just one of them).
+  function safeRenderProjPageBody(){
+    try{
+      renderProjPageBody();
+    }catch(err){
+      console.error('renderProjPageBody failed',err);
+      const body=document.getElementById('pp-body');
+      if(body)body.innerHTML=`<div style="text-align:center;padding:3rem;color:var(--red)">⚠ Couldn't render this project.<br><span style="font-size:12px;color:var(--gray-500)">${esc(err?.message||String(err))}</span><br><button onclick="switchProjPage('${ppProjId}')" style="margin-top:12px;font-size:12px;padding:6px 14px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer">Retry</button></div>`;
+    }
+  }
   // Always reload from Supabase when visiting this tab,
   // UNLESS we're being called from loadAll() which already has fresh data —
   // in that case renderProjPageBody() directly to avoid a double-render race.
   if(window._skipProjPageReload){
     window._skipProjPageReload=false;
-    renderProjPageBody();
+    safeRenderProjPageBody();
     const proj=projects.find(p=>p.id===ppProjId);
     const inp=document.getElementById('pp-proj-search');
     if(inp&&proj)inp.value=proj.name+(proj.so_number?' — '+proj.so_number:'');
   } else {
     loadProjPage(ppProjId).then(()=>{
-      renderProjPageBody();
+      safeRenderProjPageBody();
       const proj=projects.find(p=>p.id===ppProjId);
       const inp=document.getElementById('pp-proj-search');
       if(inp&&proj)inp.value=proj.name+(proj.so_number?' — '+proj.so_number:'');
+    }).catch(err=>{
+      console.error('loadProjPage failed',err);
+      const body=document.getElementById('pp-body');
+      if(body)body.innerHTML=`<div style="text-align:center;padding:3rem;color:var(--red)">⚠ Couldn't load this project.<br><span style="font-size:12px;color:var(--gray-500)">${esc(err?.message||String(err))}</span><br><button onclick="switchProjPage('${ppProjId}')" style="margin-top:12px;font-size:12px;padding:6px 14px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer">Retry</button></div>`;
     });
   }
 }
@@ -7069,7 +7086,7 @@ function renderProjPageBody(){
     else if(d<=7){chip='chip-atrisk';lbl='In '+d+'d';}
     else{chip='chip-future';lbl=fmt(m.date);}
     const slDot=ci?.stoplight?`<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${ci.stoplight==='green'?'#22c55e':ci.stoplight==='yellow'?'#eab308':'#ef4444'};margin-left:4px" title="Dept: ${ci.stoplight}"></span>`:'';
-    const dev=ppProj?.parent_project_id?milestoneDeviations[ppProjId]?.[m.key]:null;
+    const dev=proj?.parent_project_id?milestoneDeviations[ppProjId]?.[m.key]:null;
     const devTag=dev?`<span style="font-size:9px;padding:1px 5px;border-radius:8px;background:#ede9fe;color:#7c3aed;font-weight:600;margin-left:4px" title="Deviated from master">🔀 deviated</span>`:'';
     return`<tr>
       <td style="font-weight:500">${esc(m.label)}${slDot}${devTag}</td>
