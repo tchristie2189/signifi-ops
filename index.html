@@ -7021,7 +7021,7 @@ function renderProjPageBody(){
   </tr>`).join('');
 
   // Hardware line items
-  const hwSoOpts=getSOList(ppProj?.so_number||projects.find(p=>p.id===ppProjId)?.so_number||'');
+  const hwSoOpts=getSOList(proj?.so_number||projects.find(p=>p.id===ppProjId)?.so_number||'');
   const hwLegacyBanner=(!ppData.hardware.length&&projects.find(p=>p.id===ppProjId)?.quantity)?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;font-size:12px;color:#92600a">This project is currently using the legacy hardware quantity (${projects.find(p=>p.id===ppProjId)?.quantity}). Convert it into an editable hardware line to add model, screen size, and peripherals.<br><button onclick="ppConvertLegacyHardware()" style="margin-top:6px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid #d97706;background:white;color:#92600a;cursor:pointer">Create Hardware Line from Existing Project Data</button></div>`:'';
   const hardwareHtml=ppData.hardware.map(h=>`<tr data-id="${h.id}">
     ${hwSoOpts.length>1?`<td><select onchange="ppHardwareChange('${h.id}','so_tag',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value=""${!h.so_tag?' selected':''}>All SOs</option>${hwSoOpts.map(so=>`<option value="${so}"${h.so_tag===so?' selected':''}>${so}</option>`).join('')}</select></td>`:''}
@@ -7048,9 +7048,8 @@ function renderProjPageBody(){
   </tr>`).join('');
 
   // Milestones from hub — group by SO if split
-  const ppProj=projects.find(p=>p.id===ppProjId);
   const ppHasSoTags=isProjectFullySplit(pMs);
-  const ppSoList=getSOList(ppProj);
+  const ppSoList=getSOList(proj);
 
   const buildPPMsRow=(m)=>{
     const isDone=isMilestoneEffectivelyDone(m);
