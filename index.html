@@ -4913,14 +4913,15 @@ function openVinylFormFactorPicker(itemId,evt){
   const item=typeof itemId==='number'||/^\d+$/.test(itemId)?vinylSchedule[itemId]:vinylSchedule.find(x=>x.id===itemId)||vinylSchedule[itemId];
   if(!item)return;
   const selected=(item.formFactor||'').split(',').map(s=>s.trim()).filter(Boolean);
-  const types=getProductTypes();
+  const activeTypes=getProductTypes();
+  const types=labelsForCurrentValue(activeTypes,selected);
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:340px" onclick="event.stopPropagation()">
     <div class="modal-head"><span class="modal-title">Form factor</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
       <div style="display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto">
         ${types.map(t=>`<label style="display:flex;align-items:center;gap:8px;font-size:13px;padding:5px 6px;border-radius:6px;cursor:pointer" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='transparent'">
           <input type="checkbox" value="${t.replace(/"/g,'&quot;')}" ${selected.includes(t)?'checked':''} style="width:15px;height:15px">
-          <span>${t}</span>
+          <span>${t}${!activeTypes.includes(t)?' (Retired)':''}</span>
         </label>`).join('')}
       </div>
     </div>
@@ -5941,20 +5942,20 @@ function openEditProj(id){
         <div class="field"><label>Project Manager</label>
           <select id="ep-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%">
             <option value="">Select PM...</option>
-            ${getPMList().map(pm=>`<option${proj.pm===pm?' selected':''}>${pm}</option>`).join('')}
+            ${retiredAwareOptionsHtml(getPMList(),proj.pm)}
           </select>
         </div>
         <div class="field"><label>SDM</label><input id="ep-sdm" value="${proj.sdm||''}" placeholder="SDM name"></div>
         <div class="field"><label>Solutions</label><input id="ep-solutions" value="${proj.solutions||''}" placeholder="Solutions contact"></div>
-        <div class="field"><label>Sales</label><input id="ep-sales" list="ep-sales-list" value="${proj.sales||''}" placeholder="Sales contact"><datalist id="ep-sales-list">${getSalesList().map(s=>`<option>${s}</option>`).join('')}</datalist></div>
-        <div class="field"><label>Account Manager</label><input id="ep-am" list="ep-am-list" value="${proj.account_manager||''}" placeholder="Account Manager"><datalist id="ep-am-list">${getAMList().map(a=>`<option>${a}</option>`).join('')}</datalist></div>
+        <div class="field"><label>Sales</label><input id="ep-sales" list="ep-sales-list" value="${proj.sales||''}" placeholder="Sales contact"><datalist id="ep-sales-list">${retiredAwareDatalistHtml(getSalesList(),proj.sales)}</datalist></div>
+        <div class="field"><label>Account Manager</label><input id="ep-am" list="ep-am-list" value="${proj.account_manager||''}" placeholder="Account Manager"><datalist id="ep-am-list">${retiredAwareDatalistHtml(getAMList(),proj.account_manager)}</datalist></div>
         <div class="field"><label>Location <span style="font-weight:400;font-size:10px;color:var(--gray-400)">(City, Province, Country)</span></label><input id="ep-location" value="${(proj.location||'').replace(/"/g,'&quot;')}" placeholder="e.g. Toronto, ON, Canada"></div>
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="software-active"${proj.status==='software-active'?' selected':''}>Software Active</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
         <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${overviewConfig.naming_convention||''}</textarea></div>
         <div class="field full"><label>Installation address</label><input id="ep-address" value="${overviewConfig.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
         <div class="field full"><label>Configuration / Form factor <span style="font-size:10px;color:var(--gray-400);font-weight:400">— select all that apply (same list used in per-SO Configuration)</span></label>
           <select id="ep-form-factor" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:100px">
-            ${getProductTypes().map(t=>`<option${(overviewConfig.form_factor||'').split(',').map(s=>s.trim()).includes(t)?' selected':''}>${t}</option>`).join('')}
+            ${retiredAwareOptionsHtml(getProductTypes(),(overviewConfig.form_factor||'').split(',').map(s=>s.trim()).filter(Boolean))}
           </select>
           <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
         </div>
@@ -7264,7 +7265,6 @@ function renderProjPageBody(){
     <!-- Quick jump -->
     <div class="no-print" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">
       <button onclick="ppScrollToConfig('pp-section-dates')" style="font-size:10.5px;padding:4px 10px;border-radius:14px;border:1px solid var(--gray-200);background:var(--white);color:var(--gray-600);cursor:pointer;font-family:var(--font)">↓ Key Project Dates</button>
-      <button onclick="ppScrollToConfig('pp-section-hardware-config')" style="font-size:10.5px;padding:4px 10px;border-radius:14px;border:1px solid var(--gray-200);background:var(--white);color:var(--gray-600);cursor:pointer;font-family:var(--font)">↓ Hardware &amp; Solution Configuration</button>
       <button onclick="openProjectConfiguration('pp-section-shipping')" style="font-size:10.5px;padding:4px 10px;border-radius:14px;border:1px solid var(--gray-200);background:var(--white);color:var(--gray-600);cursor:pointer;font-family:var(--font)">↓ Shipping Locations</button>
       <button onclick="ppScrollToConfig('pp-section-team')" style="font-size:10.5px;padding:4px 10px;border-radius:14px;border:1px solid var(--gray-200);background:var(--white);color:var(--gray-600);cursor:pointer;font-family:var(--font)">↓ Project Team</button>
       <button onclick="ppScrollToConfig('pp-section-tasks')" style="font-size:10.5px;padding:4px 10px;border-radius:14px;border:1px solid var(--gray-200);background:var(--white);color:var(--gray-600);cursor:pointer;font-family:var(--font)">↓ PM Tasks</button>
@@ -7590,7 +7590,7 @@ function openSOConfigModal(projId,so){
   const installUrl=saved?.install_ticket_url||proj.install_ticket_url||'';
   const uiUrl=saved?.ui_task_url||proj.ui_task_url||'';
   const coiRequiredVal=saved?.coi_required==='yes'?'yes':'no';
-  const types=getProductTypes();
+  const activeTypes=getProductTypes();
   const selectedTypes=formFactor.split(',').map(s=>s.trim()).filter(Boolean);
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:480px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
     <div class="modal-head"><span class="modal-title">⚙ Configuration — SO ${so}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
@@ -7598,7 +7598,7 @@ function openSOConfigModal(projId,so){
       <div class="field full" style="margin-bottom:12px">
         <label>Configuration / Form factor <span style="font-size:10px;color:var(--gray-400);font-weight:400">— select all that apply for this SO</span></label>
         <select id="soc-formfactor" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:110px">
-          ${types.map(t=>`<option${selectedTypes.includes(t)?' selected':''}>${t}</option>`).join('')}
+          ${retiredAwareOptionsHtml(activeTypes,selectedTypes)}
         </select>
         <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
       </div>
@@ -10670,7 +10670,7 @@ function openEditAdHoc(dept,idx){
           <div class="field"><label>Training date</label><input type="date" id="eh-training" value="${trainDate}"></div>
           <div class="field"><label>Installation date</label><input type="date" id="eh-install" value="${instDate}"></div>
           `}
-          <div class="field"><label>Project Manager</label><select id="eh-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">Select PM...</option>${getPMList().map(pm=>`<option${pm===(r.pm||'')?' selected':''}>${pm}</option>`).join('')}</select></div>
+          <div class="field"><label>Project Manager</label><select id="eh-pm" style="font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">Select PM...</option>${retiredAwareOptionsHtml(getPMList(),r.pm)}</select></div>
           <div class="field full"><label>Installation Ticket URL</label><input id="eh-ticket-url" value="${r.install_ticket_url||''}" placeholder="https://" style="font-family:var(--mono);font-size:12px"></div>
           <div class="field full"><label>Notes</label><input id="eh-notes" value="${r.notes||''}" placeholder="Any special notes..."></div>
         </div>
@@ -10813,10 +10813,43 @@ function activeOptionLabels(list){return[...list].filter(o=>o.active!==false).so
 // Active labels PLUS any label a project already has selected, even if
 // that option has since been retired/renamed/removed — so a project's
 // existing selection is never silently dropped from the picker.
+// Generic reusable union: active labels (in admin order) plus whatever
+// value(s) a specific record already has saved — even if that value has
+// since been retired, renamed away from, or removed from the list
+// entirely. Never offers a retired value to a record that doesn't already
+// have it selected; only guarantees a record's own existing selection
+// stays visible (and selected) in its edit dropdown.
+function labelsForCurrentValue(activeLabels,currentValue){
+  const values=Array.isArray(currentValue)?currentValue:[currentValue].filter(Boolean);
+  return[...activeLabels,...values.filter(v=>v&&!activeLabels.includes(v))];
+}
 function optionLabelsForSelect(list,currentSelected){
-  const active=activeOptionLabels(list);
-  const extra=(Array.isArray(currentSelected)?currentSelected:[]).filter(v=>v&&!active.includes(v));
-  return[...active,...extra];
+  return labelsForCurrentValue(activeOptionLabels(list),currentSelected);
+}
+// Renders <option> HTML for an admin-configurable list (Product Types, PM,
+// Sales, AM, Authentication/Workflow Types): active options in admin
+// order, plus the record's current value(s) even if retired (via
+// labelsForCurrentValue). A retired value keeps its real `value` attribute
+// — so saving the field never rewrites it to different text — but is
+// visually marked "(Retired)" and stays out of the reach of records that
+// don't already use it.
+function retiredAwareOptionsHtml(activeLabels,currentValue){
+  const values=Array.isArray(currentValue)?currentValue:[currentValue].filter(Boolean);
+  const union=labelsForCurrentValue(activeLabels,values);
+  return union.map(v=>{
+    const retired=!activeLabels.includes(v);
+    const sel=values.includes(v);
+    return`<option value="${v.replace(/"/g,'&quot;')}"${sel?' selected':''}>${v}${retired?' (Retired)':''}</option>`;
+  }).join('');
+}
+// Same idea for a <datalist> paired with a free-text <input> (Sales,
+// Account Manager) — the input already preserves any typed value
+// regardless of the suggestion list, but this keeps a retired current
+// value visible as a labeled suggestion instead of just disappearing.
+function retiredAwareDatalistHtml(activeLabels,currentValue){
+  const values=Array.isArray(currentValue)?currentValue:[currentValue].filter(Boolean);
+  const union=labelsForCurrentValue(activeLabels,values);
+  return union.map(v=>`<option value="${v.replace(/"/g,'&quot;')}">${v}${!activeLabels.includes(v)?' (Retired)':''}</option>`).join('');
 }
 
 function olUpdate(key,i,field,val){const list=getOlWorking(key);if(list[i])list[i][field]=val;}
