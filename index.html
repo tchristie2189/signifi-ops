@@ -546,6 +546,7 @@ body.production-view-active .header-inner{max-width:none;width:100%;padding-left
 <div class="toast" id="toast"></div>
 <div class="toast-undo" id="undo-toast"></div>
 <div id="modal-root"></div>
+<div id="pp-config-overlay-root"></div>
 
 <script>
 const SUPABASE_URL='https://oykgpkolliqjeznblayv.supabase.co';
@@ -5848,8 +5849,11 @@ const PROJECT_CONFIG_OPTIONS={
   plug_type:['PT(B) - Power Plug','PT(D) - Power Plug','PT(E) - Power Plug','PT(F) - Power Plug','PT(G) - Power Plug','PT(H) - Power Plug','PT(I) - Power Plug','PT(J) - Power Plug','PT(K) - Power Plug','PT(L) - Power Plug','PT(M) - Power Plug','PT(N) - Power Plug','PT(O) - Power Plug'],
   hosting:['Default Multi-Tenant Canada','Multi-Tenant EU','Multi-Tenant US','Dedicated'],
   connectivity:['LAN','WiFi','LTE','N/A'],
-  authentication_types:['One Time-PIN','Badge','Barcode','Free-Vend','Integration'],
-  workflow_types:['Vending','Pick-up','Drop-off','Loan','Swap','E-Waste'],
+  // authentication_types and workflow_types moved to Settings-backed lists
+  // (see getAuthenticationTypeOptions()/getWorkflowTypeOptions() below) so
+  // Admins can add/rename/reorder/disable options without a code change.
+  // Left out of this object on purpose — nothing else should read them from
+  // here anymore.
   languages:['English','French','Spanish','German','Japanese','Other'],
   deployment_type:['New Installation','Replacement','Relocation','Expansion','Upgrade / Retrofit','Removal','Remote Configuration','N/A','Other'],
   shipping_method:['Signifi Arranged','Client Arranged','Courier','Dedicated Carrier','Freight Forwarder','Customer Pickup','Internal Transfer','N/A','Other'],
@@ -5857,6 +5861,39 @@ const PROJECT_CONFIG_OPTIONS={
   shipping_packaging:['Pallet','Crate','Boxed','Blanket Wrap','Loose / Hand-Carried','N/A','Other'],
   shipping_service_level:['Standard','Expedited','White Glove','Inside Delivery','Liftgate','Appointment Delivery','N/A','Other'],
 };
+// ── Admin-configurable option lists (Authentication Types, Workflow Types) ──
+// Stored in app_settings, same key/value pattern as product_types / pm_list
+// / sales_list / am_list. A project's selected values are still stored as
+// the option's label string, exactly as before (proj.authentication_types /
+// proj.workflow_types are still plain string arrays saved via saveProjField)
+// — only the list of *available* labels now comes from Settings instead of
+// a hardcoded array. Renaming a label here does not retroactively rewrite
+// already-saved project selections (same limitation as renaming a product
+// type) — a renamed/disabled option that's still selected on a project
+// keeps showing up as a checked choice (see optionLabelsForSelect below) so
+// existing data is never silently hidden or lost.
+const DEFAULT_AUTHENTICATION_TYPE_OPTIONS=[
+  {id:'one-time-pin',label:'One Time-PIN',active:true,sortOrder:1},
+  {id:'badge',label:'Badge',active:true,sortOrder:2},
+  {id:'barcode',label:'Barcode',active:true,sortOrder:3},
+  {id:'employee-id',label:'Employee ID',active:true,sortOrder:4},
+  {id:'free-vend',label:'Free-Vend',active:true,sortOrder:5},
+  {id:'integration',label:'Integration',active:true,sortOrder:6},
+];
+const DEFAULT_WORKFLOW_TYPE_OPTIONS=[
+  {id:'vending',label:'Vending',active:true,sortOrder:1},
+  {id:'pick-up',label:'Pick-up',active:true,sortOrder:2},
+  {id:'drop-off',label:'Drop-off',active:true,sortOrder:3},
+  {id:'loan',label:'Loan',active:true,sortOrder:4},
+  {id:'swap',label:'Swap',active:true,sortOrder:5},
+  {id:'e-waste',label:'E-Waste',active:true,sortOrder:6},
+];
+// getAuthenticationTypeOptions()/getWorkflowTypeOptions()/
+// activeOptionLabels()/optionLabelsForSelect() now live in the unified
+// SETTINGS configurable-list framework (near OPTION_LIST_CONFIG) so they
+// stay in sync with Product Types / PM / Sales / AM lists using the exact
+// same normalize-then-read logic. Defaults above are still what that
+// framework seeds from when app_settings has no saved value yet.
 function epSelect(id,options,current,placeholder='Select...'){
   return`<select id="${id}" style="font-family:var(--font);font-size:12px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">${placeholder}</option>${options.map(o=>`<option value="${o.replace(/"/g,'&quot;')}"${current===o?' selected':''}>${o}</option>`).join('')}</select>`;
 }
@@ -5935,11 +5972,11 @@ function openEditProj(id){
         <div class="field"></div>
         <div class="field"><label>Primary connectivity</label>${epSelect('ep-primary-connectivity',PROJECT_CONFIG_OPTIONS.connectivity,proj.primary_connectivity)}</div>
         <div class="field"><label>Backup connectivity</label>${epSelect('ep-backup-connectivity',PROJECT_CONFIG_OPTIONS.connectivity,proj.backup_connectivity)}</div>
-        <div class="field full"><label>Authentication type <span style="font-weight:400;color:var(--gray-400)">(select all that apply)</span></label>${epMulti('ep-authentication-types',PROJECT_CONFIG_OPTIONS.authentication_types,proj.authentication_types)}</div>
+        <div class="field full"><label>Authentication type <span style="font-weight:400;color:var(--gray-400)">(select all that apply)</span></label>${epMulti('ep-authentication-types',optionLabelsForSelect(getAuthenticationTypeOptions(),proj.authentication_types),proj.authentication_types)}</div>
         <div class="field full"><label>Badge reader type</label><input id="ep-badge-reader-type" value="${(proj.badge_reader_type||'').replace(/"/g,'&quot;')}" placeholder="Enter badge reader model/type"></div>
         <div class="field"><label>Payment device required</label>${epSelect('ep-payment-device-required',['Yes','No'],proj.payment_device_required===true?'Yes':proj.payment_device_required===false?'No':'','Select Yes or No...')}</div>
         <div class="field"></div>
-        <div class="field full"><label>Workflows <span style="font-weight:400;color:var(--gray-400)">(select all that apply)</span></label>${epMulti('ep-workflow-types',PROJECT_CONFIG_OPTIONS.workflow_types,proj.workflow_types)}</div>
+        <div class="field full"><label>Workflows <span style="font-weight:400;color:var(--gray-400)">(select all that apply)</span></label>${epMulti('ep-workflow-types',optionLabelsForSelect(getWorkflowTypeOptions(),proj.workflow_types),proj.workflow_types)}</div>
         <div class="field full"><label>Workflow notes</label><textarea id="ep-workflow-notes" placeholder="Workflow details, exceptions, or special handling" style="min-height:55px">${proj.workflow_notes||''}</textarea></div>
         <div class="field full"><label>Languages <span style="font-weight:400;color:var(--gray-400)">(select all that apply)</span></label>${epMulti('ep-languages',PROJECT_CONFIG_OPTIONS.languages,proj.languages)}</div>
         <div class="field full"><label>Language notes / Other language</label><textarea id="ep-language-notes" placeholder="Required when Other is selected; optional notes for standard languages" style="min-height:55px">${proj.language_notes||''}</textarea></div>
@@ -6941,6 +6978,38 @@ async function addCustomLinkSlot(){
   setTimeout(()=>{document.getElementById('ppl-customname-'+key)?.focus();},50);
 }
 
+// Shared by the Project Page compact summary and the Hardware & Solution
+// Configuration overlay — one source for hardware/shipping table markup so
+// the two views can never drift out of sync.
+function ppBuildHardwareShippingData(){
+  const proj=projects.find(p=>p.id===ppProjId);
+  const hwSoOpts=getSOList(proj?.so_number||proj?.so_number||'');
+  const hwLegacyBanner=(!ppData.hardware.length&&proj?.quantity)?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;font-size:12px;color:#92600a">This project is currently using the legacy hardware quantity (${proj?.quantity}). Convert it into an editable hardware line to add model, screen size, and peripherals.<br><button onclick="ppConvertLegacyHardware()" style="margin-top:6px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid #d97706;background:white;color:#92600a;cursor:pointer">Create Hardware Line from Existing Project Data</button></div>`:'';
+  const hardwareHtml=ppData.hardware.map(h=>`<tr data-id="${h.id}">
+    ${hwSoOpts.length>1?`<td><select onchange="ppHardwareChange('${h.id}','so_tag',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value=""${!h.so_tag?' selected':''}>All SOs</option>${hwSoOpts.map(so=>`<option value="${so}"${h.so_tag===so?' selected':''}>${so}</option>`).join('')}</select></td>`:''}
+    <td><input value="${h.model||''}" placeholder="Model / machine type" oninput="ppHardwareChange('${h.id}','model',this.value)"></td>
+    <td><input type="number" min="1" step="1" value="${h.quantity||1}" style="width:60px" oninput="ppHardwareChange('${h.id}','quantity',this.value)"></td>
+    <td><input value="${h.screen_size||''}" placeholder="e.g. 21.5&quot;" oninput="ppHardwareChange('${h.id}','screen_size',this.value)"></td>
+    <td><input value="${h.peripherals||''}" placeholder="e.g. Badge reader, UBIE boards" oninput="ppHardwareChange('${h.id}','peripherals',this.value)"></td>
+    <td class="pp-actions"><button class="pp-del" onclick="ppDelHardware('${h.id}')">✕</button></td>
+  </tr>`).join('');
+  const hwTotalQty=ppData.hardware.reduce((s,h)=>s+Number(h.quantity||0),0);
+
+  const shSoOpts=hwSoOpts;
+  const shLegacyBanner=(!ppData.shipping.length&&(proj?.location||proj?.so_number))?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;font-size:12px;color:#92600a">Shipping information is currently using the Sales Order address. Convert it into a shipping location to add the site name and delivery contact.<br><button onclick="ppConvertLegacyShipping()" style="margin-top:6px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid #d97706;background:white;color:#92600a;cursor:pointer">Create Shipping Location from Existing Address</button></div>`:'';
+  const shippingHtml=ppData.shipping.map((s,i)=>`<tr data-id="${s.id}">
+    ${shSoOpts.length>1?`<td><select onchange="ppShippingChange('${s.id}','so_tag',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value=""${!s.so_tag?' selected':''}>All SOs</option>${shSoOpts.map(so=>`<option value="${so}"${s.so_tag===so?' selected':''}>${so}</option>`).join('')}</select></td>`:''}
+    <td><input value="${s.site_name||''}" placeholder="Site name" oninput="ppShippingChange('${s.id}','site_name',this.value)"></td>
+    <td><input value="${s.address||''}" placeholder="Full address" oninput="ppShippingChange('${s.id}','address',this.value)"></td>
+    <td><input type="number" min="1" step="1" value="${s.delivery_sequence||i+1}" style="width:50px" oninput="ppShippingChange('${s.id}','delivery_sequence',this.value)"></td>
+    <td><input value="${s.contact_name||''}" placeholder="Contact name" oninput="ppShippingChange('${s.id}','contact_name',this.value)"></td>
+    <td><input value="${s.contact_email||''}" placeholder="Email" oninput="ppShippingChange('${s.id}','contact_email',this.value)"></td>
+    <td><input value="${s.contact_phone||''}" placeholder="Phone" oninput="ppShippingChange('${s.id}','contact_phone',this.value)"></td>
+    <td class="pp-actions"><button class="pp-del" onclick="ppDelShipping('${s.id}')">✕</button></td>
+  </tr>`).join('');
+  return{hwSoOpts,hwLegacyBanner,hardwareHtml,hwTotalQty,shSoOpts,shLegacyBanner,shippingHtml};
+}
+
 function renderProjPageBody(){
   const proj=projects.find(p=>p.id===ppProjId);
   if(!proj){return;}
@@ -7037,32 +7106,9 @@ function renderProjPageBody(){
     <td class="pp-actions"><button class="pp-del" onclick="ppDelTeam('${m.id}')">✕</button></td>
   </tr>`).join('');
 
-  // Hardware line items
-  const hwSoOpts=getSOList(proj?.so_number||projects.find(p=>p.id===ppProjId)?.so_number||'');
-  const hwLegacyBanner=(!ppData.hardware.length&&projects.find(p=>p.id===ppProjId)?.quantity)?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;font-size:12px;color:#92600a">This project is currently using the legacy hardware quantity (${projects.find(p=>p.id===ppProjId)?.quantity}). Convert it into an editable hardware line to add model, screen size, and peripherals.<br><button onclick="ppConvertLegacyHardware()" style="margin-top:6px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid #d97706;background:white;color:#92600a;cursor:pointer">Create Hardware Line from Existing Project Data</button></div>`:'';
-  const hardwareHtml=ppData.hardware.map(h=>`<tr data-id="${h.id}">
-    ${hwSoOpts.length>1?`<td><select onchange="ppHardwareChange('${h.id}','so_tag',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value=""${!h.so_tag?' selected':''}>All SOs</option>${hwSoOpts.map(so=>`<option value="${so}"${h.so_tag===so?' selected':''}>${so}</option>`).join('')}</select></td>`:''}
-    <td><input value="${h.model||''}" placeholder="Model / machine type" oninput="ppHardwareChange('${h.id}','model',this.value)"></td>
-    <td><input type="number" min="1" step="1" value="${h.quantity||1}" style="width:60px" oninput="ppHardwareChange('${h.id}','quantity',this.value)"></td>
-    <td><input value="${h.screen_size||''}" placeholder="e.g. 21.5&quot;" oninput="ppHardwareChange('${h.id}','screen_size',this.value)"></td>
-    <td><input value="${h.peripherals||''}" placeholder="e.g. Badge reader, UBIE boards" oninput="ppHardwareChange('${h.id}','peripherals',this.value)"></td>
-    <td class="pp-actions"><button class="pp-del" onclick="ppDelHardware('${h.id}')">✕</button></td>
-  </tr>`).join('');
-  const hwTotalQty=ppData.hardware.reduce((s,h)=>s+Number(h.quantity||0),0);
-
-  // Shipping locations
-  const shSoOpts=hwSoOpts;
-  const shLegacyBanner=(!ppData.shipping.length&&(projects.find(p=>p.id===ppProjId)?.location||projects.find(p=>p.id===ppProjId)?.so_number))?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;font-size:12px;color:#92600a">Shipping information is currently using the Sales Order address. Convert it into a shipping location to add the site name and delivery contact.<br><button onclick="ppConvertLegacyShipping()" style="margin-top:6px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid #d97706;background:white;color:#92600a;cursor:pointer">Create Shipping Location from Existing Address</button></div>`:'';
-  const shippingHtml=ppData.shipping.map((s,i)=>`<tr data-id="${s.id}">
-    ${shSoOpts.length>1?`<td><select onchange="ppShippingChange('${s.id}','so_tag',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value=""${!s.so_tag?' selected':''}>All SOs</option>${shSoOpts.map(so=>`<option value="${so}"${s.so_tag===so?' selected':''}>${so}</option>`).join('')}</select></td>`:''}
-    <td><input value="${s.site_name||''}" placeholder="Site name" oninput="ppShippingChange('${s.id}','site_name',this.value)"></td>
-    <td><input value="${s.address||''}" placeholder="Full address" oninput="ppShippingChange('${s.id}','address',this.value)"></td>
-    <td><input type="number" min="1" step="1" value="${s.delivery_sequence||i+1}" style="width:50px" oninput="ppShippingChange('${s.id}','delivery_sequence',this.value)"></td>
-    <td><input value="${s.contact_name||''}" placeholder="Contact name" oninput="ppShippingChange('${s.id}','contact_name',this.value)"></td>
-    <td><input value="${s.contact_email||''}" placeholder="Email" oninput="ppShippingChange('${s.id}','contact_email',this.value)"></td>
-    <td><input value="${s.contact_phone||''}" placeholder="Phone" oninput="ppShippingChange('${s.id}','contact_phone',this.value)"></td>
-    <td class="pp-actions"><button class="pp-del" onclick="ppDelShipping('${s.id}')">✕</button></td>
-  </tr>`).join('');
+  // Hardware & shipping — shared with the configuration overlay, see
+  // ppBuildHardwareShippingData().
+  const{hwSoOpts,hwLegacyBanner,hardwareHtml,hwTotalQty,shSoOpts,shLegacyBanner,shippingHtml}=ppBuildHardwareShippingData();
 
   // Milestones from hub — group by SO if split
   const ppHasSoTags=isProjectFullySplit(pMs);
@@ -7199,6 +7245,13 @@ function renderProjPageBody(){
 
       </div>
       <div style="display:flex;flex-direction:column;gap:7px;align-items:flex-end;flex-shrink:0" class="no-print">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+          <button onclick="openEditProj('${proj.id}')" style="font-size:11px;padding:6px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);color:var(--gray-700);cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">✎ Edit Project</button>
+          <button onclick="openProjectConfiguration()" style="font-size:11px;padding:6px 12px;border-radius:var(--radius);border:none;background:var(--black);color:white;cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">⚙ Hardware &amp; Solution Configuration</button>
+          <button onclick="ppGoToKickoffDeck()" style="font-size:11px;padding:6px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);color:var(--gray-700);cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">🎬 Generate Kick-Off Deck</button>
+          <button onclick="ppGoToDocTab('install')" style="font-size:11px;padding:6px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);color:var(--gray-700);cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">🔧 Installation Ticket</button>
+          <button onclick="ppGoToDocTab('uat')" style="font-size:11px;padding:6px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);color:var(--gray-700);cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">📋 UAT Package</button>
+        </div>
         <button onclick="openLinksPopout()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #3b82f6;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🔗 Quick links</button>
         ${(ppHasSoTags||isMaster(proj)||(proj.so_number||"").split(",").filter(s=>s.trim()).length>1)?`<button onclick="toggleAllSOView()" id="btn-show-all-so" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #16a34a;background:#14532d;color:#86efac;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📊 All SO milestones</button>`:''}
         ${isChild(proj)?`<button onclick="unlinkFromMaster('${proj.id}')" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #dc2626;background:#450a0a;color:#fca5a5;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🔗 Unlink from master</button>`:''}
@@ -7206,6 +7259,15 @@ function renderProjPageBody(){
 
         <button onclick="window.print()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #555;background:#1a1a1a;color:#aaa;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🖨 Print / PDF</button>
       </div>
+    </div>
+
+    <!-- Quick jump -->
+    <div class="no-print" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">
+      <button onclick="ppScrollToConfig('pp-section-dates')" style="font-size:10.5px;padding:4px 10px;border-radius:14px;border:1px solid var(--gray-200);background:var(--white);color:var(--gray-600);cursor:pointer;font-family:var(--font)">↓ Key Project Dates</button>
+      <button onclick="ppScrollToConfig('pp-section-hardware-config')" style="font-size:10.5px;padding:4px 10px;border-radius:14px;border:1px solid var(--gray-200);background:var(--white);color:var(--gray-600);cursor:pointer;font-family:var(--font)">↓ Hardware &amp; Solution Configuration</button>
+      <button onclick="openProjectConfiguration('pp-section-shipping')" style="font-size:10.5px;padding:4px 10px;border-radius:14px;border:1px solid var(--gray-200);background:var(--white);color:var(--gray-600);cursor:pointer;font-family:var(--font)">↓ Shipping Locations</button>
+      <button onclick="ppScrollToConfig('pp-section-team')" style="font-size:10.5px;padding:4px 10px;border-radius:14px;border:1px solid var(--gray-200);background:var(--white);color:var(--gray-600);cursor:pointer;font-family:var(--font)">↓ Project Team</button>
+      <button onclick="ppScrollToConfig('pp-section-tasks')" style="font-size:10.5px;padding:4px 10px;border-radius:14px;border:1px solid var(--gray-200);background:var(--white);color:var(--gray-600);cursor:pointer;font-family:var(--font)">↓ PM Tasks</button>
     </div>
 
     <!-- ROW 1: Summary + Quick Links -->
@@ -7265,7 +7327,7 @@ function renderProjPageBody(){
 
     <!-- ROW 2: PM Tasks + Milestone Tracker side by side -->
     <div style="display:grid;grid-template-columns:320px 1fr;gap:12px;margin-bottom:12px">
-      <div class="pp-card">
+      <div class="pp-card" id="pp-section-tasks">
         <div class="pp-card-head">
           <span class="pp-card-title">PM Tasks</span>
           <span style="font-size:10px;color:var(--gray-400)">Checklist with due dates</span>
@@ -7286,7 +7348,7 @@ function renderProjPageBody(){
         <button class="pp-add-btn" onclick="addPMTaskRow('${ppProjId}','pmt-body-${ppProjId}')">+ Add task</button>
       </div>
 
-      <div class="pp-card">
+      <div class="pp-card" id="pp-section-milestones">
         <div class="pp-card-head">
           <span class="pp-card-title">Milestone tracker</span>
           <span style="font-size:10px;color:var(--gray-400)">Synced from hub</span>
@@ -7357,7 +7419,7 @@ function renderProjPageBody(){
     </div>
 
     <!-- ROW 3: Project Team compact full-width -->
-    <div class="pp-card" style="margin-bottom:12px">
+    <div class="pp-card" style="margin-bottom:12px" id="pp-section-team">
       <div class="pp-card-head"><span class="pp-card-title">Project team</span></div>
       <div style="overflow-x:auto">
         <table class="pp-table">
@@ -7379,30 +7441,19 @@ function renderProjPageBody(){
       </div>
     </div>
 
-    <!-- Hardware -->
-    <div class="pp-card" style="margin-bottom:12px" id="pp-section-hardware">
-      <div class="pp-card-head"><span class="pp-card-title">Hardware</span><span style="font-size:11px;color:var(--gray-500)">${hwTotalQty} machine${hwTotalQty===1?'':'s'} total</span></div>
-      ${hwLegacyBanner}
-      <div style="overflow-x:auto">
-        <table class="pp-table">
-          <thead><tr>${hwSoOpts.length>1?'<th style="width:90px">Sales Order</th>':''}<th>Model / machine type</th><th style="width:70px">Qty</th><th style="width:110px">Screen size</th><th>Peripherals</th><th style="width:28px"></th></tr></thead>
-          <tbody id="pp-hardware">${hardwareHtml}</tbody>
-        </table>
+    <!-- Hardware & Solution Configuration — compact summary; full editor lives
+         in the overlay (openProjectConfiguration()) to keep this page short. -->
+    <div class="pp-card" style="margin-bottom:12px" id="pp-section-hardware-config">
+      <div class="pp-card-head">
+        <span class="pp-card-title">Hardware &amp; Solution Configuration</span>
+        <span style="font-size:11px;color:var(--gray-500)">${hwTotalQty} machine${hwTotalQty===1?'':'s'} · ${ppData.hardware.length} line item${ppData.hardware.length===1?'':'s'} · ${ppData.shipping.length} shipping location${ppData.shipping.length===1?'':'s'}</span>
       </div>
-      <button class="pp-add-btn" onclick="ppAddHardware()">+ Add hardware line</button>
-    </div>
-
-    <!-- Shipping Locations -->
-    <div class="pp-card" style="margin-bottom:12px" id="pp-section-shipping">
-      <div class="pp-card-head"><span class="pp-card-title">Shipping locations</span></div>
-      ${shLegacyBanner}
-      <div style="overflow-x:auto">
-        <table class="pp-table">
-          <thead><tr>${shSoOpts.length>1?'<th style="width:90px">Sales Order</th>':''}<th>Site name</th><th>Address</th><th style="width:50px">Seq</th><th>Contact</th><th>Email</th><th>Phone</th><th style="width:28px"></th></tr></thead>
-          <tbody id="pp-shipping">${shippingHtml}</tbody>
-        </table>
+      <div class="pp-card-body">
+        ${ppRenderCompletenessSummary(proj,'main')}
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px 16px">
+          ${ppConfigSummaryLine(proj).map(([label,val])=>`<div><div style="color:var(--gray-400);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">${esc(label)}</div><div style="color:var(--gray-800);font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(val)}">${esc(val)}</div></div>`).join('')}
+        </div>
       </div>
-      <button class="pp-add-btn" onclick="ppAddShipping()">+ Add shipping location</button>
     </div>
 
 
@@ -7612,13 +7663,35 @@ async function saveSOConfig(projId,so){
   if(currentTab==='gendocs')renderGenDocs();
 }
 
+// Empty string collapses to null (so a cleared field doesn't linger as ''
+// vs null inconsistently), but real falsy values are never treated as
+// "empty" — false, 0, and [] are all valid, intentional answers and must
+// round-trip exactly as given.
+function normalizeProjectFieldValue(val){
+  if(val===null||val===undefined)return null;
+  if(typeof val==='string'&&val.trim()==='')return null;
+  return val;
+}
 async function saveProjField(projId,field,val){
-  await sb.from('projects').update({[field]:val||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',projId);
-  const p=projects.find(x=>x.id===projId);if(p)p[field]=val||null;
-  await syncProjectFieldsToSingleSO(projId,{[field]:val||''});
-  showPPSaved();
-  if(currentTab==='overview')renderOverview();
-  if(currentTab==='gendocs')renderGenDocs();
+  try{
+    const normalized=normalizeProjectFieldValue(val);
+    const{error}=await sb.from('projects').update({[field]:normalized,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',projId);
+    if(error){
+      console.warn('project field save error',field,error);
+      showToast('⚠ Save failed: '+error.message);
+      return false;
+    }
+    const p=projects.find(x=>x.id===projId);if(p)p[field]=normalized;
+    await syncProjectFieldsToSingleSO(projId,{[field]:normalized});
+    showPPSaved();
+    if(currentTab==='overview')renderOverview();
+    if(currentTab==='gendocs')renderGenDocs();
+    return true;
+  }catch(error){
+    console.warn('unexpected project field save error',field,error);
+    showToast('⚠ Save failed: '+(error.message||error));
+    return false;
+  }
 }
 async function savePPSection(key,value){
   const existing=ppData.sections[key];
@@ -7633,6 +7706,312 @@ async function savePPSection(key,value){
   if(!globalSections[ppProjId])globalSections[ppProjId]={};
   globalSections[ppProjId][key]=value;
   showPPSaved();
+}
+
+// ── Hardware & Solution Configuration — Project Page editors ───────────────
+// Thin wrappers around the existing epSelect/epMulti pattern (Edit Project
+// modal) but writing straight to canonical project fields via saveProjField,
+// so there is exactly one place these columns are edited from — no
+// kickoff-only duplicate storage. autosave-on-change, same as the rest of
+// the Project Page.
+function ppCfgSelect(field,options,current,placeholder='Select...'){
+  return`<select onchange="saveProjField(ppProjId,'${field}',this.value)" style="font-family:var(--font);font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%"><option value="">${placeholder}</option>${options.map(o=>`<option value="${o.replace(/"/g,'&quot;')}"${current===o?' selected':''}>${o}</option>`).join('')}</select>`;
+}
+function ppCfgMulti(field,options,current){
+  const selected=Array.isArray(current)?current:[];
+  const cid='ppcfg-'+field;
+  return`<div id="${cid}" style="display:flex;flex-wrap:wrap;gap:6px;padding:8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--gray-50)">${options.map(o=>`<label style="display:flex;align-items:center;gap:5px;font-size:11px;padding:4px 8px;border:1px solid var(--gray-200);border-radius:14px;background:var(--white);cursor:pointer"><input type="checkbox" value="${o.replace(/"/g,'&quot;')}"${selected.includes(o)?' checked':''} onchange="ppMultiFieldChange('${field}')">${o}</label>`).join('')}</div>`;
+}
+function ppMultiFieldChange(field){
+  const vals=[...document.querySelectorAll('#ppcfg-'+field+' input[type=checkbox]:checked')].map(x=>x.value);
+  saveProjField(ppProjId,field,vals);
+}
+function ppCfgText(field,current,placeholder='',multiline=false){
+  const val=(current||'').replace(/"/g,'&quot;');
+  if(multiline)return`<textarea onblur="saveProjField(ppProjId,'${field}',this.value)" placeholder="${placeholder.replace(/"/g,'&quot;')}" style="width:100%;min-height:50px;font-family:var(--font);font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius)">${current||''}</textarea>`;
+  return`<input value="${val}" placeholder="${placeholder.replace(/"/g,'&quot;')}" onblur="saveProjField(ppProjId,'${field}',this.value)" style="width:100%;font-family:var(--font);font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius)">`;
+}
+// N/A (and equivalents) is a deliberately-chosen value, never a gap — see
+// buildProjectDocPackage's TBC handling. Anything with real content, or one
+// of these explicit values, counts as answered.
+function ppFieldFilled(v){return v!==undefined&&v!==null&&String(v).trim()!=='';}
+function ppFieldIsNA(v){return/^(n\/a|not applicable|none|no)$/i.test(String(v||'').trim());}
+// Chip status for one configuration category. 'na' and 'complete' both count
+// as done — 'na' just renders with a neutral color so a PM can still see it
+// was an explicit choice, not an oversight.
+function ppChipStatus(filled,naValue){
+  if(naValue)return'na';
+  return filled?'complete':'needs';
+}
+function ppConfigChip(label,status,anchor,mode){
+  const colors={complete:['#166534','#f0fdf4','#86efac'],na:['#6b7280','#f3f4f6','#d1d5db'],needs:['#92600a','#fffaf0','#f5d99a']};
+  const[fg,bg,bd]=colors[status];
+  const clickable=mode==='overlay';
+  const attrs=clickable?`onclick="ppConfigSwitchTab('${ppConfigTabFromAnchor(anchor)}')" title="${status==='needs'?'Click to complete':'Click to review'}"`:'';
+  return`<span ${attrs} style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:12px;color:${fg};background:${bg};border:1px solid ${bd};cursor:${clickable?'pointer':'default'};white-space:nowrap">${status==='complete'?'✓':status==='na'?'N/A':'●'} ${label}</span>`;
+}
+function ppScrollToConfig(anchor){
+  const el=document.getElementById(anchor);
+  if(!el)return;
+  el.scrollIntoView({behavior:'smooth',block:'start'});
+  const flashTarget=el.classList.contains('pp-card')?el:el.closest('.pp-card')||el;
+  flashTarget.style.outline='2px solid #f59e0b';flashTarget.style.outlineOffset='2px';
+  setTimeout(()=>{flashTarget.style.outline='';flashTarget.style.outlineOffset='';},1800);
+}
+// Which anchors/subsections live inside the Hardware & Solution
+// Configuration overlay (as opposed to directly on the Project Page), and
+// which overlay TAB each one belongs to. One place to keep this mapping so
+// readiness links, completeness chips, and the "Manage Shipping Locations"
+// note all agree on where things live.
+const PP_CONFIG_OVERLAY_ANCHORS=new Set(['pp-section-hardware','pp-section-workflow','pp-section-infra','pp-section-experience','pp-section-shipdeploy','pp-section-shipping']);
+const PP_CONFIG_TAB_BY_ANCHOR={'pp-section-hardware':'hardware','pp-section-workflow':'workflow','pp-section-infra':'infra','pp-section-experience':'experience','pp-section-shipdeploy':'shipdeploy','pp-section-shipping':'shipping'};
+function ppConfigTabFromAnchor(anchor){return PP_CONFIG_TAB_BY_ANCHOR[anchor]||'hardware';}
+// Closes the overlay (if open) before jumping to a main-Project-Page anchor
+// — used by the Naming Convention / Branding notes inside the overlay,
+// which point at cards that live outside it (Milestone Tracker, PM Tasks).
+function ppJumpFromConfig(anchor){
+  closeProjectConfiguration();
+  setTimeout(()=>ppScrollToConfig(anchor),200);
+}
+// Used both for the on-page completeness summary and for readiness-panel
+// "Edit →" links in Generated Documents — same underlying fields as
+// buildProjectDocPackage so this never drifts from actual deck readiness.
+function ppConfigCompletenessChips(proj){
+  const hwCount=(ppData.hardware||[]).length;
+  const hwLegacy=!hwCount&&proj.quantity;
+  const shipCount=(ppData.shipping||[]).length;
+  const items=[
+    {label:'Hardware',status:hwCount?'complete':(hwLegacy?'needs':'needs'),anchor:'pp-section-hardware'},
+    {label:'Workflow',status:ppChipStatus(Array.isArray(proj.workflow_types)&&proj.workflow_types.length),anchor:'pp-section-workflow'},
+    {label:'Authentication',status:ppChipStatus((Array.isArray(proj.authentication_types)&&proj.authentication_types.length)||ppFieldFilled(proj.badge_reader_type)),anchor:'pp-section-workflow'},
+    {label:'Connectivity',status:ppChipStatus(ppFieldFilled(proj.primary_connectivity),ppFieldIsNA(proj.primary_connectivity)),anchor:'pp-section-infra'},
+    {label:'Hosting',status:ppChipStatus(ppFieldFilled(proj.hosting)),anchor:'pp-section-infra'},
+    {label:'Power',status:ppChipStatus(ppFieldFilled(proj.voltage)&&ppFieldFilled(proj.plug_type)),anchor:'pp-section-infra'},
+    {label:'Language',status:ppChipStatus(Array.isArray(proj.languages)&&proj.languages.length),anchor:'pp-section-experience'},
+    {label:'Shipping',status:ppChipStatus(ppFieldFilled(proj.shipping_method)&&ppFieldFilled(proj.shipping_transport_mode)&&ppFieldFilled(proj.shipping_packaging)&&ppFieldFilled(proj.shipping_service_level),ppFieldIsNA(proj.shipping_method)),anchor:'pp-section-shipdeploy'},
+    {label:'Deployment',status:ppChipStatus(ppFieldFilled(proj.deployment_type),ppFieldIsNA(proj.deployment_type)),anchor:'pp-section-shipdeploy'},
+    {label:'Shipping Locations',status:shipCount?'complete':'needs',anchor:'pp-section-shipping'},
+  ];
+  return items;
+}
+// mode: 'main' → compact, read-only summary on the Project Page (no click
+// targets — the only entry point into editing is the Quick Actions button).
+// mode: 'overlay' → same chips, now clickable to switch the overlay's tabs.
+function ppRenderCompletenessSummary(proj,mode){
+  const items=ppConfigCompletenessChips(proj);
+  const done=items.filter(i=>i.status!=='needs').length;
+  return`<div style="margin-bottom:12px">
+    <div style="font-size:10px;color:var(--gray-400);margin-bottom:6px">${done} of ${items.length} categories complete</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">${items.map(i=>ppConfigChip(i.label,i.status,i.anchor,mode)).join('')}</div>
+  </div>`;
+}
+// Concise label:value pairs for the Project Page compact summary card — the
+// same fields as the completeness chips, just showing their actual values
+// instead of a status. Never duplicates storage: reads straight off `proj`
+// and `ppData`, same as everywhere else on this page.
+function ppConfigSummaryLine(proj){
+  const hw=ppData.hardware||[];
+  const hwSummary=hw.length?`${hw[0].quantity||1} × ${hw[0].model||'—'}${hw.length>1?` +${hw.length-1} more`:''}`:(proj.quantity?`${proj.quantity} (legacy)`:'—');
+  return[
+    ['Hardware',hwSummary],
+    ['Workflow',Array.isArray(proj.workflow_types)&&proj.workflow_types.length?proj.workflow_types.join(', '):'—'],
+    ['Authentication',Array.isArray(proj.authentication_types)&&proj.authentication_types.length?proj.authentication_types.join(', '):(proj.badge_reader_type||'—')],
+    ['Connectivity',proj.primary_connectivity||'—'],
+    ['Hosting',proj.hosting||'—'],
+    ['Language',Array.isArray(proj.languages)&&proj.languages.length?proj.languages.join(', '):'—'],
+    ['Deployment',proj.deployment_type||'—'],
+    ['Shipping sites',String((ppData.shipping||[]).length)],
+  ];
+}
+function ppGoToKickoffDeck(){
+  if(!ppProjId)return;
+  selectedDocProjId=ppProjId;selectedDocSO='';activeDocTab='comms';commsActiveDoc='kickoff';
+  loadDocState(ppProjId).then(()=>setTab('gendocs'));
+}
+// Quick Actions bar shortcut for Installation Ticket / UAT Package — jumps
+// straight to the matching Generated Documents tab for this project.
+function ppGoToDocTab(tab){
+  if(!ppProjId)return;
+  selectedDocProjId=ppProjId;selectedDocSO='';activeDocTab=tab;
+  loadDocState(ppProjId).then(()=>setTab('gendocs'));
+}
+
+// ── Hardware & Solution Configuration overlay ───────────────────────────
+// Full editor for canonical config fields, hardware_line_items, and
+// shipping_locations — same rendering + CRUD as before, just moved off the
+// always-expanded Project Page into an on-demand modal so the page itself
+// stays short. No separate data or save path: every control here calls the
+// exact same saveProjField/ppHardwareChange/ppShippingChange functions as
+// everywhere else.
+let ppConfigOverlayEscHandler=null;
+let ppConfigActiveTab='hardware';
+const PP_CONFIG_TABS=[
+  {key:'hardware',label:'Hardware'},
+  {key:'workflow',label:'Workflow & Authentication'},
+  {key:'infra',label:'Infrastructure & Power'},
+  {key:'experience',label:'Experience & Localization'},
+  {key:'shipdeploy',label:'Shipping & Deployment'},
+  {key:'shipping',label:'Shipping Locations'},
+];
+function ppConfigSwitchTab(tab){
+  ppConfigActiveTab=tab;
+  ppRefreshConfigOverlay();
+}
+function ppConfigOverlayIsOpen(){
+  const root=document.getElementById('pp-config-overlay-root');
+  return!!(root&&root.innerHTML.trim());
+}
+// Rebuilds the overlay in place (same tab, same scroll-to-top-of-panel) —
+// used after any hardware/shipping CRUD so the modal reflects the change
+// immediately instead of requiring it to be closed and reopened. Returns
+// false if the overlay isn't currently open, so callers know whether they
+// still need to fall back to a normal Project Page re-render.
+function ppRefreshConfigOverlay(){
+  if(!ppConfigOverlayIsOpen())return false;
+  const root=document.getElementById('pp-config-overlay-root');
+  root.innerHTML=buildProjConfigOverlayHtml();
+  const panel=document.getElementById('pp-config-panel');
+  if(panel){panel.style.outline='2px solid #f59e0b';panel.style.outlineOffset='-2px';setTimeout(()=>{panel.style.outline='';panel.style.outlineOffset='';},1200);}
+  return true;
+}
+function ppConfigTabButton(tab){
+  const active=tab.key===ppConfigActiveTab;
+  return`<button onclick="ppConfigSwitchTab('${tab.key}')" style="font-size:12px;padding:9px 14px;border:none;border-bottom:2px solid ${active?'var(--black)':'transparent'};background:none;color:${active?'var(--black)':'var(--gray-500)'};font-weight:${active?'700':'500'};cursor:pointer;font-family:var(--font);white-space:nowrap">${tab.label}</button>`;
+}
+function buildProjConfigOverlayHtml(){
+  const proj=projects.find(p=>p.id===ppProjId);
+  if(!proj)return'';
+  const{hwSoOpts,hwLegacyBanner,hardwareHtml,hwTotalQty,shSoOpts,shLegacyBanner,shippingHtml}=ppBuildHardwareShippingData();
+  const tab=ppConfigActiveTab;
+  const panels={
+    hardware:`<div id="pp-section-hardware">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div style="font-size:11px;color:var(--gray-500)">${hwTotalQty} machine${hwTotalQty===1?'':'s'} total</div>
+        </div>
+        ${hwLegacyBanner}
+        <div style="overflow-x:auto">
+          <table class="pp-table">
+            <thead><tr>${hwSoOpts.length>1?'<th style="width:90px">Sales Order</th>':''}<th>Model / machine type</th><th style="width:70px">Qty</th><th style="width:110px">Screen size</th><th>Peripherals</th><th style="width:28px"></th></tr></thead>
+            <tbody id="pp-hardware">${hardwareHtml}</tbody>
+          </table>
+        </div>
+        <button class="pp-add-btn" onclick="ppAddHardware()">+ Add hardware line</button>
+      </div>`,
+    workflow:`<div id="pp-section-workflow" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div style="grid-column:1/-1"><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Workflows (select all that apply)</label>${ppCfgMulti('workflow_types',optionLabelsForSelect(getWorkflowTypeOptions(),proj.workflow_types),proj.workflow_types)}</div>
+        <div style="grid-column:1/-1"><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Workflow notes</label>${ppCfgText('workflow_notes',proj.workflow_notes,'Workflow details, exceptions, or special handling',true)}</div>
+        <div style="grid-column:1/-1"><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Authentication type (select all that apply)</label>${ppCfgMulti('authentication_types',optionLabelsForSelect(getAuthenticationTypeOptions(),proj.authentication_types),proj.authentication_types)}</div>
+        <div><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Badge reader type</label>${ppCfgText('badge_reader_type',proj.badge_reader_type,'Enter badge reader model/type')}</div>
+        <div><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Payment device required</label><select onchange="saveProjField(ppProjId,'payment_device_required',this.value===''?null:this.value==='true')" style="font-family:var(--font);font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"><option value="">Not set</option><option value="true"${proj.payment_device_required===true?' selected':''}>Yes</option><option value="false"${proj.payment_device_required===false?' selected':''}>No</option></select></div>
+      </div>`,
+    infra:`<div id="pp-section-infra" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Primary connectivity</label>${ppCfgSelect('primary_connectivity',PROJECT_CONFIG_OPTIONS.connectivity,proj.primary_connectivity)}</div>
+        <div><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Backup connectivity</label>${ppCfgSelect('backup_connectivity',PROJECT_CONFIG_OPTIONS.connectivity,proj.backup_connectivity)}</div>
+        <div><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Hosting</label>${ppCfgSelect('hosting',PROJECT_CONFIG_OPTIONS.hosting,proj.hosting)}</div>
+        <div><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Voltage</label>${ppCfgSelect('voltage',PROJECT_CONFIG_OPTIONS.voltage,proj.voltage)}</div>
+        <div><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Plug type</label>${ppCfgSelect('plug_type',PROJECT_CONFIG_OPTIONS.plug_type,proj.plug_type)}</div>
+        <div style="grid-column:1/-1"><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Power requirements</label>${ppCfgText('power_requirements',proj.power_requirements,'Any specific power requirements or notes',true)}</div>
+      </div>`,
+    experience:`<div id="pp-section-experience" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div style="grid-column:1/-1"><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Languages (select all that apply)</label>${ppCfgMulti('languages',PROJECT_CONFIG_OPTIONS.languages,proj.languages)}</div>
+        <div style="grid-column:1/-1"><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Language notes / Other language</label>${ppCfgText('language_notes',proj.language_notes,'Required when Other is selected; optional notes for standard languages',true)}</div>
+        <div style="grid-column:1/-1;font-size:11px;color:var(--gray-500)">Naming convention is set per Sales Order in the <a href="javascript:void(0)" onclick="ppJumpFromConfig('pp-section-milestones')" style="color:var(--blue)">Milestone Tracker</a> — not duplicated here. Branding status is tracked as a PM Task deliverable — see <a href="javascript:void(0)" onclick="ppJumpFromConfig('pp-section-tasks')" style="color:var(--blue)">PM Tasks</a>.</div>
+      </div>`,
+    shipdeploy:`<div id="pp-section-shipdeploy" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Shipping method</label>${ppCfgSelect('shipping_method',PROJECT_CONFIG_OPTIONS.shipping_method,proj.shipping_method)}</div>
+        <div><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Transport mode</label>${ppCfgSelect('shipping_transport_mode',PROJECT_CONFIG_OPTIONS.shipping_transport_mode,proj.shipping_transport_mode)}</div>
+        <div><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Packaging</label>${ppCfgSelect('shipping_packaging',PROJECT_CONFIG_OPTIONS.shipping_packaging,proj.shipping_packaging)}</div>
+        <div><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Service level</label>${ppCfgSelect('shipping_service_level',PROJECT_CONFIG_OPTIONS.shipping_service_level,proj.shipping_service_level)}</div>
+        <div><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Deployment type</label>${ppCfgSelect('deployment_type',PROJECT_CONFIG_OPTIONS.deployment_type,proj.deployment_type)}</div>
+        <div style="grid-column:1/-1"><label style="font-size:10px;color:var(--gray-500);display:block;margin-bottom:4px">Deployment notes</label>${ppCfgText('deployment_notes',proj.deployment_notes,'e.g. Relocating from existing site, address TBC',true)}</div>
+        <div style="grid-column:1/-1;font-size:11px"><a href="javascript:void(0)" onclick="ppConfigSwitchTab('shipping')" style="color:var(--blue);font-weight:600">↓ Manage Shipping Locations (site addresses &amp; contacts)</a></div>
+      </div>`,
+    shipping:`<div id="pp-section-shipping">
+        <button class="pp-add-btn" style="margin-bottom:10px" onclick="ppAddShipping()">+ Add shipping location</button>
+        ${shLegacyBanner}
+        ${ppData.shipping.length?`<div style="overflow-x:auto">
+          <table class="pp-table">
+            <thead><tr>${shSoOpts.length>1?'<th style="width:90px">Sales Order</th>':''}<th>Site name</th><th>Address</th><th style="width:50px">Seq</th><th>Contact</th><th>Email</th><th>Phone</th><th style="width:28px"></th></tr></thead>
+            <tbody id="pp-shipping">${shippingHtml}</tbody>
+          </table>
+        </div>`:`<div style="font-size:12px;color:var(--gray-400);padding:14px 4px">No shipping locations added yet.</div>`}
+      </div>`,
+  };
+  return`<div class="modal-backdrop" id="pp-config-overlay-backdrop" onclick="if(event.target===this)closeProjectConfiguration()">
+    <div class="modal" id="pp-config-overlay-modal" style="width:min(1100px,96vw);max-width:100%;max-height:92vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
+      <div class="modal-head" style="flex-shrink:0">
+        <div>
+          <div class="modal-title">Hardware &amp; Solution Configuration</div>
+          <div style="font-size:11px;color:var(--gray-500);margin-top:2px;font-weight:400">Complete the project configuration used by generated documents, including the Kick-Off Deck.</div>
+        </div>
+        <button class="modal-close" onclick="closeProjectConfiguration()">✕</button>
+      </div>
+      <div style="flex-shrink:0;border-bottom:1px solid var(--gray-100);padding:0 16px;display:flex;gap:2px;overflow-x:auto;background:var(--white)">
+        ${PP_CONFIG_TABS.map(ppConfigTabButton).join('')}
+      </div>
+      <div class="modal-body" id="pp-config-overlay-body" style="overflow-y:auto;flex:1;min-height:0">
+        ${ppRenderCompletenessSummary(proj,'overlay')}
+        <div class="pp-card" id="pp-config-panel" style="padding:14px">
+          ${panels[tab]||''}
+        </div>
+      </div>
+      <div class="modal-actions" style="flex-shrink:0">
+        <button class="btn" onclick="closeProjectConfiguration()">Close</button>
+      </div>
+    </div>
+  </div>`;
+}
+function openProjectConfiguration(anchor){
+  if(!ppProjId)return;
+  const root=document.getElementById('pp-config-overlay-root');
+  if(!root)return;
+  if(anchor)ppConfigActiveTab=ppConfigTabFromAnchor(anchor);
+  root.innerHTML=buildProjConfigOverlayHtml();
+  document.body.style.overflow='hidden';
+  if(!ppConfigOverlayEscHandler){
+    ppConfigOverlayEscHandler=e=>{if(e.key==='Escape')closeProjectConfiguration();};
+    document.addEventListener('keydown',ppConfigOverlayEscHandler);
+  }
+  const panel=document.getElementById('pp-config-panel');
+  if(panel){panel.style.outline='2px solid #f59e0b';panel.style.outlineOffset='-2px';setTimeout(()=>{panel.style.outline='';panel.style.outlineOffset='';},1200);}
+}
+function closeProjectConfiguration(){
+  const root=document.getElementById('pp-config-overlay-root');
+  if(root)root.innerHTML='';
+  document.body.style.overflow='';
+  if(ppConfigOverlayEscHandler){document.removeEventListener('keydown',ppConfigOverlayEscHandler);ppConfigOverlayEscHandler=null;}
+}
+// Maps a readiness/missing-field message (from buildProjectDocPackage or
+// buildWeeklyStatusPackage) to the Project Page anchor where it's fixed, so
+// the readiness panel in Generated Documents can jump straight there instead
+// of leaving the PM to hunt for the right section.
+function readinessAnchorFor(text){
+  const t=(text||'').toLowerCase();
+  if(t.includes('hardware')||t.includes('peripheral'))return'pp-section-hardware';
+  if(t.includes('workflow')||t.includes('authentication')||t.includes('badge'))return'pp-section-workflow';
+  if(t.includes('connectivity')||t.includes('hosting')||t.includes('voltage')||t.includes('power')||t.includes('plug'))return'pp-section-infra';
+  if(t.includes('language')||t.includes('branding'))return'pp-section-experience';
+  if(t.includes('deployment')||t.includes('shipping method')||t.includes('shipping transport')||t.includes('shipping packaging')||t.includes('shipping service'))return'pp-section-shipdeploy';
+  if(t.includes('shipping')||t.includes('site contact'))return'pp-section-shipping';
+  if(t.includes('stakeholder')||t.includes('project manager')||t.includes('client name')||t.includes('conflict'))return'pp-section-team';
+  if(t.includes('deliverable'))return'pp-section-tasks';
+  if(t.includes('milestone')||t.includes('date')||t.includes('installation')||t.includes('go-live')||t.includes('uat')||t.includes('training')||t.includes('kickoff'))return'pp-section-dates';
+  if(t.includes('form factor')||t.includes('configuration'))return'pp-section-hardware-config';
+  return null;
+}
+// Milestone/stakeholder/PM-Task warnings link to their normal Project Page
+// card (via ppScrollToConfig); config warnings (hardware/workflow/infra/
+// experience/shipping&deployment/shipping locations) open the Hardware &
+// Solution Configuration overlay straight to the right TAB.
+function goToProjConfig(projId,anchor){
+  if(!anchor)return;
+  setTab('projpage');
+  switchProjPage(projId).then(()=>{
+    setTimeout(()=>{
+      if(PP_CONFIG_OVERLAY_ANCHORS.has(anchor))openProjectConfiguration(anchor);
+      else ppScrollToConfig(anchor);
+    },150);
+  });
 }
 
 async function syncQuickLinkToHub(label,url){
@@ -8002,20 +8381,31 @@ async function ppHardwareChange(id,field,val){
 }
 async function ppAddHardware(){
   if(!guardStart('ppAddHardware'))return;
+  const proj=projects.find(p=>p.id===ppProjId);
+  const soList=getSOList(proj);
   const{data,error}=await sb.from('hardware_line_items').insert({
-    project_id:ppProjId,model:'',quantity:1,screen_size:'',peripherals:'',
+    project_id:ppProjId,so_tag:soList.length===1?soList[0]:null,
+    model:'',quantity:1,screen_size:'',peripherals:'',
     sort_order:ppData.hardware.length,created_by:currentUserName,
   }).select().single();
   guardEnd('ppAddHardware');
   if(error){console.warn('hardware_line_items insert error',error);showToast('⚠ Save failed: '+error.message);return;}
-  if(data){ppData.hardware.push(data);logActivity('added hardware line','','',ppProjId);renderProjPageBody();}
+  if(!data)return;
+  ppData.hardware.push(data);
+  logActivity('added hardware line','','',ppProjId);
+  ppConfigActiveTab='hardware';
+  if(!ppRefreshConfigOverlay())renderProjPageBody();
+  showToast('Hardware line added ✓');
 }
 async function ppDelHardware(id){
-  await sb.from('hardware_line_items').delete().eq('id',id);
+  const{error}=await sb.from('hardware_line_items').delete().eq('id',id);
+  if(error){console.warn('hardware_line_items delete error',error);showToast('⚠ Delete failed: '+error.message);return;}
   const removed=ppData.hardware.find(h=>h.id===id);
   ppData.hardware=ppData.hardware.filter(h=>h.id!==id);
   logActivity('deleted hardware line',removed?.model||'',ppProjId);
-  renderProjPageBody();
+  ppConfigActiveTab='hardware';
+  if(!ppRefreshConfigOverlay())renderProjPageBody();
+  showToast('Hardware line removed ✓');
 }
 // Explicit, user-triggered conversion only — never auto-created just by
 // opening the page, per the requirement that legacy data isn't silently
@@ -8030,7 +8420,12 @@ async function ppConvertLegacyHardware(){
     screen_size:'',peripherals:'',sort_order:0,created_by:currentUserName,
   }).select().single();
   if(error){showToast('⚠ Conversion failed: '+error.message);return;}
-  if(data){ppData.hardware.push(data);logActivity('converted legacy hardware to line item',data.model||'',ppProjId);showToast('Hardware line created ✓');renderProjPageBody();}
+  if(!data)return;
+  ppData.hardware.push(data);
+  logActivity('converted legacy hardware to line item',data.model||'',ppProjId);
+  ppConfigActiveTab='hardware';
+  if(!ppRefreshConfigOverlay())renderProjPageBody();
+  showToast('Hardware line created ✓');
 }
 
 // Shipping locations CRUD
@@ -8054,20 +8449,31 @@ async function ppShippingChange(id,field,val){
 }
 async function ppAddShipping(){
   if(!guardStart('ppAddShipping'))return;
+  const proj=projects.find(p=>p.id===ppProjId);
+  const soList=getSOList(proj);
   const{data,error}=await sb.from('shipping_locations').insert({
-    project_id:ppProjId,site_name:'',address:'',delivery_sequence:ppData.shipping.length+1,
+    project_id:ppProjId,so_tag:soList.length===1?soList[0]:null,
+    site_name:'',address:'',delivery_sequence:ppData.shipping.length+1,
     contact_name:'',contact_email:'',contact_phone:'',sort_order:ppData.shipping.length,created_by:currentUserName,
   }).select().single();
   guardEnd('ppAddShipping');
   if(error){console.warn('shipping_locations insert error',error);showToast('⚠ Save failed: '+error.message);return;}
-  if(data){ppData.shipping.push(data);logActivity('added shipping location','','',ppProjId);renderProjPageBody();}
+  if(!data)return;
+  ppData.shipping.push(data);
+  logActivity('added shipping location','','',ppProjId);
+  ppConfigActiveTab='shipping';
+  if(!ppRefreshConfigOverlay())renderProjPageBody();
+  showToast('Shipping location added ✓');
 }
 async function ppDelShipping(id){
-  await sb.from('shipping_locations').delete().eq('id',id);
+  const{error}=await sb.from('shipping_locations').delete().eq('id',id);
+  if(error){console.warn('shipping_locations delete error',error);showToast('⚠ Delete failed: '+error.message);return;}
   const removed=ppData.shipping.find(s=>s.id===id);
   ppData.shipping=ppData.shipping.filter(s=>s.id!==id);
   logActivity('deleted shipping location',removed?.site_name||'',ppProjId);
-  renderProjPageBody();
+  ppConfigActiveTab='shipping';
+  if(!ppRefreshConfigOverlay())renderProjPageBody();
+  showToast('Shipping location removed ✓');
 }
 async function ppConvertLegacyShipping(){
   const proj=projects.find(p=>p.id===ppProjId);
@@ -8080,7 +8486,12 @@ async function ppConvertLegacyShipping(){
     contact_name:'',contact_email:'',contact_phone:'',sort_order:0,created_by:currentUserName,
   }).select().single();
   if(error){showToast('⚠ Conversion failed: '+error.message);return;}
-  if(data){ppData.shipping.push(data);logActivity('converted legacy address to shipping location',data.site_name||'',ppProjId);showToast('Shipping location created ✓');renderProjPageBody();}
+  if(!data)return;
+  ppData.shipping.push(data);
+  logActivity('converted legacy address to shipping location',data.site_name||'',ppProjId);
+  ppConfigActiveTab='shipping';
+  if(!ppRefreshConfigOverlay())renderProjPageBody();
+  showToast('Shipping location created ✓');
 }
 
 // Action items CRUD
@@ -8538,15 +8949,33 @@ async function buildProjectDocPackage(projId,soTag=''){
     const hwRes=await sb.from('hardware_line_items').select('*').eq('project_id',projId).order('sort_order');
     if(hwRes.error)console.warn('hardware_line_items load error',hwRes.error);
     const allRows=(hwRes.data||[]).filter(h=>!effectiveSO||!h.so_tag||h.so_tag===effectiveSO);
-    hardware=allRows.map(h=>({model:h.model||'',quantity:h.quantity||1,screenSize:h.screen_size||'',peripherals:h.peripherals||''}));
+    hardware=allRows.map(h=>({soTag:h.so_tag||'',model:h.model||'',quantity:h.quantity||1,screenSize:h.screen_size||'',peripherals:h.peripherals||''}));
     const hwResolved=resolveProjectHardware(proj,allRows);
     if(!hardware.length&&hwResolved.source==='legacy'){
-      hardware=[{model:proj.product_type||cfg.form_factor||'',quantity:hwResolved.quantity,screenSize:'',peripherals:'',_legacy:true}];
+      hardware=[{soTag:'',model:proj.product_type||cfg.form_factor||'',quantity:hwResolved.quantity,screenSize:'',peripherals:'',_legacy:true}];
       flag(`Hardware is using the legacy project quantity (${hwResolved.quantity}). Convert it to detailed hardware lines under Hardware to add screen size and peripherals.`,'optional');
     }
     if(!hardware.length)flag('Hardware details have not been entered. Add hardware models and quantities under Hardware.','important');
-    scope.peripherals=hardware[0]?.peripherals||'';
-    if(hardware.length&&!scope.peripherals)flag('No peripherals recorded for this hardware line. Add them under Hardware.','optional');
+    // Peripherals — collect from EVERY hardware line, not just the first
+    // (that was the old, incorrect behavior: scope.peripherals used to be
+    // hardware[0]?.peripherals, silently dropping every other line's
+    // peripherals). Dedupe exact matches, keep meaningful distinctions.
+    const withPeriphs=hardware.filter(h=>(h.peripherals||'').trim());
+    const allPeriphValues=[];
+    const seenPeriph=new Set();
+    withPeriphs.forEach(h=>{
+      (h.peripherals||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(p=>{
+        const key=p.toLowerCase();
+        if(!seenPeriph.has(key)){seenPeriph.add(key);allPeriphValues.push(p);}
+      });
+    });
+    scope.peripherals=allPeriphValues.join(', ');
+    // Per-line breakdown, useful for a combined multi-SO deck or any future
+    // per-machine peripherals display — e.g. "S18410 Spark XL — Badge
+    // reader, payment terminal".
+    scope.peripheralsByLine=hardware.map(h=>({soTag:h.soTag,model:h.model,peripherals:h.peripherals||''}));
+    if(hardware.length&&!withPeriphs.length)flag('No peripherals recorded for any hardware line. Add them under Hardware.','optional');
+    else if(hardware.length&&withPeriphs.length<hardware.length)flag(`Peripherals are not recorded for ${hardware.length-withPeriphs.length} of ${hardware.length} hardware lines.`,'optional');
   }
 
   // 4. Timeline — reads milestones directly via PIPELINE_STAGES key ordering.
@@ -8882,7 +9311,15 @@ async function generateKickoffDeckFromTemplate(projId,soTag=''){
     // Slide 4 — Scope of work (every field is a unique string, safe to global-replace)
     xml=await getSlide(4);
     const hw=pkg.hardware;
-    const hwLine1=hw.length?hw.map(h=>`${h.quantity||1} × ${h.model||TBC}`).join('; '):TBC;
+    // Combined multi-SO deck: prefix each hardware line with its SO so
+    // hardware from different Sales Orders is never visually merged into one
+    // indistinguishable line. Individual SO decks and single-SO projects
+    // omit the prefix — it would be redundant there.
+    const isCombinedMultiSO=!soTag&&getSOList(pkg.proj).length>1;
+    const hwLine1=hw.length?hw.map(h=>{
+      const base=`${h.quantity||1} × ${h.model||TBC}`;
+      return isCombinedMultiSO?`${h.soTag||'Shared'} — ${base}`:base;
+    }).join('; '):TBC;
     const hwLine2=hw.length?hw.map(h=>h.screenSize||TBC).join('; '):TBC;
     const hwLine3=hw.length?hw.map(h=>[pkg.scope.voltage,pkg.scope.plugType].filter(Boolean).join(', ')||TBC).join('; '):TBC;
     const periphs=pkg.scope.peripherals?pkg.scope.peripherals.split(',').map(s=>s.trim()):[];
@@ -9248,6 +9685,12 @@ async function renderKickoffPreview(){
   if(!el.isConnected)return;
   if(!pkg){el.innerHTML='<div class="empty-state">Project not found.</div>';return;}
   const r=pkg.readiness;
+  const soList=getSOList(pkg.proj);
+  const isMultiSO=soList.length>1;
+  const scopeLabel=selectedDocSO
+    ?`Generating: Sales Order ${esc(selectedDocSO)}`
+    :(isMultiSO?`Generating: Combined Project Deck — ${soList.map(esc).join(', ')}`:'');
+  const editLink=m=>{const a=readinessAnchorFor(m.text);return a?` <a href="javascript:void(0)" onclick="goToProjConfig('${selectedDocProjId}','${a}')" style="text-decoration:underline;font-weight:600;white-space:nowrap">Edit →</a>`:'';};
   el.innerHTML=`
     <div class="pp-card" style="margin-bottom:10px"><div class="pp-card-head"><span class="pp-card-title">Readiness summary</span></div>
       <div class="pp-card-body" style="font-size:12px;line-height:1.9">
@@ -9260,12 +9703,13 @@ async function renderKickoffPreview(){
       ${r.conflicts.map(c=>`• ${esc(c.role)}: project field says "${esc(c.scalarValue)}", team list says "${esc(c.teamValue)}" — using the project field`).join('<br>')}
     </div>`:''}
     ${r.missingImportant.length?`<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:#991b1b">
-      <b>${r.missingImportant.length} important item(s) — deck will still generate, review before sending:</b><br>${r.missingImportant.map(m=>'• '+esc(m.text)).join('<br>')}
+      <b>${r.missingImportant.length} important item(s) — deck will still generate, review before sending:</b><br>${r.missingImportant.map(m=>'• '+esc(m.text)+editLink(m)).join('<br>')}
     </div>`:''}
     ${r.missingOptional.length?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:#92600a">
-      <b>${r.missingOptional.length} optional item(s):</b><br>${r.missingOptional.map(m=>'• '+esc(m.text)).join('<br>')}
+      <b>${r.missingOptional.length} optional item(s):</b><br>${r.missingOptional.map(m=>'• '+esc(m.text)+editLink(m)).join('<br>')}
     </div>`:''}
     ${!r.missingImportant.length&&!r.missingOptional.length?`<div style="background:var(--green-bg,#f0fdf4);border:1px solid #86efac;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:#166534">✓ All fields ready</div>`:''}
+    ${scopeLabel?`<div style="font-size:11.5px;color:var(--gray-500);margin-bottom:6px;font-weight:600">${scopeLabel}</div>`:''}
     <button onclick="generateKickoffDeckFromTemplate('${selectedDocProjId}','${selectedDocSO||''}')" style="font-size:13px;padding:9px 20px;border-radius:var(--radius);border:none;background:var(--black);color:white;cursor:pointer;font-family:var(--font);font-weight:600">⚡ Generate Complete Kickoff Deck (.pptx)</button>`;
 }
 
@@ -10281,70 +10725,245 @@ async function removeAdHoc(dept,idx){
   renderDeptView(dept);showToast('Removed');
 }
 
-// ── SETTINGS ──────────────────────────────────────────────
+// ── SETTINGS — unified configurable-list administration framework ──────
+// One reusable engine for every admin-editable option list in the app:
+// Product Types, Authentication Types, Workflow Types, PM List, Sales
+// List, Account Managers. Backed by app_settings (same key/value pattern
+// as everything else there — no SQL migration needed). Every list, whether
+// it still holds legacy plain-string data or the newer
+// {id,label,active,sortOrder}[] shape, is normalized to the structured
+// shape in memory on read; nothing is rewritten in the database until an
+// admin actually clicks Save on that specific list — reading/rendering
+// never triggers a write, so simply opening Settings never migrates data.
 const DEFAULT_PRODUCT_TYPES=['SparkXL V8','SparkXL V7','18" Control Locker','18" Add-on Locker','Companion','10" Smart Companion','15" Smart Companion','Stand-up TED','Sit-down TED','TVM','Smart Drawer','Mini Drawer','Stuff Station Lite','Stuff Station Standard','Stuff Station Plus','GrabnGo','SKD 2-Hopper','SKD 4-Hopper','SparkXL w/ Ted Side Panel'];
-function getProductTypes(){return appSettings['product_types']||DEFAULT_PRODUCT_TYPES;}
-
-// Settings-backed people lists (PM / Sales / Account Manager) — same pattern as
-// product types, so adding a name is a Settings edit, not a code change.
 const DEFAULT_PM_LIST=['Itoro','Summer','Emma','Jennifer','Ashima','Kylie','Tristen'];
 const DEFAULT_SALES_LIST=['Adnan Aga','Michael Harrison','Danny Pack','Julianna Reynolds','Michelle Hernandez','Kevin Bell','Shoubi Rastegar','Daniel Nowak'];
 const DEFAULT_AM_LIST=['Ian Harrison','Daniel Pini','Michelle Hernandez','Tyler Stevenson','Pamela Gilliam'];
-function getPMList(){return appSettings['pm_list']||DEFAULT_PM_LIST;}
-function getSalesList(){return appSettings['sales_list']||DEFAULT_SALES_LIST;}
-function getAMList(){return appSettings['am_list']||DEFAULT_AM_LIST;}
-const PEOPLE_LIST_CONFIG={
-  pm_list:{label:'Project Managers',getCurrent:getPMList},
-  sales_list:{label:'Salespeople',getCurrent:getSalesList},
-  am_list:{label:'Account Managers',getCurrent:getAMList},
+
+function slugifyOptionId(label){
+  return String(label||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-+|-+$)/g,'')||('opt-'+Date.now()+'-'+Math.floor(Math.random()*1000));
+}
+// Accepts either a legacy plain-string array or the structured
+// {id,label,active,sortOrder}[] shape and always returns the structured
+// shape, sorted by sortOrder. A stable ID is generated from the label the
+// first time a legacy string is encountered; once assigned, an ID never
+// changes again — renaming only ever touches `label`.
+function normalizeOptionList(raw,defaults){
+  const src=Array.isArray(raw)?raw:(Array.isArray(defaults)?defaults:[]);
+  const usedIds=new Set();
+  const out=src.map((item,i)=>{
+    let id,label,active,sortOrder;
+    if(item&&typeof item==='object'&&!Array.isArray(item)){
+      id=item.id||slugifyOptionId(item.label);label=item.label||'';
+      active=item.active!==false;
+      sortOrder=Number.isFinite(item.sortOrder)?item.sortOrder:(i+1);
+    } else {
+      id=slugifyOptionId(String(item));label=String(item);active=true;sortOrder=i+1;
+    }
+    while(usedIds.has(id))id=id+'-2';
+    usedIds.add(id);
+    return{id,label,active,sortOrder};
+  });
+  return out.sort((a,b)=>(a.sortOrder||0)-(b.sortOrder||0));
+}
+const OPTION_LIST_CONFIG={
+  product_types:{settingKey:'product_types',label:'Product Types / Form Factors',addLabel:'+ Add Product Type',itemNoun:'product type',defaults:DEFAULT_PRODUCT_TYPES,hint:'These appear in the New Project form and hardware model pickers.'},
+  authentication_type_options:{settingKey:'authentication_type_options',label:'Authentication Types',addLabel:'+ Add Authentication Type',itemNoun:'authentication type',defaults:DEFAULT_AUTHENTICATION_TYPE_OPTIONS,hint:"Options offered on every project's Workflow & Authentication configuration."},
+  workflow_type_options:{settingKey:'workflow_type_options',label:'Workflow Types',addLabel:'+ Add Workflow Type',itemNoun:'workflow type',defaults:DEFAULT_WORKFLOW_TYPE_OPTIONS,hint:"Options offered on every project's Workflow & Authentication configuration."},
+  pm_list:{settingKey:'pm_list',label:'Project Managers',addLabel:'+ Add Project Manager',itemNoun:'project manager',defaults:DEFAULT_PM_LIST,hint:'Used in Project Manager dropdowns and filters across the hub.'},
+  sales_list:{settingKey:'sales_list',label:'Salespeople',addLabel:'+ Add Salesperson',itemNoun:'salesperson',defaults:DEFAULT_SALES_LIST,hint:'Used in Sales dropdowns and filters across the hub.'},
+  am_list:{settingKey:'am_list',label:'Account Managers',addLabel:'+ Add Account Manager',itemNoun:'account manager',defaults:DEFAULT_AM_LIST,hint:'Used in Account Manager dropdowns across the hub.'},
 };
-let _peopleLists={};
-function getPlWorking(key){if(!_peopleLists[key])_peopleLists[key]=[...PEOPLE_LIST_CONFIG[key].getCurrent()];return _peopleLists[key];}
-function plUpdate(key,i,val){getPlWorking(key)[i]=val;}
-function plRemove(key,i){
-  const cur=getPlWorking(key).map((t,j)=>{const inp=document.getElementById('pl-'+key+'-'+j);return inp?inp.value.trim():t;}).filter(Boolean);
-  cur.splice(i,1);
-  _peopleLists[key]=cur;
+// Working copies — edits (add/rename/reorder/retire/reactivate) live here
+// until Save; navigating away without saving just discards this, and it's
+// re-normalized fresh from appSettings the next time the section renders.
+let _optionListsWorking={};
+function getOlWorking(key){
+  if(!_optionListsWorking[key]){
+    const cfg=OPTION_LIST_CONFIG[key];
+    _optionListsWorking[key]=normalizeOptionList(appSettings[cfg.settingKey],cfg.defaults).map(o=>({...o}));
+  }
+  return _optionListsWorking[key];
+}
+function resetOlWorking(key){delete _optionListsWorking[key];}
+// Read-only structured view of the last-COMMITTED state (appSettings),
+// normalized — for anything that needs to read the list rather than edit
+// it (e.g. optionLabelsForSelect below).
+function getOptionListNormalized(key){
+  const cfg=OPTION_LIST_CONFIG[key];
+  return normalizeOptionList(appSettings[cfg.settingKey],cfg.defaults);
+}
+// Active labels only, in sort order — the plain string[] shape every
+// existing dropdown/filter in the app already expects. This is what keeps
+// getProductTypes()/getPMList()/getSalesList()/getAMList() backward
+// compatible for every one of their ~20 existing call sites.
+function getActiveOptionLabels(key){
+  return getOptionListNormalized(key).filter(o=>o.active!==false).sort((a,b)=>(a.sortOrder||0)-(b.sortOrder||0)).map(o=>o.label);
+}
+function getProductTypes(){return getActiveOptionLabels('product_types');}
+function getPMList(){return getActiveOptionLabels('pm_list');}
+function getSalesList(){return getActiveOptionLabels('sales_list');}
+function getAMList(){return getActiveOptionLabels('am_list');}
+function getAuthenticationTypeOptions(){return getOptionListNormalized('authentication_type_options');}
+function getWorkflowTypeOptions(){return getOptionListNormalized('workflow_type_options');}
+// Active options, in sort order — plain label strings. (Kept for any
+// external caller expecting this helper; getActiveOptionLabels is the
+// key-based equivalent used internally.)
+function activeOptionLabels(list){return[...list].filter(o=>o.active!==false).sort((a,b)=>(a.sortOrder||0)-(b.sortOrder||0)).map(o=>o.label);}
+// Active labels PLUS any label a project already has selected, even if
+// that option has since been retired/renamed/removed — so a project's
+// existing selection is never silently dropped from the picker.
+function optionLabelsForSelect(list,currentSelected){
+  const active=activeOptionLabels(list);
+  const extra=(Array.isArray(currentSelected)?currentSelected:[]).filter(v=>v&&!active.includes(v));
+  return[...active,...extra];
+}
+
+function olUpdate(key,i,field,val){const list=getOlWorking(key);if(list[i])list[i][field]=val;}
+function olMove(key,i,dir){
+  const list=getOlWorking(key);
+  const j=i+dir;
+  if(j<0||j>=list.length)return;
+  [list[i],list[j]]=[list[j],list[i]];
   renderSettings();
 }
-function plAdd(key){
-  const inp=document.getElementById('pl-'+key+'-new');
-  const val=(inp?.value||'').trim();
-  if(!val)return;
-  const cur=getPlWorking(key).map((t,j)=>{const el=document.getElementById('pl-'+key+'-'+j);return el?el.value.trim():t;}).filter(Boolean);
-  cur.push(val);
-  _peopleLists[key]=cur;
+let _olDrag={key:null,from:null};
+function olDragStart(key,i,ev){_olDrag={key,from:i};if(ev.dataTransfer){ev.dataTransfer.effectAllowed='move';}}
+function olDragOver(ev){ev.preventDefault();if(ev.dataTransfer)ev.dataTransfer.dropEffect='move';}
+function olDrop(key,i,ev){
+  ev.preventDefault();
+  if(_olDrag.key!==key||_olDrag.from===null||_olDrag.from===i){_olDrag={key:null,from:null};return;}
+  const list=getOlWorking(key);
+  const[moved]=list.splice(_olDrag.from,1);
+  list.splice(i,0,moved);
+  _olDrag={key:null,from:null};
+  renderSettings();
+}
+function olAdd(key){
+  const inp=document.getElementById('ol-'+key+'-new');
+  const label=(inp?.value||'').trim();
+  if(!label){showToast('⚠ Enter a name first.');return;}
+  const list=getOlWorking(key);
+  if(list.some(o=>o.active!==false&&o.label.trim().toLowerCase()===label.toLowerCase())){showToast(`⚠ "${label}" is already an active option.`);return;}
+  const usedIds=new Set(list.map(o=>o.id));
+  let id=slugifyOptionId(label),suffix=2;
+  while(usedIds.has(id)){id=slugifyOptionId(label)+'-'+suffix;suffix++;}
+  list.push({id,label,active:true,sortOrder:list.length+1});
   if(inp)inp.value='';
   renderSettings();
 }
-async function plSave(key){
-  const list=getPlWorking(key).map((t,i)=>{const inp=document.getElementById('pl-'+key+'-'+i);return inp?inp.value.trim():t;}).filter(Boolean);
-  _peopleLists[key]=list;
-  appSettings[key]=list;
-  await sb.from('app_settings').upsert({key,value:list,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
-  const saved=document.getElementById('pl-'+key+'-saved');
-  if(saved){saved.style.display='inline';setTimeout(()=>{saved.style.display='none';},2500);}
-  showToast(PEOPLE_LIST_CONFIG[key].label+' saved ✓');
+// Retire/Reactivate replace hard delete entirely — nothing is ever
+// permanently removed from a configurable list. Retiring only flips
+// active=false; the object and its stable ID are untouched.
+function olRetire(key,i){
+  const list=getOlWorking(key);
+  const item=list[i];if(!item)return;
+  const label=(document.getElementById('ol-'+key+'-label-'+i)?.value||item.label).trim();
+  if(!confirm(`Retire "${label}"?\n\nExisting projects will continue using it, but it will no longer be available for new selections.`))return;
+  item.active=false;
+  renderSettings();
 }
-function peopleListSection(key){
-  const cfg=PEOPLE_LIST_CONFIG[key];
-  const list=getPlWorking(key);
+function olReactivate(key,i){
+  const list=getOlWorking(key);
+  const item=list[i];if(!item)return;
+  item.active=true;
+  renderSettings();
+}
+async function olSave(key){
+  const cfg=OPTION_LIST_CONFIG[key];
+  const before=getOptionListNormalized(key); // last-committed state, for the activity-log diff
+  const beforeById=new Map(before.map(o=>[o.id,o]));
+  const raw=getOlWorking(key);
+
+  // Read current DOM values (label text isn't re-synced into the working
+  // copy on every keystroke) into a candidate save list, trimmed.
+  let list=raw.map((o,i)=>{
+    const labelInp=document.getElementById('ol-'+key+'-label-'+i);
+    const label=(labelInp?labelInp.value:(o.label||'')).trim();
+    return{id:o.id,label,active:o.active!==false,sortOrder:i+1};
+  });
+
+  // ── Validation — blank labels, duplicate active labels, duplicate IDs ──
+  const droppedBlanks=list.filter(o=>!o.label).length;
+  list=list.filter(o=>o.label);
+  if(!list.length){showToast('⚠ Cannot save — every option would be blank.');return;}
+  const activeSeen=new Map();
+  for(const o of list){
+    if(!o.active)continue;
+    const k=o.label.toLowerCase();
+    if(activeSeen.has(k)){showToast(`⚠ Duplicate active option "${o.label}" — retire or rename one before saving.`);return;}
+    activeSeen.set(k,true);
+  }
+  const idSeen=new Set();
+  for(const o of list){
+    if(idSeen.has(o.id)){showToast('⚠ Duplicate internal ID detected — please retry.');return;}
+    idSeen.add(o.id);
+  }
+  list=list.map((o,i)=>({...o,sortOrder:i+1})); // recompute sequential sort order from final row order
+
+  const{error}=await sb.from('app_settings').upsert({key:cfg.settingKey,value:list,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
+  if(error){
+    // Rollback: appSettings (and therefore every dropdown reading it) is
+    // never touched on failure, and the working copy is left exactly as
+    // the admin had it so they can retry without redoing their edits.
+    console.warn('option list save error',key,error);
+    showToast('⚠ Save failed: '+error.message+' — no changes were applied.');
+    return;
+  }
+
+  // Success — commit to local memory only now.
+  appSettings[cfg.settingKey]=list;
+  resetOlWorking(key);
+
+  // Activity log: Added / Renamed / Retired / Reactivated / Reordered,
+  // diffed against the previous committed state. project_id is null —
+  // this is a hub-wide settings change, not tied to one project.
+  list.forEach(after=>{
+    const prior=beforeById.get(after.id);
+    if(!prior){logActivity('added',cfg.itemNoun,after.label,null,'',after.label);return;}
+    if(prior.label!==after.label)logActivity('renamed',cfg.itemNoun,after.label,null,prior.label,after.label);
+    if(prior.active&&!after.active)logActivity('retired',cfg.itemNoun,after.label,null,'active','retired');
+    if(!prior.active&&after.active)logActivity('reactivated',cfg.itemNoun,after.label,null,'retired','active');
+    if(prior.sortOrder!==after.sortOrder&&prior.label===after.label&&prior.active===after.active)logActivity('reordered',cfg.itemNoun,after.label,null,String(prior.sortOrder),String(after.sortOrder));
+  });
+
+  const saved=document.getElementById('ol-'+key+'-saved');
+  if(saved){saved.style.display='inline';setTimeout(()=>{saved.style.display='none';},2500);}
+  showToast(cfg.label+' saved ✓'+(droppedBlanks?` (${droppedBlanks} blank row(s) discarded)`:''));
+  if(currentTab==='projpage')renderProjPageBody();
+  renderSettings();
+}
+// One reusable editor, used for every configurable list in the app —
+// Product Types, Authentication Types, Workflow Types, PM/Sales/AM lists.
+// Drag handles reorder (HTML5 drag-and-drop) with Move Up/Down buttons as
+// a fallback; status is a 🟢 Active / ⚪ Retired toggle instead of a
+// delete button — nothing in this editor can permanently remove an option.
+function optionListSection(key){
+  const cfg=OPTION_LIST_CONFIG[key];
+  const list=getOlWorking(key);
   return`<div style="padding-top:1.25rem;border-top:1px solid var(--gray-100);margin-top:1.25rem">
     <div style="font-size:14px;font-weight:600;margin-bottom:4px">${esc(cfg.label)}</div>
-    <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">Used in dropdowns and filters across the hub — no code changes needed.</div>
-    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
-      ${list.map((t,i)=>`<div style="display:flex;align-items:center;gap:8px">
-        <input value="${t.replace(/"/g,'&quot;')}" id="pl-${key}-${i}" style="flex:1;font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" oninput="plUpdate('${key}',${i},this.value)">
-        <button onclick="plRemove('${key}',${i})" style="background:none;border:1px solid var(--gray-200);border-radius:var(--radius);padding:5px 10px;cursor:pointer;color:var(--gray-400)">✕</button>
+    <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">${esc(cfg.hint)} Retired options stay visible here and on any project already using them — they just won't be offered for new selections.</div>
+    <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px">
+      ${list.map((o,i)=>`<div draggable="true" ondragstart="olDragStart('${key}',${i},event)" ondragover="olDragOver(event)" ondrop="olDrop('${key}',${i},event)"
+          style="display:flex;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--gray-200);border-radius:var(--radius);background:${o.active!==false?'var(--white)':'var(--gray-50)'}">
+        <span title="Drag to reorder" style="cursor:grab;color:var(--gray-300);font-size:14px;user-select:none;line-height:1">⠿</span>
+        <input value="${(o.label||'').replace(/"/g,'&quot;')}" id="ol-${key}-label-${i}" placeholder="Display name" style="flex:1;font-family:var(--font);font-size:13px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);${o.active!==false?'':'color:var(--gray-400)'}" oninput="olUpdate('${key}',${i},'label',this.value)">
+        <button onclick="${o.active!==false?`olRetire('${key}',${i})`:`olReactivate('${key}',${i})`}" title="${o.active!==false?'Click to retire':'Click to reactivate'}" style="font-size:11px;padding:4px 10px;border-radius:12px;border:1px solid ${o.active!==false?'#86efac':'var(--gray-300)'};background:${o.active!==false?'#f0fdf4':'var(--gray-100)'};color:${o.active!==false?'#166534':'var(--gray-500)'};cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">${o.active!==false?'🟢 Active':'⚪ Retired'}</button>
+        <div style="display:flex;align-items:center;gap:2px">
+          <button onclick="olMove('${key}',${i},-1)"${i===0?' disabled':''} title="Move up" style="background:none;border:1px solid var(--gray-200);border-radius:4px;padding:3px 7px;cursor:${i===0?'default':'pointer'};color:${i===0?'var(--gray-200)':'var(--gray-500)'}">↑</button>
+          <button onclick="olMove('${key}',${i},1)"${i===list.length-1?' disabled':''} title="Move down" style="background:none;border:1px solid var(--gray-200);border-radius:4px;padding:3px 7px;cursor:${i===list.length-1?'default':'pointer'};color:${i===list.length-1?'var(--gray-200)':'var(--gray-500)'}">↓</button>
+        </div>
       </div>`).join('')}
+      ${!list.length?`<div style="font-size:12px;color:var(--gray-400);padding:10px 4px">No options yet — add one below.</div>`:''}
     </div>
     <div style="display:flex;gap:8px;margin-bottom:14px">
-      <input id="pl-${key}-new" placeholder="Add name..." style="flex:1;font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onkeydown="if(event.key==='Enter')plAdd('${key}')">
-      <button class="btn btn-primary" onclick="plAdd('${key}')">+ Add</button>
+      <input id="ol-${key}-new" placeholder="New ${esc(cfg.itemNoun)} name..." style="flex:1;font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onkeydown="if(event.key==='Enter'){event.preventDefault();olAdd('${key}')}">
+      <button class="btn btn-primary" onclick="olAdd('${key}')">${esc(cfg.addLabel)}</button>
     </div>
-    <div style="display:flex;gap:8px;align-items:center">
-      <button class="btn btn-primary" onclick="plSave('${key}')">💾 Save changes</button>
-      <span id="pl-${key}-saved" style="font-size:11px;color:var(--success);display:none">✓ Saved</span>
+    <div style="position:sticky;bottom:0;background:var(--white);padding:8px 0;display:flex;gap:8px;align-items:center;border-top:1px solid var(--gray-50);z-index:1">
+      <button class="btn btn-primary" onclick="olSave('${key}')">💾 Save changes</button>
+      <span id="ol-${key}-saved" style="font-size:11px;color:var(--success);display:none">✓ Saved</span>
     </div>
   </div>`;
 }
@@ -11531,7 +12150,6 @@ function ghostSOSection(){
 }
 function renderSettings(){
   const el=document.getElementById('tab-settings');
-  const types=getProductTypes();
   // Find campaign projects that need migrating
   const campaignMasters=projects.filter(p=>isMaster(p)&&getChildren(p.id).length>0);
   const migrationSection=campaignMasters.length?`
@@ -11576,27 +12194,13 @@ function renderSettings(){
         <div style="font-size:12px;color:var(--gray-500)">Manage lists used across the hub</div>
       </div>
       <div style="padding:1.5rem">
-        <div style="font-size:14px;font-weight:600;margin-bottom:4px">Product types / Form factors</div>
-        <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">These appear in the New Project form.</div>
-        <div id="pt-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
-          ${types.map((t,i)=>`
-            <div style="display:flex;align-items:center;gap:8px">
-              <input value="${t.replace(/"/g,'&quot;')}" id="pt-val-${i}" style="flex:1;font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" oninput="ptUpdate(${i},this.value)">
-              <button onclick="ptRemove(${i})" style="background:none;border:1px solid var(--gray-200);border-radius:var(--radius);padding:5px 10px;cursor:pointer;color:var(--gray-400)">✕</button>
-            </div>`).join('')}
-        </div>
-        <div style="display:flex;gap:8px;margin-bottom:14px">
-          <input id="pt-new" placeholder="Add new product type..." style="flex:1;font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" onkeydown="if(event.key==='Enter')ptAdd()">
-          <button class="btn btn-primary" onclick="ptAdd()">+ Add</button>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn btn-primary" onclick="ptSave()">💾 Save changes</button>
-          <span id="pt-saved" style="font-size:11px;color:var(--success);display:none">✓ Saved</span>
-        </div>
-        ${peopleListSection('pm_list')}
-        ${peopleListSection('sales_list')}
-        ${peopleListSection('am_list')}
+        ${optionListSection('product_types')}
+        ${optionListSection('pm_list')}
+        ${optionListSection('sales_list')}
+        ${optionListSection('am_list')}
         ${teamRolesSection()}
+        ${optionListSection('authentication_type_options')}
+        ${optionListSection('workflow_type_options')}
         ${configMigrationSection()}
       </div>
     </div>
@@ -11745,37 +12349,10 @@ async function addFinalQCToAllProjects(){
   await loadAll();
 }
 
-let _ptList=null;
-function getPtList(){if(!_ptList)_ptList=[...getProductTypes()];return _ptList;}
-function ptUpdate(i,val){getPtList()[i]=val;}
-function ptRemove(i){
-  // Read all current input values first
-  const cur=getPtList().map((t,j)=>{const inp=document.getElementById('pt-val-'+j);return inp?inp.value.trim():t;}).filter(Boolean);
-  cur.splice(i,1);
-  _ptList=cur;
-  appSettings['product_types']=cur;
-  renderSettings();
-}
-function ptAdd(){
-  const inp=document.getElementById('pt-new');
-  const val=(inp?.value||'').trim();
-  if(!val)return;
-  const cur=getPtList().map((t,j)=>{const el=document.getElementById('pt-val-'+j);return el?el.value.trim():t;}).filter(Boolean);
-  cur.push(val);
-  _ptList=cur;
-  appSettings['product_types']=cur;
-  if(inp)inp.value='';
-  renderSettings();
-}
-async function ptSave(){
-  const list=getPtList().map((t,i)=>{const inp=document.getElementById('pt-val-'+i);return inp?inp.value.trim():t;}).filter(Boolean);
-  _ptList=list;
-  appSettings['product_types']=list;
-  await sb.from('app_settings').upsert({key:'product_types',value:list,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
-  const saved=document.getElementById('pt-saved');
-  if(saved){saved.style.display='block';setTimeout(()=>{saved.style.display='none';},2500);}
-  showToast('Product types saved ✓');
-}
+// Product Types now use the unified optionListSection('product_types')
+// editor in Settings (see the SETTINGS framework above) — ptAdd/ptRemove/
+// ptSave/getPtList were the old bespoke editor and have been retired in
+// favor of the shared component olAdd/olRetire/olReactivate/olSave.
 
 function globalSearch(q){
   const el=document.getElementById('gs-results');
