@@ -437,7 +437,7 @@ body.production-view-active .header-inner{max-width:none;width:100%;padding-left
     </div>
     <div id="login-error" style="display:none;font-size:12px;color:var(--red);margin-bottom:10px;text-align:center">Incorrect passcode — try again.</div>
     <button class="btn-login" onclick="doLogin()">Sign in</button>
-    <div class="login-note">Contact your PM for the team passcode.</div>
+    <div class="login-note">Contact your PM for the team passcode. There's a separate view-only passcode for guests who just need to look around.</div>
   </div>
 </div>
 
@@ -562,6 +562,45 @@ const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{
     fetch:(url,options={})=>fetch(url,{...options,cache:'no-store'})
   }
 });
+
+// ── VIEW-ONLY WRITE GUARD ─────────────────────────────────────
+// Blocks every insert/update/upsert/delete for the 'Viewer' role at a single
+// choke point, instead of having to gate every one of the hundreds of
+// sb.from(...).insert/update/delete(...) call sites scattered through this
+// file. Reads are untouched. A Proxy stands in for the real query builder so
+// any chaining pattern used in this file keeps working (.eq().select(),
+// .then(cb), await, etc.) — it just resolves to a "blocked" result instead
+// of hitting the network.
+function _viewOnlyBlockedBuilder(){
+  const err={message:'View-only access — changes aren\'t saved.'};
+  const proxy=new Proxy(function(){},{
+    get(_t,prop){
+      if(prop==='then')return(resolve)=>resolve({data:null,error:err});
+      if(prop==='catch'||prop==='finally')return()=>proxy;
+      return(..._a)=>proxy;
+    }
+  });
+  return proxy;
+}
+(function(){
+  const _origFrom=sb.from.bind(sb);
+  const WRITE_METHODS=['insert','update','upsert','delete'];
+  sb.from=function(table){
+    const builder=_origFrom(table);
+    WRITE_METHODS.forEach(method=>{
+      if(typeof builder[method]!=='function')return;
+      const orig=builder[method].bind(builder);
+      builder[method]=function(...args){
+        if(typeof isViewer==='function'&&isViewer()){
+          if(typeof showToast==='function')showToast('View only — changes aren\'t saved');
+          return _viewOnlyBlockedBuilder();
+        }
+        return orig(...args);
+      };
+    });
+    return builder;
+  };
+})();
 
 // Fetches every row from a table regardless of table size. A single
 // .select().range(0,49999) is NOT enough — Supabase has a server-side
@@ -814,7 +853,7 @@ let currentUser=null,currentUserName='',currentUserRole='PM';
 // name gets that name's role. This is not per-person authentication — it's a
 // lookup, not a lock. If that's ever not good enough, real per-person login
 // (Supabase Auth) is the upgrade path.
-const TEAM_ROLES=['PM','Admin','Management'];
+const TEAM_ROLES=['PM','Admin','Management','Viewer'];
 function getTeamRoles(){return appSettings['team_roles']||[];}
 function getUserRole(name){
   if(!name)return'PM';
@@ -824,6 +863,11 @@ function getUserRole(name){
 function isAdmin(){return currentUserRole==='Admin';}
 function isManagement(){return currentUserRole==='Management';}
 function isPM(){return currentUserRole==='PM';}
+// Read-only role: can log in with the same shared passcode and see
+// everything, but every write is blocked by the guard installed around `sb`
+// above (see _viewOnlyBlockedBuilder), regardless of what buttons are
+// visible on screen.
+function isViewer(){return currentUserRole==='Viewer';}
 // STANDARD FILTER STATE — shape shared by every department page using the
 // standardized filter framework (Ops Hub Enhancement 3). Order matches the
 // spec: search, status, pm (reuses global pmFilter), priority, health,
@@ -1172,30 +1216,46 @@ async function logActivity(action,entityType,entityName,projectId,oldVal,newVal)
 // ── AUTH — PASSCODE ────────────────────────────────────────
 // Change TEAM_PASSCODE to whatever you want your team to use
 const TEAM_PASSCODE='signifi2026';
+// A second passcode that always signs someone in as a read-only Viewer,
+// no matter what name they type and regardless of any Team roles entry for
+// that name. Hand this one out instead of TEAM_PASSCODE to give someone
+// view-only access with nothing else to configure. Change it to whatever
+// you want — just keep it different from TEAM_PASSCODE.
+const VIEWER_PASSCODE='signifi2026-view';
+
+// Set once at login and re-applied every time currentUserRole is resolved
+// (see loadAll()), so a Viewer-passcode session can't regain write access
+// even if their name happens to match an Admin/PM/Management entry in
+// Team roles.
+let loginAsViewer=false;
 
 function doLogin(){
   const name=document.getElementById('login-name')?.value.trim();
   const pass=document.getElementById('login-pass')?.value;
   const errEl=document.getElementById('login-error');
   if(!name){document.getElementById('login-name')?.focus();return;}
-  if(pass!==TEAM_PASSCODE){if(errEl)errEl.style.display='block';const pw=document.getElementById('login-pass');if(pw){pw.value='';pw.focus();}return;}
+  if(pass!==TEAM_PASSCODE&&pass!==VIEWER_PASSCODE){if(errEl)errEl.style.display='block';const pw=document.getElementById('login-pass');if(pw){pw.value='';pw.focus();}return;}
   if(errEl)errEl.style.display='none';
+  const asViewer=(pass===VIEWER_PASSCODE);
   // Store session in sessionStorage so refresh keeps them logged in
   sessionStorage.setItem('signifi_user',name);
-  initUser(name);
+  sessionStorage.setItem('signifi_login_mode',asViewer?'viewer':'full');
+  initUser(name,asViewer);
 }
 function signOut(){
   sessionStorage.removeItem('signifi_user');
+  sessionStorage.removeItem('signifi_login_mode');
   document.getElementById('main-app')?.style.setProperty('display','none');
   document.getElementById('login-screen')?.style.setProperty('display','flex');
   const nameEl=document.getElementById('login-name'),passEl=document.getElementById('login-pass');
   if(nameEl)nameEl.value='';
   if(passEl)passEl.value='';
-  currentUser=null;currentUserName='';
+  currentUser=null;currentUserName='';loginAsViewer=false;
 }
-function initUser(name){
+function initUser(name,asViewer){
   currentUser={name};
   currentUserName=name;
+  loginAsViewer=!!asViewer;
   const avatarEl=document.getElementById('user-avatar'),nameDisplayEl=document.getElementById('user-name-display');
   if(avatarEl)avatarEl.textContent=name.charAt(0).toUpperCase();
   if(nameDisplayEl)nameDisplayEl.textContent=name;
@@ -1210,7 +1270,7 @@ function initUser(name){
 }
 // Check if already logged in from this session
 const _savedUser=sessionStorage.getItem('signifi_user');
-if(_savedUser)initUser(_savedUser);
+if(_savedUser)initUser(_savedUser,sessionStorage.getItem('signifi_login_mode')==='viewer');
 
 // ── KICKOFF IMAGE CLEANUP ──────────────────────────────────
 // Kick-off screenshots are operational (production floor reference), not
@@ -1403,11 +1463,11 @@ async function loadAll(){
   // Resolve the logged-in name's role now that appSettings (which holds the
   // team_roles list) has just loaded. Unmatched names default to PM — the
   // least-restrictive role, matching how the app behaved before roles existed.
-  currentUserRole=getUserRole(currentUserName);
+  currentUserRole=loginAsViewer?'Viewer':getUserRole(currentUserName);
   const roleBadgeEl=document.getElementById('user-role-badge');
   if(roleBadgeEl){
     if(currentUserRole==='PM'){roleBadgeEl.style.display='none';}
-    else{roleBadgeEl.style.display='inline';roleBadgeEl.textContent=currentUserRole;roleBadgeEl.style.color=currentUserRole==='Admin'?'#fca5a5':'#93c5fd';roleBadgeEl.style.borderColor=currentUserRole==='Admin'?'#7f1d1d':'#1e3a5f';}
+    else{roleBadgeEl.style.display='inline';roleBadgeEl.textContent=currentUserRole;roleBadgeEl.style.color=currentUserRole==='Admin'?'#fca5a5':(currentUserRole==='Viewer'?'#a3a3a3':'#93c5fd');roleBadgeEl.style.borderColor=currentUserRole==='Admin'?'#7f1d1d':(currentUserRole==='Viewer'?'#404040':'#1e3a5f');}
   }
   updateNavVisibility();
   // Build deviation map: {project_id: {milestone_key: row}}
@@ -11027,11 +11087,11 @@ async function trSave(){
   appSettings['team_roles']=list;
   await sb.from('app_settings').upsert({key:'team_roles',value:list,updated_by:currentUserName,updated_at:new Date().toISOString()},{onConflict:'key'});
   // If you just changed your own role, reflect it immediately without a re-login
-  currentUserRole=getUserRole(currentUserName);
+  currentUserRole=loginAsViewer?'Viewer':getUserRole(currentUserName);
   const badge=document.getElementById('user-role-badge');
   if(badge){
     if(currentUserRole==='PM'){badge.style.display='none';}
-    else{badge.style.display='inline';badge.textContent=currentUserRole;badge.style.color=currentUserRole==='Admin'?'#fca5a5':'#93c5fd';badge.style.borderColor=currentUserRole==='Admin'?'#7f1d1d':'#1e3a5f';}
+    else{badge.style.display='inline';badge.textContent=currentUserRole;badge.style.color=currentUserRole==='Admin'?'#fca5a5':(currentUserRole==='Viewer'?'#a3a3a3':'#93c5fd');badge.style.borderColor=currentUserRole==='Admin'?'#7f1d1d':(currentUserRole==='Viewer'?'#404040':'#1e3a5f');}
   }
   updateNavVisibility();
   const saved=document.getElementById('tr-saved');
@@ -11135,7 +11195,7 @@ function teamRolesSection(){
   const list=getTrWorking();
   return`<div style="padding-top:1.25rem;border-top:1px solid var(--gray-100);margin-top:1.25rem">
     <div style="font-size:14px;font-weight:600;margin-bottom:4px">Team roles</div>
-    <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">Controls access to admin-only features (like the upcoming UAT template builder). Anyone not listed here defaults to PM. Note: login is still a shared team passcode — this maps a typed name to a role, it isn't per-person authentication.</div>
+    <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">Controls access to admin-only features (like the upcoming UAT template builder). Anyone not listed here defaults to PM. The easiest way to give someone read-only access is to hand them the separate view-only passcode (see the login screen / ask your Admin) — no setup needed here. Setting a name to <b>Viewer</b> below does the same thing for that specific name even if they use the normal team passcode. Either way, every save/add/delete is blocked for a Viewer. Note: login is still a shared team passcode — this maps a typed name to a role, it isn't per-person authentication.</div>
     <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
       ${list.map((r,i)=>`<div style="display:flex;align-items:center;gap:8px">
         <input value="${(r.name||'').replace(/"/g,'&quot;')}" id="tr-name-${i}" placeholder="Name" style="flex:1;font-family:var(--font);font-size:13px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)" oninput="trUpdate(${i},'name',this.value)">
@@ -13573,3 +13633,4 @@ function renderProcPanel(pid){
 
 </body>
 </html>
+
