@@ -4083,7 +4083,7 @@ function renderOverview(){
         const byLabel={};
         projMs.forEach(m=>{const k=(m.label||'')+'|'+(m.so_tag||'');byLabel[k]=byLabel[k]||[];byLabel[k].push(m);});
         const dupes=Object.values(byLabel).filter(arr=>arr.length>1);
-        const dupeWarning=dupes.length?`<div style="padding:6px 14px;background:#fef3c7;border-bottom:1px solid #fde68a;font-size:11px;color:#92400e">⚠ ${dupes.length} duplicate milestone${dupes.length>1?'s':''} detected: ${dupes.map(arr=>`"${esc(arr[0].label)}" (${arr.length}×)`).join(', ')} — likely leftover from an SO split. Check the DB if these need cleanup.</div>`:'';
+        const dupeWarning=dupes.length?`<div style="padding:6px 14px;background:#fef3c7;border-bottom:1px solid #fde68a;font-size:11px;color:#92400e;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><span>⚠ ${dupes.length} duplicate milestone${dupes.length>1?'s':''} detected: ${dupes.map(arr=>`"${esc(arr[0].label)}" (${arr.length}×)`).join(', ')} — likely leftover from an SO split.</span><button onclick="removeDuplicateMilestones('${proj.id}')" style="font-size:10px;padding:3px 10px;border-radius:8px;border:1px solid #d97706;background:white;color:#92400e;cursor:pointer;font-family:var(--font);white-space:nowrap;flex-shrink:0">🧹 Review &amp; remove duplicates</button></div>`:'';
         return`<div style="padding:5px 14px;font-size:10.5px;color:var(--gray-400);border-bottom:1px solid var(--gray-50)">${total} milestone${total!==1?'s':''} total for this project${hiddenCount?` · ${hiddenCount} hidden (completed) · ${shownCount} shown`:''}</div>${dupeWarning}`;
       })()}
       <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
@@ -4152,6 +4152,36 @@ async function syncMsDateToVinyl(ms,newDate){
     sb.from('vinyl_schedule').update({[dbField]:newDate,updated_at:new Date().toISOString()}).eq('id',v.id)
   ));
   rows.forEach(v=>{v[inMemField]=newDate;if(ms.key==='vinyl')v.date=newDate;else v.shipDate=newDate;});
+}
+// Cleans up exact duplicate milestone rows (same label + same SO tag) for one
+// project — the kind of leftover the Overview page's dupe-detector banner
+// flags. For each duplicate group, keeps whichever row was touched most
+// recently (changed_at, falling back to created_at, falling back to array
+// order) on the assumption that's the one someone actually meant to edit,
+// and removes the rest. Always shows exactly what will be removed and asks
+// for confirmation first — this never runs silently.
+async function removeDuplicateMilestones(projId){
+  const projMs=milestones.filter(m=>m.project_id===projId);
+  const byLabel={};
+  projMs.forEach(m=>{const k=(m.label||'')+'|'+(m.so_tag||'');(byLabel[k]=byLabel[k]||[]).push(m);});
+  const dupGroups=Object.values(byLabel).filter(arr=>arr.length>1);
+  if(!dupGroups.length){showToast('No duplicates found ✓');return;}
+  const recencyKey=m=>m.changed_at||m.created_at||'';
+  const sortedGroups=dupGroups.map(arr=>[...arr].sort((a,b)=>recencyKey(b).localeCompare(recencyKey(a))));
+  const toRemove=sortedGroups.flatMap(arr=>arr.slice(1));
+  const preview=sortedGroups.map(arr=>{
+    const keep=arr[0],drop=arr.slice(1);
+    return`Keep: "${keep.label}"${keep.so_tag?' (SO '+keep.so_tag+')':''} — ${keep.date?fmt(keep.date):'no date'}\n  Remove ${drop.length}× same label, dated: ${drop.map(m=>m.date?fmt(m.date):'no date').join(', ')}`;
+  }).join('\n\n');
+  if(!confirm('Remove '+toRemove.length+' duplicate milestone row'+(toRemove.length>1?'s':'')+' from this project?\n\nFor each duplicate label, the most recently edited row is kept — the rest are permanently deleted.\n\n'+preview))return;
+  let removed=0;
+  for(const m of toRemove){
+    const{error}=await sb.from('milestones').delete().eq('id',m.id);
+    if(error){console.warn('removeDuplicateMilestones delete error',error);continue;}
+    removed++;
+  }
+  showToast('Removed '+removed+' duplicate milestone'+(removed===1?'':'s')+' ✓'+(removed<toRemove.length?' — '+(toRemove.length-removed)+' failed, see console':''));
+  await loadAll();
 }
 function openAddMsForProj(projId){
   const typeOpts=Object.entries(TYPE_LBL).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
@@ -5544,6 +5574,7 @@ async function resolveExtensionRequest(reqId,decision){
         const{error:updErr}=await sb.from('milestones').update({date:u.newDate}).eq('id',u.milestoneId);
         if(updErr){alert('Date update failed for "'+u.label+'": '+updErr.message+'\n\nThe request has NOT been marked approved — no partial approval recorded.');await loadAll();return;}
         const m=milestones.find(x=>x.id===u.milestoneId);if(m)m.date=u.newDate;
+        if(m)await syncMsDateToVinyl(m,u.newDate);
         await sb.from('milestone_history').insert({milestone_id:u.milestoneId,project_id:req.project_id,old_date:u.oldDate,new_date:u.newDate,changed_by:currentUserName,reason:'Extension request: '+req.reason+' (approved, +'+req.days+'d requested by '+(req.requested_by||req.dept)+')'});
       }
       datesWereUpdated=updates.length>0;
@@ -6212,6 +6243,7 @@ async function saveEditProj(id){
     const el=document.getElementById('ms-'+m.id);
     if(el&&el.value!==m.date){
       await sb.from('milestones').update({date:el.value||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
+      await syncMsDateToVinyl(m,el.value||null);
       await logActivity('updated date',m.label,m.label,id,m.date,el.value);
       if(m.date&&el.value)dateChanges.push({ms:m,oldDate:m.date,newDate:el.value});
     }
@@ -6370,7 +6402,7 @@ async function pushSODatesToAll(projId,fromSO){
                ||targetMs.find(m=>m.key===src.key);
       if(tgt){
         const{error}=await sb.from('milestones').update({date:src.date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',tgt.id);
-        if(!error){tgt.date=src.date;updated++;}
+        if(!error){tgt.date=src.date;updated++;await syncMsDateToVinyl(tgt,src.date);}
       }
     }
   }
@@ -6526,6 +6558,8 @@ async function applyCascadeShift(){
     for(const m of shifted){
       await sb.from('milestones').update({date:m.oldDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
       await sb.from('milestone_history').insert({milestone_id:m.id,project_id:cd.projId,old_date:m.newDate,new_date:m.oldDate,changed_by:currentUserName,reason:'Undo of cascade shift'});
+      const full=milestones.find(x=>x.id===m.id);
+      if(full)await syncMsDateToVinyl(full,m.oldDate);
     }
     await loadAll();
     showToast('Cascade undone ✓');
@@ -6546,6 +6580,7 @@ async function pushSODateToOthers(projId,fromSO,msKey,newDate,msLabel){
     if(tgt){
       await sb.from('milestones').update({date:newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',tgt.id);
       tgt.date=newDate;updated++;
+      await syncMsDateToVinyl(tgt,newDate);
     }
   }
   closeModal();showToast('Pushed to '+updated+' other SOs ✓');await loadAll();
@@ -6918,7 +6953,7 @@ async function pushMsKeyToAllSOs(key,date,projId,label){
       const m=milestones.find(x=>x.project_id===projId&&x.key===key&&x.so_tag===so&&(!label||x.label===label));
       if(m){
         const{error}=await sb.from('milestones').update({date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
-        if(!error){m.date=date;updated++;}
+        if(!error){m.date=date;updated++;await syncMsDateToVinyl(m,date);}
       }
     }
   } else {
@@ -6927,7 +6962,7 @@ async function pushMsKeyToAllSOs(key,date,projId,label){
       const m=milestones.find(x=>x.project_id===c.id&&x.key===key&&(!label||x.label===label));
       if(m){
         const{error}=await sb.from('milestones').update({date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
-        if(!error){m.date=date;updated++;}
+        if(!error){m.date=date;updated++;await syncMsDateToVinyl(m,date);}
       }
     }
   }
@@ -6951,7 +6986,7 @@ async function pushAllMilestoneKeysToAllSOs(projId,explicitSourceSO){
     for(const so of soList.filter(s=>s!==firstSO)){
       const tgt=milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.key===src.key&&m.label===src.label)
                ||milestones.find(m=>m.project_id===projId&&m.so_tag===so&&m.label===src.label);
-      if(tgt){await sb.from('milestones').update({date:src.date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',tgt.id);tgt.date=src.date;updated++;}
+      if(tgt){await sb.from('milestones').update({date:src.date,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',tgt.id);tgt.date=src.date;updated++;await syncMsDateToVinyl(tgt,src.date);}
     }
   }
   showToast('Matched '+updated+' milestones from '+firstSO+' to other SOs ✓');
@@ -11403,6 +11438,7 @@ async function pushDatesToAll(masterId){
       if(childM){
         await sb.from('milestones').update({date:masterM.date}).eq('id',childM.id);
         childM.date=masterM.date;
+        await syncMsDateToVinyl(childM,masterM.date);
         // Clear deviation for this key
         await sb.from('milestone_deviations').delete().eq('project_id',child.id).eq('milestone_key',key);
         if(milestoneDeviations[child.id])delete milestoneDeviations[child.id][key];
@@ -13633,4 +13669,3 @@ function renderProcPanel(pid){
 
 </body>
 </html>
-
