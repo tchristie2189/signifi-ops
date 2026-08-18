@@ -721,15 +721,186 @@ function displayScheduledValue({value,notApplicable=false,status='',required=fal
   return required?'Not Scheduled':'';
 }
 
-// Hardware quantity with the legacy fallback made explicit and traceable —
-// callers can tell whether they got a real line-item total or the old
-// single-number estimate, rather than silently getting 0.
-function resolveProjectHardware(proj,hardwareRows){
-  const rows=hardwareRows||[];
-  const lineQty=rows.reduce((sum,h)=>sum+Number(h.quantity||0),0);
-  if(lineQty>0)return{quantity:lineQty,source:'line-items',rows};
-  if(Number(proj.quantity||0)>0)return{quantity:Number(proj.quantity),source:'legacy',rows:[]};
-  return{quantity:0,source:'none',rows:[]};
+// NOTE: resolveProjectHardware(proj,hardwareRows) — the old per-caller legacy-
+// fallback helper (each caller had to fetch hardware_line_items itself and
+// pass the rows in) — was removed here. Every former caller now uses the
+// canonical getProjectHardware(projectId,soTag)/getTotalHardwareCount() below,
+// which applies the exact same never-guess-the-split fallback logic from one
+// place instead of being re-implemented at each call site.
+
+// ═══════════════════════════════════════════════════════════════════════
+// CANONICAL HARDWARE RESOLVER — hardware_line_items is the single source of
+// truth for what hardware a project has. Every page (Project Page,
+// Production, QA, Planogram, Vinyl, Shipping, Installation, Generated Docs,
+// UAT, exports) reads hardware through the functions below instead of
+// touching projects.product_type / projects.form_factor / projects.quantity
+// or item.formFactor directly. Those legacy fields are kept only for
+// backwards compatibility and as the migration source — see
+// deriveLegacyHardwareLines / runHardwareLineItemsMigration.
+// ═══════════════════════════════════════════════════════════════════════
+const HARDWARE_TYPES=[
+  {id:'primary-kiosk',label:'Primary Kiosk'},
+  {id:'standalone-locker',label:'Standalone Locker'},
+  {id:'addon-locker',label:'Add-on Locker'},
+  {id:'peripheral-accessory',label:'Peripheral / Accessory'},
+  {id:'other',label:'Other'},
+];
+function hardwareTypeLabel(id){return HARDWARE_TYPES.find(t=>t.id===id)?.label||'';}
+// Best-effort classification from a free-text model/form-factor label —
+// used to pre-fill hardware_type during migration and as a read-only
+// fallback for rows nobody has classified yet. Never authoritative: a real
+// hardware_type value on the row always wins (see effectiveHardwareType).
+function guessHardwareType(modelLabel){
+  const s=(modelLabel||'').toLowerCase();
+  if(!s)return null;
+  if(/add.?on/.test(s))return'addon-locker';
+  if(/locker/.test(s))return'standalone-locker';
+  if(/peripheral|accessory|scanner|reader|camera|printer/.test(s))return'peripheral-accessory';
+  if(/spark|companion|\bted\b|tvm|kiosk|drawer|stuff station|grabngo|skd|enclosure/.test(s))return'primary-kiosk';
+  return'other';
+}
+function effectiveHardwareType(h){return h.hardware_type||guessHardwareType(h.model);}
+// Splits the legacy comma-joined product_type/form_factor text into distinct
+// labels — the same parsing intake's multi-select used to produce.
+function parseLegacyFormFactorList(proj){
+  const raw=((proj?.product_type||proj?.form_factor)||'').trim();
+  if(!raw)return[];
+  return[...new Set(raw.split(',').map(s=>s.trim()).filter(Boolean))];
+}
+// Returns the hardware_line_items rows that apply to a project (optionally
+// scoped to one SO — rows with no so_tag are "All SOs" and always included).
+// Falls back to a READ-ONLY synthesized view of the legacy fields when no
+// real rows exist yet, so every page shows something sensible before a
+// project has been migrated or had hardware entered — this fallback is
+// never written back to the database.
+function getProjectHardware(projectId,soTag){
+  if(!projectId)return[];
+  const rows=hardwareLineItems.filter(h=>h.project_id===projectId&&(!soTag||!h.so_tag||h.so_tag===soTag));
+  if(rows.length)return rows;
+  const proj=projects.find(p=>p.id===projectId);
+  if(!proj)return[];
+  const labels=parseLegacyFormFactorList(proj);
+  const legacyQty=Number(proj.quantity||0);
+  if(!labels.length&&!legacyQty)return[];
+  if(labels.length<=1){
+    return[{id:null,project_id:projectId,so_tag:null,model:labels[0]||'Hardware',quantity:legacyQty||1,hardware_type:labels[0]?guessHardwareType(labels[0]):null,screen_size:'',peripherals:'',migration_review:false,_legacy:true}];
+  }
+  // Multiple legacy labels, one overall quantity, not yet migrated — same
+  // "never guess the split" rule the migration uses: show each label at
+  // qty 1 rather than inventing a distribution.
+  return labels.map(label=>({id:null,project_id:projectId,so_tag:null,model:label,quantity:1,hardware_type:guessHardwareType(label),screen_size:'',peripherals:'',migration_review:true,_legacy:true}));
+}
+// Compact "1× SparkXL · 2× Add-on Locker". Pass {docStyle:true} for the
+// generated-document format: "1 × SparkXL; 2 × Add-on Locker".
+function getHardwareSummary(projectId,soTag,opts){
+  const rows=getProjectHardware(projectId,soTag);
+  if(!rows.length)return'';
+  const docStyle=!!opts?.docStyle;
+  return rows.map(h=>docStyle?`${h.quantity||1} × ${h.model||'Hardware'}`:`${h.quantity||1}× ${h.model||'Hardware'}`).join(docStyle?'; ':' · ');
+}
+function getPrimaryMachineCount(projectId,soTag){
+  return getProjectHardware(projectId,soTag).filter(h=>effectiveHardwareType(h)==='primary-kiosk').reduce((s,h)=>s+Number(h.quantity||0),0);
+}
+function getAddOnCount(projectId,soTag){
+  return getProjectHardware(projectId,soTag).filter(h=>effectiveHardwareType(h)==='addon-locker').reduce((s,h)=>s+Number(h.quantity||0),0);
+}
+function getTotalHardwareCount(projectId,soTag){
+  return getProjectHardware(projectId,soTag).reduce((s,h)=>s+Number(h.quantity||0),0);
+}
+// Canonical UAT machine-type guesser. Replaces the old formFactorToUATMachineTypes
+// (which parsed projects.form_factor free text) — this derives candidates from
+// each project's hardware_line_items (via getProjectHardware/effectiveHardwareType)
+// so it can tell an Add-on Locker apart from a Standalone Locker using the real
+// hardware_type classification instead of just matching the word "locker".
+// An addon-locker row intentionally does NOT add 'Locker' to the result — only
+// a standalone-locker row does. Types are collected into a Set, so a line with
+// quantity>1 still contributes each matching type only once — it never spawns
+// duplicate UAT type entries just because quantity is greater than 1.
+function hardwareToUATMachineTypes(projectId,soTag){
+  const rows=getProjectHardware(projectId,soTag);
+  const types=new Set();
+  rows.forEach(h=>{
+    const s=(h.model||'').toLowerCase();
+    if(effectiveHardwareType(h)==='standalone-locker')types.add('Locker');
+    if(s.includes('sparkxl')||s.includes('spark xl'))types.add('Spark XL');
+    if(s.includes('companion'))types.add('Companion');
+    if(s.includes('sit-down ted')||s==='ted'||(/\bted\b/.test(s)&&!s.includes('su')&&!s.includes('stand')))types.add('TED');
+    if(s.includes('stand-up ted')||s.includes('ted su'))types.add('TED SU');
+  });
+  return[...types];
+}
+function projectNeedsHardwareMigrationReview(projectId){
+  return hardwareLineItems.some(h=>h.project_id===projectId&&h.migration_review);
+}
+function getHardwareMigrationReviewProjects(){
+  const ids=[...new Set(hardwareLineItems.filter(h=>h.migration_review).map(h=>h.project_id))];
+  return ids.map(id=>projects.find(p=>p.id===id)).filter(Boolean);
+}
+// Builds the hardware_line_items rows that should represent a project's
+// legacy Product Type / Form Factor / Quantity data. Shared by the manual
+// "Convert legacy hardware" button (one project) and the bulk migration
+// (all projects) so both follow the exact same never-guess-the-split rule.
+function deriveLegacyHardwareLines(proj){
+  const labels=parseLegacyFormFactorList(proj);
+  const legacyQty=Number(proj.quantity||0);
+  if(!labels.length){
+    if(!legacyQty)return[];
+    return[{model:'Hardware (unspecified)',quantity:legacyQty,hardware_type:null,migration_review:true,migration_legacy_qty:legacyQty,migration_legacy_note:'Migrated from project quantity — no Product Type/Form Factor was set to identify the hardware model. Set the correct model below.'}];
+  }
+  if(labels.length===1){
+    return[{model:labels[0],quantity:legacyQty||1,hardware_type:guessHardwareType(labels[0]),migration_review:false,migration_legacy_qty:null,migration_legacy_note:null}];
+  }
+  // Multiple form factors, one overall quantity — never invent a split.
+  // Preserve every label at qty 1, flag for review, and keep the original
+  // combined quantity visible until a human confirms the real breakdown.
+  const note=`Migrated from legacy Product Type "${labels.join(', ')}" with a single overall quantity of ${legacyQty||'(not set)'}. Quantities default to 1 each — confirm the actual split per line; this notice clears once none of this project's hardware is flagged for review.`;
+  return labels.map(label=>({model:label,quantity:1,hardware_type:guessHardwareType(label),migration_review:true,migration_legacy_qty:legacyQty||null,migration_legacy_note:note}));
+}
+// ── Bulk migration — idempotent ──────────────────────────────────────────
+// Only touches projects with ZERO hardware_line_items rows right now. A
+// project that already has rows (from this migration, from intake, or
+// hand-entered) is never revisited, so running this any number of times
+// never duplicates, resets, or overwrites anything (Legacy Cases C & D).
+async function runHardwareLineItemsMigration(){
+  const existingProjectIds=new Set(hardwareLineItems.map(h=>h.project_id));
+  const candidates=projects.filter(p=>{
+    if(existingProjectIds.has(p.id))return false;
+    return parseLegacyFormFactorList(p).length>0||Number(p.quantity||0)>0;
+  });
+  if(!candidates.length)return{migratedProjects:0,rows:0,reviewFlagged:0};
+  const inserts=[];
+  candidates.forEach(p=>{
+    const soList=getSOList(p);
+    const soTag=soList.length===1?soList[0]:null; // multi-SO → "All SOs" until reassigned per line
+    deriveLegacyHardwareLines(p).forEach((line,i)=>{
+      inserts.push({
+        project_id:p.id,so_tag:soTag,model:line.model,quantity:line.quantity,
+        screen_size:'',peripherals:'',sort_order:i,created_by:'System (migration)',
+        hardware_type:line.hardware_type||null,migration_review:!!line.migration_review,
+        migration_legacy_qty:line.migration_legacy_qty||null,migration_legacy_note:line.migration_legacy_note||null,
+      });
+    });
+  });
+  if(!inserts.length)return{migratedProjects:0,rows:0,reviewFlagged:0};
+  const{data,error}=await sb.from('hardware_line_items').insert(inserts).select();
+  if(error){console.warn('hardware migration insert error',error);return{migratedProjects:0,rows:0,reviewFlagged:0,error};}
+  if(data)hardwareLineItems.push(...data);
+  // One Activity Log entry per migrated PROJECT (never one per row) — this can
+  // run across dozens of projects in a single background pass, so per-row
+  // logging would flood each project's activity feed. Skipped entirely for
+  // projects untouched by this run (only candidates got an insert above).
+  if(data?.length){
+    candidates.forEach(p=>{
+      const rowsForProj=data.filter(d=>d.project_id===p.id);
+      if(!rowsForProj.length)return;
+      const reviewCount=rowsForProj.filter(d=>d.migration_review).length;
+      logActivity(
+        'system: migrated legacy hardware to line item(s)'+(reviewCount?` (${reviewCount} flagged for quantity review)`:''),
+        'hardware',rowsForProj.map(d=>d.model).join(', '),p.id
+      );
+    });
+  }
+  return{migratedProjects:candidates.length,rows:inserts.length,reviewFlagged:inserts.filter(i=>i.migration_review).length};
 }
 
 // Shipping site count with the same legacy-vs-dedicated distinction.
@@ -833,6 +1004,12 @@ const SOFTWARE_WORK_TYPES=['New UI','Enhancement','Bug Fix','Integration','Confi
 const SOFTWARE_STATUS_OPTS=['Pending','Dev WIP','QA WIP','Bug Fix','Blocked','Complete'];
 
 let projects=[],milestones=[],activityLog=[],vinylSchedule=[],planogramSchedule=[],softwareItems=[],checkinStatus={},milestoneDone={},milestoneHistory={},appSettings={},extensionRequests=[];
+// Canonical hardware store — every page reads hardware/quantity through the
+// resolver functions below (getProjectHardware / getHardwareSummary / etc.),
+// never through projects.product_type / projects.form_factor / projects.quantity
+// directly. Loaded once in loadAll() like every other global table.
+let hardwareLineItems=[];
+let hwMigrationRanThisSession=false;
 let selectedProjId=null,weekStart=monday(new Date()),currentTab='glance',dragSrc=null,dragType='';
 // Milestones queued for deletion inside the "Edit project" modal — cleared/deleted
 // together on Save instead of hitting the DB (and reloading) on every single click.
@@ -1394,7 +1571,7 @@ async function loadAll(){
   // fetchAllRows pages through each table so we always get every row,
   // regardless of Supabase's server-side Max Rows cap (a single .range()
   // request is capped server-side no matter how large a range you ask for).
-  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext,ppo,ppl,prd,psec]=await Promise.all([
+  const[pr,ms,lg,ci,md,mh,ah,as_,pl,dev,sod,ext,ppo,ppl,prd,psec,hli]=await Promise.all([
     fetchAllRows('projects',{orderCol:'created_at'}),
     fetchAllRows('milestones',{orderCol:'date'}),
     sb.from('activity_log').select('*').order('created_at',{ascending:false}).limit(100),
@@ -1411,7 +1588,10 @@ async function loadAll(){
     fetchAllRows('procurement_po_projects'),
     fetchAllRows('procurement_readiness',{tiebreak:'project_id'}),
     fetchAllRows('project_sections',{select:'project_id,section_key,content'}),
+    fetchAllRows('hardware_line_items',{orderCol:'sort_order'}),
   ]);
+  if(hli.error)console.warn('hardware_line_items load error',hli.error);
+  hardwareLineItems=hli.data||[];
   // Global lookup for intake notes (project_sections) by project — used to show
   // dept-specific notes (shipping/install/production/etc.) on their respective
   // schedule pages, not just inside the single currently-open Project Page.
@@ -1489,6 +1669,21 @@ async function loadAll(){
     }
   });
   if(projects.length&&!selectedProjId)selectedProjId=projects[0].id;
+
+  // One-time-per-session hardware backfill: makes hardware_line_items the
+  // real source of truth for every existing project, not just newly-touched
+  // ones. Idempotent (see runHardwareLineItemsMigration) so this is safe to
+  // fire on every first load — after the first pass every migrated project
+  // has rows and is skipped on subsequent loads/sessions.
+  if(!hwMigrationRanThisSession){
+    hwMigrationRanThisSession=true;
+    runHardwareLineItemsMigration().then(r=>{
+      if(r.rows){
+        console.info(`Hardware migration: created ${r.rows} line item(s) across ${r.migratedProjects} project(s)${r.reviewFlagged?`, ${r.reviewFlagged} flagged for quantity review`:''}.`);
+        renderTab();
+      }
+    }).catch(e=>console.warn('hardware migration scan failed',e));
+  }
 
   // Load vinyl schedule from Supabase, then merge with project data
   const[vsRes,psRes]=await Promise.all([
@@ -2246,7 +2441,10 @@ const PROD_FAMILIES=[
   {key:'ted',label:'TED',icon:'🖥️',color:'#059669'},
 ];
 function classifyFamily(p){
-  const t=(p.product_type||'').toLowerCase();
+  // Reads through the canonical hardware resolver (falls back to legacy
+  // product_type/form_factor text automatically) instead of the raw field
+  // directly, so classification stays correct after a project migrates.
+  const t=getProjectHardware(p.id).map(h=>h.model||'').join(' ').toLowerCase();
   if(t.includes('locker'))return'lockers';
   if(t.includes('ted'))return'ted';
   return'vending';
@@ -2478,7 +2676,11 @@ async function queueDrop(e,boardKey,targetZone){
 }
 
 function queueCard(p,boardKey){
-  const detail=[p.product_type,p.form_factor].filter(Boolean).join(' — ');
+  // Shared by both the Production and QA queue boards — canonical hardware
+  // summary, clickable straight into the shared Hardware & Solution
+  // Configuration editor so a correction doesn't require a trip to Project
+  // Page. This one function fixes both Part 8 (Production) and Part 9 (QA).
+  const detail=getHardwareSummary(p.id);
   const fam=PROD_FAMILIES.find(f=>f.key===classifyFamily(p));
   const health=getStageHealth(p,getProjectStage(p));
   const healthColor=health==='red'?'#ef4444':health==='amber'?'#f59e0b':'#22c55e';
@@ -2504,7 +2706,7 @@ function queueCard(p,boardKey){
       <div style="font-size:12px;font-weight:700;line-height:1.3">${p.name}</div>
       <span style="font-size:12px;flex-shrink:0" title="${esc(fam.label)}">${fam.icon}</span>
     </div>
-    ${detail?`<div style="font-size:10px;color:var(--gray-500);margin-top:2px">${detail}</div>`:''}
+    <div onclick="event.stopPropagation();openHardwareEditor('${p.id}')" title="Click to edit hardware" style="font-size:10px;color:${detail?'var(--gray-500)':'var(--gray-300)'};margin-top:2px;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;font-style:${detail?'normal':'italic'}">${detail?esc(detail):'+ Add hardware'}</div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-top:5px">
       <span style="font-family:var(--mono);font-size:9.5px;color:var(--red)" title="${(p.so_number||'').replace(/"/g,'&quot;')}">${soDisplay}</span>
       <span style="font-size:10px;color:var(--gray-500)">${p.pm||'—'}</span>
@@ -2784,7 +2986,7 @@ function renderProductionBoardView(){
       const wSecs=b.waiting&&b.waiting_since?Math.round((Date.now()-new Date(b.waiting_since).getTime())/1000):null;
       const rl=(pbHub.reasons.find(r=>r.code===b.waiting_reason)||{}).label||b.waiting_reason||'';
       const late=prodEnd&&daysDiff(prodEnd)<0&&pbHubStageOf(p)!=='shipped';
-      const machine=[p.product_type,p.form_factor].filter(Boolean).join(' · ');
+      const machine=getHardwareSummary(p.id);
       const naming=(getSOConfigSummary(p).naming_convention||'');
       const prodNote=getGlobalSection(p.id,'notes_production');
       return`<div class="pb-card ${b.waiting?'pb-waiting':''}" style="border-left-color:${b.waiting?'#d97706':s.color}" onclick="goToProjPage('${p.id}')">
@@ -4634,7 +4836,7 @@ function applyScheduleFilters(list,dept){
     if(f.search){
       const q=f.search.toLowerCase();
       const proj=linkedProjectOf(item);
-      const hay=((item.name||'')+' '+(item.so||'')+' '+(item.client||'')+' '+(proj?.form_factor||'')).toLowerCase();
+      const hay=((item.name||'')+' '+(item.so||'')+' '+(item.client||'')+' '+(proj?getHardwareSummary(proj.id):(item.form_factor||''))).toLowerCase();
       if(!hay.includes(q))return false;
     }
     if(f.dateFrom&&item.date&&item.date<f.dateFrom)return false;
@@ -4771,7 +4973,7 @@ function renderPlanogram(){
       <td style="${readStyle}max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${soFull}">${item.so?truncateSO(item.so,3):'—'}</td>
       <td style="${readStyle}max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(item.client||'').replace(/"/g,'&quot;')}">${item.client||'—'}</td>
       <td style="${readStyle}max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(item.name||'').replace(/"/g,'&quot;')}">${item.name||'—'}</td>
-      <td style="${readStyle}max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${((planLinkedProj(item)?.form_factor)||'').replace(/"/g,'&quot;')}">${planLinkedProj(item)?.form_factor||'—'}</td>
+      ${(()=>{const lp=planLinkedProj(item);const hwText=lp?getHardwareSummary(lp.id):(item.form_factor||'');const safe=esc(hwText||'—');return lp?`<td style="${readStyle}max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;text-decoration:underline;text-decoration-style:dotted" title="${hwText?safe.replace(/"/g,'&quot;'):'Click to add hardware'}" onclick="openHardwareEditor('${lp.id}')">${safe}</td>`:`<td style="${readStyle}max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${safe.replace(/"/g,'&quot;')}">${safe}</td>`;})()}
       <td><input type="date" class="sched-input" style="width:120px" value="${item.planStart||''}" onchange="ps2('${item.id}','planStart',this.value)" title="Planogram start"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.planEnd||''}" onchange="ps2('${item.id}','planEnd',this.value)" title="Planogram end"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${origIdx},'date',this.value,'planogram')"></td>
@@ -4990,6 +5192,16 @@ async function syncVinylFromProjects(){
   await loadAll();
 }
 function vinylFormFactorCell(item,origIdx){
+  // Project-linked rows show the canonical hardware summary and edit through
+  // the shared Hardware & Solution Configuration editor — no more separate
+  // vinyl_schedule.form_factor snapshot that can drift from the real
+  // hardware. Standalone/ad hoc rows (no project_id) aren't real projects,
+  // so they keep the original local, manually-editable form factor picker.
+  if(item.project_id){
+    const summary=getHardwareSummary(item.project_id);
+    const display=summary?esc(summary):'<span style="color:var(--gray-400)">— none —</span>';
+    return`<div onclick="openHardwareEditor('${item.project_id}')" title="${summary?esc(summary).replace(/"/g,'&quot;'):'Click to add hardware'}" style="max-width:170px;font-size:11px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px">${display}</div>`;
+  }
   const selected=(item.formFactor||'').split(',').map(s=>s.trim()).filter(Boolean);
   const display=selected.length?selected.join(', '):'<span style="color:var(--gray-400)">— none —</span>';
   const key=item.id||origIdx;
@@ -5680,6 +5892,49 @@ function renderBriefing(){
 }
 
 // ── INTAKE ─────────────────────────────────────────────────
+// New Project intake builds real, per-type hardware_line_items rows directly
+// (see saveIntake) instead of one combined product_type string + one overall
+// quantity — the exact ambiguous shape the migration/never-guess-the-split
+// logic exists to clean up. Since the user gives an explicit quantity per
+// hardware type right here, there's no ambiguity to flag: rows are created
+// with migration_review=false. Rows are add/remove-able without a full
+// re-render of the tab (which would wipe every other in-progress field).
+function intakeHwRowHtml(idx,type,qty){
+  return`<div class="intake-hw-row" data-idx="${idx}" style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+    <select style="flex:1;font-family:var(--font);font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white)">
+      <option value="">Select hardware type...</option>
+      ${getProductTypes().map(t=>`<option${t===type?' selected':''}>${esc(t)}</option>`).join('')}
+    </select>
+    <input type="number" min="1" value="${qty||1}" placeholder="Qty" style="width:64px;font-family:var(--font);font-size:12px;padding:6px 8px;border:1px solid var(--gray-300);border-radius:var(--radius)">
+    <button type="button" onclick="intakeRemoveHwRow(this)" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px;flex-shrink:0" title="Remove row">✕</button>
+  </div>`;
+}
+function intakeAddHwRow(){
+  const c=document.getElementById('i-hw-rows');
+  if(!c)return;
+  c.insertAdjacentHTML('beforeend',intakeHwRowHtml(c.children.length,'',1));
+}
+function intakeRemoveHwRow(btn){
+  const rows=document.getElementById('i-hw-rows');
+  const row=btn.closest('.intake-hw-row');
+  // Always leave at least one row so the field never disappears entirely —
+  // clear it instead of removing the last one.
+  if(rows&&rows.children.length<=1){
+    row.querySelector('select').value='';
+    row.querySelector('input[type="number"]').value='1';
+    return;
+  }
+  row.remove();
+}
+// Reads the current state of the #i-hw-rows rows into [{model,quantity}],
+// skipping rows where no hardware type was chosen.
+function intakeReadHwRows(){
+  return[...document.querySelectorAll('#i-hw-rows .intake-hw-row')].map(row=>{
+    const model=row.querySelector('select')?.value||'';
+    const quantity=parseInt(row.querySelector('input[type="number"]')?.value)||1;
+    return{model,quantity};
+  }).filter(r=>r.model);
+}
 function renderIntake(){
   const el=document.getElementById('tab-intake');
   el.innerHTML=`<div class="section"><div class="section-head"><div class="section-title">New project intake</div><div class="section-meta">Populates all tabs on submit</div></div>
@@ -5689,13 +5944,10 @@ function renderIntake(){
       <div class="field"><label>Sales order (SO) number *</label><input id="i-so" placeholder="e.g. SO-2026-0142" style="font-family:var(--mono)"></div>
       <div class="field"><label>End Client *</label><input id="i-client" placeholder="End client name"></div>
       <div class="field"><label>Channel Partner (CP)</label><input id="i-cp" placeholder="e.g. Direct, TD Synnex..."></div>
-      <div class="field full"><label>Product type / Form factor <span style="font-size:10px;color:var(--gray-400);font-weight:400">— select all that apply</span></label>
-        <select id="i-type" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:120px">
-          ${getProductTypes().map(t=>`<option>${t}</option>`).join('')}
-        </select>
-        <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
+      <div class="field full"><label>Hardware <span style="font-size:10px;color:var(--gray-400);font-weight:400">— add one row per distinct hardware type, each with its own quantity (e.g. 1× SparkXL + 2× Add-on Locker)</span></label>
+        <div id="i-hw-rows">${intakeHwRowHtml(0,'',1)}</div>
+        <button type="button" onclick="intakeAddHwRow()" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-top:2px;text-decoration:underline;font-family:var(--font)">+ Add another hardware type</button>
       </div>
-      <div class="field"><label>Quantity</label><input id="i-qty" type="number" min="1" placeholder="e.g. 2"></div>
       <div class="field"><label>Delivery location</label><input id="i-loc" placeholder="City, Province, Country"></div>
       <div class="field full"><label>Naming convention</label><input id="i-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono)"></div>
       <div class="field"><label>Project Manager</label>
@@ -5827,9 +6079,23 @@ async function saveIntake(){
   const channelPartner=document.getElementById('i-cp')?.value.trim()||'';
   const vinylType=document.getElementById('i-vinyl-type').value;
   const formFactor='';
-  const productType=[...document.getElementById('i-type').selectedOptions].map(o=>o.value).join(', ');
-  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,channel_partner:channelPartner,product_type:productType,quantity:parseInt(document.getElementById('i-qty').value)||null,location:imacAddress||document.getElementById('i-loc')?.value||'',notes:generalNotes,naming_convention:imacNaming||document.getElementById('i-naming')?.value.trim()||null,status:'active',changed_by:currentUserName,pm,sdm,solutions,sales,account_manager:accountManager,vinyl_type:vinylType,form_factor:formFactor}).select().single();
+  // Read the repeatable hardware rows (see intakeReadHwRows). product_type/
+  // quantity on the project row are still populated too — a plain-text
+  // snapshot kept only for backward compatibility with anything not yet on
+  // the canonical resolver — but the real, unambiguous source of truth is
+  // the hardware_line_items rows inserted below, one per type at its own
+  // explicit quantity (no guessing: the user entered each quantity directly).
+  const hwRows=intakeReadHwRows();
+  const productType=hwRows.map(r=>r.model).join(', ');
+  const totalQty=hwRows.reduce((s,r)=>s+r.quantity,0)||null;
+  const{data:proj,error}=await sb.from('projects').insert({name,so_number:so,client,channel_partner:channelPartner,product_type:productType,quantity:totalQty,location:imacAddress||document.getElementById('i-loc')?.value||'',notes:generalNotes,naming_convention:imacNaming||document.getElementById('i-naming')?.value.trim()||null,status:'active',changed_by:currentUserName,pm,sdm,solutions,sales,account_manager:accountManager,vinyl_type:vinylType,form_factor:formFactor}).select().single();
   if(error){alert('Error: '+error.message);return;}
+  if(hwRows.length){
+    const hwInserts=hwRows.map((r,i)=>({project_id:proj.id,so_tag:null,model:r.model,quantity:r.quantity,hardware_type:guessHardwareType(r.model),migration_review:false,sort_order:i,created_by:currentUserName}));
+    const{data:hwData,error:hwErr}=await sb.from('hardware_line_items').insert(hwInserts).select();
+    if(hwErr)console.warn('hardware_line_items insert error (intake)',hwErr);
+    else if(hwData)hardwareLineItems.push(...hwData);
+  }
   // Save each section's notes individually into project_sections so they can be shown
   // separately on the Project Page (instead of being merged into one untraceable blob)
   const sectionKeyMap={readiness:'notes_readiness',production:'notes_production',ui:'notes_ui',quality:'notes_quality',shipping:'notes_shipping',install:'notes_install'};
@@ -5933,7 +6199,7 @@ async function saveIntake(){
   showToast(toastMsg);
   await loadAll();setTab('glance');
 }
-function clearIntake(){document.querySelectorAll('#tab-intake input,#tab-intake select,#tab-intake textarea').forEach(e=>{e.value='';});}
+function clearIntake(){document.querySelectorAll('#tab-intake input,#tab-intake select,#tab-intake textarea').forEach(e=>{e.value='';});const hwc=document.getElementById('i-hw-rows');if(hwc)hwc.innerHTML=intakeHwRowHtml(0,'',1);}
 
 // ── CANONICAL PROJECT CONFIGURATION ─────────────────────────
 const PROJECT_CONFIG_OPTIONS={
@@ -6044,17 +6310,18 @@ function openEditProj(id){
         <div class="field"><label>Status</label><select id="ep-status"><option value="active"${proj.status==='active'?' selected':''}>Active</option><option value="on-hold"${proj.status==='on-hold'?' selected':''}>On hold</option><option value="software-active"${proj.status==='software-active'?' selected':''}>Software Active</option><option value="complete"${proj.status==='complete'?' selected':''}>Complete</option></select></div>
         <div class="field full"><label>Naming convention <span style="font-weight:400;font-size:10px">(one per line)</span></label><textarea id="ep-naming" placeholder="e.g. GPIX-B2B-SUN-CA-ENC" style="font-family:var(--mono);font-size:13px;min-height:60px;resize:vertical">${overviewConfig.naming_convention||''}</textarea></div>
         <div class="field full"><label>Installation address</label><input id="ep-address" value="${overviewConfig.address||''}" placeholder="e.g. 440 N Wolfe Rd, Sunnyvale, CA 94085"></div>
-        <div class="field full"><label>Configuration / Form factor <span style="font-size:10px;color:var(--gray-400);font-weight:400">— select all that apply (same list used in per-SO Configuration)</span></label>
-          <select id="ep-form-factor" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:100px">
-            ${retiredAwareOptionsHtml(getProductTypes(),(overviewConfig.form_factor||'').split(',').map(s=>s.trim()).filter(Boolean))}
-          </select>
-          <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
+        <div class="field full"><label>Hardware <span style="font-size:10px;color:var(--gray-400);font-weight:400">— read-only here; edit from the Hardware & Solution Configuration panel</span></label>
+          <div style="font-size:12px;padding:8px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--gray-50);display:flex;align-items:center;justify-content:space-between;gap:10px">
+            <span>${esc(getHardwareSummary(proj.id)||'No hardware configured yet')}</span>
+            <button type="button" onclick="closeModal();openHardwareEditor('${proj.id}')" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;text-decoration:underline;font-family:var(--font);white-space:nowrap">Edit hardware</button>
+          </div>
+          ${projectNeedsHardwareMigrationReview(proj.id)?`<div style="font-size:10px;color:#92600a;margin-top:3px">⚠ Some hardware lines need quantity-split review — open Edit hardware to confirm.</div>`:''}
         </div>
         <div class="field full"><label>UAT machine type(s) <span style="font-size:10px;color:var(--gray-400);font-weight:400">— which checklist(s) this project uses; set once here rather than re-guessed each time</span></label>
           <select id="ep-uat-machine-types" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:90px">
-            ${UAT_MACHINE_TYPES.map(t=>`<option${(Array.isArray(proj.uat_machine_types)&&proj.uat_machine_types.length?proj.uat_machine_types:formFactorToUATMachineTypes(overviewConfig.form_factor)).includes(t)?' selected':''}>${t}</option>`).join('')}
+            ${UAT_MACHINE_TYPES.map(t=>`<option${(Array.isArray(proj.uat_machine_types)&&proj.uat_machine_types.length?proj.uat_machine_types:hardwareToUATMachineTypes(proj.id)).includes(t)?' selected':''}>${t}</option>`).join('')}
           </select>
-          <div style="font-size:10px;color:var(--gray-400);margin-top:3px">${Array.isArray(proj.uat_machine_types)&&proj.uat_machine_types.length?'Confirmed':'Not yet confirmed — pre-checked with a best guess from Form Factor, please verify'}</div>
+          <div style="font-size:10px;color:var(--gray-400);margin-top:3px">${Array.isArray(proj.uat_machine_types)&&proj.uat_machine_types.length?'Confirmed':'Not yet confirmed — pre-checked with a best guess from configured Hardware, please verify'}</div>
         </div>
         <div class="field full"><div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.06em;margin-top:6px;padding-top:10px;border-top:1px solid var(--gray-100)">Project configuration</div></div>
         <div class="field"><label>Voltage</label>${epSelect('ep-voltage',PROJECT_CONFIG_OPTIONS.voltage,proj.voltage)}</div>
@@ -6198,7 +6465,12 @@ async function saveEditProj(id){
     vision_training_url:document.getElementById('ep-vision-training')?.value.trim()||null,
     naming_convention:document.getElementById('ep-naming')?.value.trim()||null,
     address:document.getElementById('ep-address')?.value.trim()||null,
-    form_factor:document.getElementById('ep-form-factor')?[...document.getElementById('ep-form-factor').selectedOptions].map(o=>o.value).join(', ')||null:null,
+    // form_factor intentionally NOT included here — it's a legacy field, now
+    // read-only display (sourced from hardware_line_items via getHardwareSummary)
+    // in this modal. Omitting the key leaves whatever value is already in the
+    // database untouched instead of overwriting it with null now that the
+    // ep-form-factor <select> no longer exists. Edit hardware via
+    // openHardwareEditor(), which writes hardware_line_items directly.
     uat_machine_types:document.getElementById('ep-uat-machine-types')?[...document.getElementById('ep-uat-machine-types').selectedOptions].map(o=>o.value):null,
     voltage:document.getElementById('ep-voltage')?.value||null,
     plug_type:document.getElementById('ep-plug-type')?.value||null,
@@ -6315,7 +6587,12 @@ async function saveEditProj(id){
   await syncProjectFieldsToSingleSO(id,{
     address:document.getElementById('ep-address')?.value.trim()||'',
     naming_convention:document.getElementById('ep-naming')?.value.trim()||'',
-    form_factor:document.getElementById('ep-form-factor')?[...document.getElementById('ep-form-factor').selectedOptions].map(o=>o.value).join(', '):'',
+    // form_factor intentionally omitted — see the matching note in saveEditProj's
+    // main sb.from('projects').update() above; the ep-form-factor <select> was
+    // replaced with a read-only Hardware summary + "Edit hardware" link, and this
+    // key would otherwise overwrite the SO's existing so_details.form_factor with
+    // an empty string on every single-SO project save (getElementById returns
+    // null → ternary fell through to '').
     odoo_url:document.getElementById('ep-odoo')?.value.trim()||'',
     ui_task_url:document.getElementById('ep-jira')?.value.trim()||'',
     qa_task_url:document.getElementById('ep-qa')?.value.trim()||'',
@@ -6654,22 +6931,23 @@ function exportToExcel(){
 
   const wb=XLSX.utils.book_new();
   // Sheet 1: Projects & Milestones — filtered to current view
-  const r1=[['Project','SO Number','Client','Product Type','Status','Milestone','Type','Date','Days from today','Last changed by']];
+  const r1=[['Project','SO Number','Client','Hardware','Status','Milestone','Type','Date','Days from today','Last changed by']];
   exportProjects.forEach(p=>{
     const pMs=milestones.filter(m=>m.project_id===p.id&&(!hideMs||!isMilestoneEffectivelyDone(m)));
-    if(!pMs.length){r1.push([p.name,p.so_number,p.client,p.product_type,p.status,'','','','','']);}
-    else{pMs.forEach((m,i)=>r1.push([i===0?p.name:'',i===0?p.so_number:'',i===0?p.client:'',i===0?p.product_type:'',i===0?p.status:'',m.label,getMilestoneDisplayLabel(m),m.date,m.date?daysDiff(m.date):'',m.changed_by||'']));}
+    const pHwSummary=getHardwareSummary(p.id);
+    if(!pMs.length){r1.push([p.name,p.so_number,p.client,pHwSummary,p.status,'','','','','']);}
+    else{pMs.forEach((m,i)=>r1.push([i===0?p.name:'',i===0?p.so_number:'',i===0?p.client:'',i===0?pHwSummary:'',i===0?p.status:'',m.label,getMilestoneDisplayLabel(m),m.date,m.date?daysDiff(m.date):'',m.changed_by||'']));}
   });
   const ws1=XLSX.utils.aoa_to_sheet(r1);ws1['!cols']=[{wch:28},{wch:14},{wch:18},{wch:18},{wch:10},{wch:26},{wch:16},{wch:12},{wch:14},{wch:18}];XLSX.utils.book_append_sheet(wb,ws1,'Projects & Milestones');
   // Sheet 2: Vinyl Schedule — respect vinyl filters
   const r2=[['Priority','SO','Customer','Project','Type','Vinyl Date','Ship Date','PM','Form Factor','Status']];
   const vinylExport=(hideCompleted['vinyl']?vinylSchedule.filter(v=>v.status!=='Complete'):vinylSchedule)
     .filter(v=>{const p=projects.find(x=>x.id===v.project_id);if(!p)return!pmFilter&&!salesFilter;if(pmFilter&&p.pm!==pmFilter)return false;if(salesFilter&&p.sales!==salesFilter)return false;return true;});
-  vinylExport.forEach((item,i)=>r2.push([i+1,item.so,item.client,item.name,item.vinylType,item.date||'TBD',item.shipDate||'TBD',item.pm,item.formFactor,item.status]));
+  vinylExport.forEach((item,i)=>r2.push([i+1,item.so,item.client,item.name,item.vinylType,item.date||'TBD',item.shipDate||'TBD',item.pm,item.project_id?getHardwareSummary(item.project_id):item.formFactor,item.status]));
   const ws2=XLSX.utils.aoa_to_sheet(r2);XLSX.utils.book_append_sheet(wb,ws2,'Vinyl Schedule');
   // Sheet 3: Planogram Schedule
   const r3=[['Priority','SO','Customer','Project','Form Factor','Plan Start','Plan End','Sign-off Date','Status']];
-  planogramSchedule.forEach((item,i)=>r3.push([i+1,item.so,item.client,item.name,planLinkedProj(item)?.form_factor||'',item.planStart||'',item.planEnd||'',item.date||'TBD',item.status]));
+  planogramSchedule.forEach((item,i)=>{const lp=planLinkedProj(item);r3.push([i+1,item.so,item.client,item.name,lp?getHardwareSummary(lp.id):(item.form_factor||''),item.planStart||'',item.planEnd||'',item.date||'TBD',item.status]);});
   const ws3=XLSX.utils.aoa_to_sheet(r3);XLSX.utils.book_append_sheet(wb,ws3,'Planogram Schedule');
   // Sheet 4: Production
   const r4=[['Project','SO','Client','Prod Start','Prod End','Duration','Status']];
@@ -7080,10 +7358,15 @@ async function addCustomLinkSlot(){
 function ppBuildHardwareShippingData(){
   const proj=projects.find(p=>p.id===ppProjId);
   const hwSoOpts=getSOList(proj?.so_number||proj?.so_number||'');
-  const hwLegacyBanner=(!ppData.hardware.length&&proj?.quantity)?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;font-size:12px;color:#92600a">This project is currently using the legacy hardware quantity (${proj?.quantity}). Convert it into an editable hardware line to add model, screen size, and peripherals.<br><button onclick="ppConvertLegacyHardware()" style="margin-top:6px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid #d97706;background:white;color:#92600a;cursor:pointer">Create Hardware Line from Existing Project Data</button></div>`:'';
-  const hardwareHtml=ppData.hardware.map(h=>`<tr data-id="${h.id}">
+  const legacyLabels=proj?parseLegacyFormFactorList(proj):[];
+  const hasLegacyData=legacyLabels.length>0||Number(proj?.quantity||0)>0;
+  const hwLegacyBanner=(!ppData.hardware.length&&hasLegacyData)?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;font-size:12px;color:#92600a">This project is currently using the legacy Product Type/Form Factor${legacyLabels.length?` (${esc(legacyLabels.join(', '))})`:''}${proj?.quantity?` and quantity (${proj.quantity})`:''}. Convert it into editable hardware line(s) to add screen size, peripherals, and per-model quantities.<br><button onclick="ppConvertLegacyHardware()" style="margin-top:6px;font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid #d97706;background:white;color:#92600a;cursor:pointer">Create Hardware Line${legacyLabels.length>1?'s':''} from Existing Project Data</button></div>`:'';
+  const reviewRows=ppData.hardware.filter(h=>h.migration_review);
+  const hwReviewBanner=reviewRows.length?`<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;font-size:12px;color:#991b1b">⚠ ${reviewRows.length} hardware line${reviewRows.length>1?'s need':' needs'} quantity review — migrated from a legacy record that listed multiple form factors under one combined quantity${reviewRows[0]?.migration_legacy_qty?` (originally ${reviewRows[0].migration_legacy_qty} total)`:''}. Each defaulted to qty 1 below; correct the real split per line. The warning clears automatically once every line has been edited.</div>`:'';
+  const hardwareHtml=ppData.hardware.map(h=>`<tr data-id="${h.id}"${h.migration_review?' style="background:#fffbeb"':''}>
     ${hwSoOpts.length>1?`<td><select onchange="ppHardwareChange('${h.id}','so_tag',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value=""${!h.so_tag?' selected':''}>All SOs</option>${hwSoOpts.map(so=>`<option value="${so}"${h.so_tag===so?' selected':''}>${so}</option>`).join('')}</select></td>`:''}
-    <td><input value="${h.model||''}" placeholder="Model / machine type" oninput="ppHardwareChange('${h.id}','model',this.value)"></td>
+    <td>${h.migration_review?'⚠ ':''}<input value="${h.model||''}" placeholder="Model / machine type" title="${h.migration_legacy_note?esc(h.migration_legacy_note).replace(/"/g,'&quot;'):''}" oninput="ppHardwareChange('${h.id}','model',this.value)"></td>
+    <td><select onchange="ppHardwareChange('${h.id}','hardware_type',this.value)" style="font-family:var(--font);font-size:12px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value=""${!h.hardware_type?' selected':''}>— Type —</option>${HARDWARE_TYPES.map(t=>`<option value="${t.id}"${h.hardware_type===t.id?' selected':''}>${t.label}</option>`).join('')}</select></td>
     <td><input type="number" min="1" step="1" value="${h.quantity||1}" style="width:60px" oninput="ppHardwareChange('${h.id}','quantity',this.value)"></td>
     <td><input value="${h.screen_size||''}" placeholder="e.g. 21.5&quot;" oninput="ppHardwareChange('${h.id}','screen_size',this.value)"></td>
     <td><input value="${h.peripherals||''}" placeholder="e.g. Badge reader, UBIE boards" oninput="ppHardwareChange('${h.id}','peripherals',this.value)"></td>
@@ -7103,7 +7386,7 @@ function ppBuildHardwareShippingData(){
     <td><input value="${s.contact_phone||''}" placeholder="Phone" oninput="ppShippingChange('${s.id}','contact_phone',this.value)"></td>
     <td class="pp-actions"><button class="pp-del" onclick="ppDelShipping('${s.id}')">✕</button></td>
   </tr>`).join('');
-  return{hwSoOpts,hwLegacyBanner,hardwareHtml,hwTotalQty,shSoOpts,shLegacyBanner,shippingHtml};
+  return{hwSoOpts,hwLegacyBanner,hwReviewBanner,hardwareHtml,hwTotalQty,shSoOpts,shLegacyBanner,shippingHtml};
 }
 
 function renderProjPageBody(){
@@ -7321,7 +7604,7 @@ function renderProjPageBody(){
           <span>📋 SO: ${getSOList(proj).map(so=>'<strong style="cursor:pointer;text-decoration:underline;color:#93c5fd" onclick="switchProjPageBySO(\''+so+'\')" title="Go to '+so+'">'+so+'</strong>').join(', ')||'—'}</span>
           <span>👤 PM: <strong>${proj.pm||'—'}</strong></span>
           <span>🏢 ${proj.client||'—'}</span>
-          ${proj.product_type?`<span>📦 ${proj.product_type}</span>`:''}
+          ${(()=>{const hs=getHardwareSummary(proj.id);return hs?`<span>📦 ${esc(hs)}</span>`:'';})()}
           ${proj.naming_convention?`<span>🏷 ${esc(proj.naming_convention)}</span>`:''}
           ${proj.address?`<span>📍 ${esc(proj.address)}</span>`:''}
           ${proj.location&&proj.location!==proj.address?`<span>🗺 <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(proj.location)}" target="_blank" style="color:#93c5fd;text-decoration:underline">${proj.location}</a></span>`:''}
@@ -7679,23 +7962,22 @@ function openSOConfigModal(projId,so){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
   const saved=soDetails.find(d=>d.project_id===projId&&d.so_tag===so);
-  const formFactor=saved?.form_factor??proj.form_factor??'';
   const qaUrl=saved?.qa_task_url||proj.qa_task_url||'';
   const odooUrl=saved?.odoo_url||proj.odoo_url||'';
   const installUrl=saved?.install_ticket_url||proj.install_ticket_url||'';
   const uiUrl=saved?.ui_task_url||proj.ui_task_url||'';
   const coiRequiredVal=saved?.coi_required==='yes'?'yes':'no';
-  const activeTypes=getProductTypes();
-  const selectedTypes=formFactor.split(',').map(s=>s.trim()).filter(Boolean);
+  const soHwSummary=getHardwareSummary(projId,so);
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:480px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
     <div class="modal-head"><span class="modal-title">⚙ Configuration — SO ${so}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
       <div class="field full" style="margin-bottom:12px">
-        <label>Configuration / Form factor <span style="font-size:10px;color:var(--gray-400);font-weight:400">— select all that apply for this SO</span></label>
-        <select id="soc-formfactor" multiple style="font-family:var(--font);font-size:12px;padding:4px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);width:100%;height:110px">
-          ${retiredAwareOptionsHtml(activeTypes,selectedTypes)}
-        </select>
-        <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hold Ctrl/Cmd to select multiple</div>
+        <label>Hardware <span style="font-size:10px;color:var(--gray-400);font-weight:400">— for SO ${so}</span></label>
+        <div style="font-size:12px;padding:8px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--gray-50);display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <span>${soHwSummary?esc(soHwSummary):'No hardware entered yet'}</span>
+          <button type="button" onclick="closeModal();openHardwareEditor('${projId}','${so}')" style="font-size:11px;padding:4px 10px;border-radius:var(--radius);border:1px solid var(--blue);background:white;color:var(--blue);cursor:pointer;font-family:var(--font);white-space:nowrap;flex-shrink:0">Edit hardware →</button>
+        </div>
+        <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hardware is managed in one place — Hardware &amp; Solution Configuration — so it can never disagree with what's shown elsewhere.</div>
       </div>
       <div class="field full" style="margin-bottom:12px"><label>COI Required <span style="font-size:10px;color:var(--gray-400);font-weight:400">— this SO's location, not the whole project</span></label>
         <select id="soc-coi-required"><option value="no"${coiRequiredVal==='no'?' selected':''}>No</option><option value="yes"${coiRequiredVal==='yes'?' selected':''}>Yes</option></select>
@@ -7730,14 +8012,18 @@ function openSOConfigModal(projId,so){
 }
 
 async function saveSOConfig(projId,so){
-  const formFactor=[...document.getElementById('soc-formfactor').selectedOptions].map(o=>o.value).join(', ');
   const qaUrl=document.getElementById('soc-qa').value.trim();
   const odooUrl=document.getElementById('soc-odoo').value.trim();
   const installUrl=document.getElementById('soc-install').value.trim();
   const uiUrl=document.getElementById('soc-ui').value.trim();
   const coiRequiredVal=document.getElementById('soc-coi-required')?.value||'no';
   const existing=soDetails.find(d=>d.project_id===projId&&d.so_tag===so);
-  const updates={form_factor:formFactor,qa_task_url:qaUrl,odoo_url:odooUrl,install_ticket_url:installUrl,ui_task_url:uiUrl,coi_required:coiRequiredVal};
+  // form_factor is intentionally NOT written here anymore — hardware is
+  // edited exclusively through hardware_line_items via the Hardware &
+  // Solution Configuration editor (see the Hardware field above). Any
+  // pre-existing so_details.form_factor value is left untouched for
+  // backwards compatibility (see deriveLegacyHardwareLines/getProjectHardware).
+  const updates={qa_task_url:qaUrl,odoo_url:odooUrl,install_ticket_url:installUrl,ui_task_url:uiUrl,coi_required:coiRequiredVal};
   if(existing){
     await sb.from('so_details').update({...updates,updated_at:new Date().toISOString()}).eq('id',existing.id);
     Object.assign(existing,updates);
@@ -7873,10 +8159,11 @@ function ppJumpFromConfig(anchor){
 // buildProjectDocPackage so this never drifts from actual deck readiness.
 function ppConfigCompletenessChips(proj){
   const hwCount=(ppData.hardware||[]).length;
-  const hwLegacy=!hwCount&&proj.quantity;
+  const hwLegacy=!hwCount&&(parseLegacyFormFactorList(proj).length>0||Number(proj.quantity||0)>0);
+  const hwNeedsReview=projectNeedsHardwareMigrationReview(proj.id);
   const shipCount=(ppData.shipping||[]).length;
   const items=[
-    {label:'Hardware',status:hwCount?'complete':(hwLegacy?'needs':'needs'),anchor:'pp-section-hardware'},
+    {label:'Hardware',status:hwCount&&!hwNeedsReview?'complete':'needs',anchor:'pp-section-hardware'},
     {label:'Workflow',status:ppChipStatus(Array.isArray(proj.workflow_types)&&proj.workflow_types.length),anchor:'pp-section-workflow'},
     {label:'Authentication',status:ppChipStatus((Array.isArray(proj.authentication_types)&&proj.authentication_types.length)||ppFieldFilled(proj.badge_reader_type)),anchor:'pp-section-workflow'},
     {label:'Connectivity',status:ppChipStatus(ppFieldFilled(proj.primary_connectivity),ppFieldIsNA(proj.primary_connectivity)),anchor:'pp-section-infra'},
@@ -7905,8 +8192,9 @@ function ppRenderCompletenessSummary(proj,mode){
 // instead of a status. Never duplicates storage: reads straight off `proj`
 // and `ppData`, same as everywhere else on this page.
 function ppConfigSummaryLine(proj){
-  const hw=ppData.hardware||[];
-  const hwSummary=hw.length?`${hw[0].quantity||1} × ${hw[0].model||'—'}${hw.length>1?` +${hw.length-1} more`:''}`:(proj.quantity?`${proj.quantity} (legacy)`:'—');
+  // Full canonical summary — every hardware line, not just the first one
+  // plus a "+N more" (that was hiding real quantities from the summary).
+  const hwSummary=getHardwareSummary(proj.id)||'—';
   return[
     ['Hardware',hwSummary],
     ['Workflow',Array.isArray(proj.workflow_types)&&proj.workflow_types.length?proj.workflow_types.join(', '):'—'],
@@ -7976,17 +8264,20 @@ function ppConfigTabButton(tab){
 function buildProjConfigOverlayHtml(){
   const proj=projects.find(p=>p.id===ppProjId);
   if(!proj)return'';
-  const{hwSoOpts,hwLegacyBanner,hardwareHtml,hwTotalQty,shSoOpts,shLegacyBanner,shippingHtml}=ppBuildHardwareShippingData();
+  const{hwSoOpts,hwLegacyBanner,hwReviewBanner,hardwareHtml,hwTotalQty,shSoOpts,shLegacyBanner,shippingHtml}=ppBuildHardwareShippingData();
   const tab=ppConfigActiveTab;
+  const hwPrimaryCt=getPrimaryMachineCount(proj.id);
+  const hwAddOnCt=getAddOnCount(proj.id);
   const panels={
     hardware:`<div id="pp-section-hardware">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-          <div style="font-size:11px;color:var(--gray-500)">${hwTotalQty} machine${hwTotalQty===1?'':'s'} total</div>
+          <div style="font-size:11px;color:var(--gray-500)">${hwTotalQty} hardware unit${hwTotalQty===1?'':'s'} total${hwPrimaryCt||hwAddOnCt?` · ${hwPrimaryCt} primary · ${hwAddOnCt} add-on`:''}</div>
         </div>
         ${hwLegacyBanner}
+        ${hwReviewBanner}
         <div style="overflow-x:auto">
           <table class="pp-table">
-            <thead><tr>${hwSoOpts.length>1?'<th style="width:90px">Sales Order</th>':''}<th>Model / machine type</th><th style="width:70px">Qty</th><th style="width:110px">Screen size</th><th>Peripherals</th><th style="width:28px"></th></tr></thead>
+            <thead><tr>${hwSoOpts.length>1?'<th style="width:90px">Sales Order</th>':''}<th>Model / machine type</th><th style="width:130px">Hardware Type</th><th style="width:70px">Qty</th><th style="width:110px">Screen size</th><th>Peripherals</th><th style="width:28px"></th></tr></thead>
             <tbody id="pp-hardware">${hardwareHtml}</tbody>
           </table>
         </div>
@@ -8075,6 +8366,33 @@ function closeProjectConfiguration(){
   if(root)root.innerHTML='';
   document.body.style.overflow='';
   if(ppConfigOverlayEscHandler){document.removeEventListener('keydown',ppConfigOverlayEscHandler);ppConfigOverlayEscHandler=null;}
+  // Whatever page this was opened from (Production, QA, Planogram, Vinyl,
+  // Shipping, Installation, or Project Page itself) may show a hardware
+  // summary that just changed — re-render the current tab so it's never
+  // stale without needing a hard reload. Harmless no-op if nothing changed.
+  renderTab();
+}
+// Generic entry point so ANY page can open the exact same Hardware &
+// Solution Configuration editor Project Page uses — no page builds its own
+// hardware field/modal. Loads that project's full Project Page dataset
+// (same loader Project Page itself uses, so every tab in the overlay works
+// correctly, e.g. Shipping Locations) then opens straight to the Hardware
+// tab. soTag is accepted for future use (pre-filtering) but every row is
+// still shown since editors need to see/reassign SO scope, not just view it.
+async function openHardwareEditor(projId,soTag){
+  if(!projId)return;
+  const prevProjId=ppProjId;
+  showToast('Loading hardware editor…');
+  try{
+    await loadProjPage(projId);
+  }catch(e){
+    console.warn('openHardwareEditor load failed',e);
+    ppProjId=prevProjId;
+    showToast('⚠ Could not load hardware editor');
+    return;
+  }
+  ppConfigActiveTab='hardware';
+  openProjectConfiguration('pp-section-hardware');
 }
 // Maps a readiness/missing-field message (from buildProjectDocPackage or
 // buildWeeklyStatusPackage) to the Project Page anchor where it's fixed, so
@@ -8458,18 +8776,35 @@ async function ppKeyDateChange(key,label,dateVal,isNA){
 
 
 let ppHardwareSaveTimer={};
+// Keeps the global canonical hardwareLineItems array (used by every page's
+// resolver reads) in sync with whatever ppData.hardware — the Project Page's
+// own copy of the same rows — just did. The two are separate JS objects
+// (ppData.hardware is loaded fresh per loadProjPage call) so every CRUD
+// path here has to touch both; this is the one place that does it.
+function syncGlobalHardwareRow(row,removed){
+  const idx=hardwareLineItems.findIndex(h=>h.id===row.id);
+  if(removed){if(idx>-1)hardwareLineItems.splice(idx,1);return;}
+  if(idx>-1)hardwareLineItems[idx]={...hardwareLineItems[idx],...row};
+  else hardwareLineItems.push(row);
+}
 async function ppHardwareChange(id,field,val){
   let item=ppData.hardware.find(h=>h.id===id);
   if(!item)return;
   if(field==='quantity'){val=Math.max(1,parseInt(val)||1);}
   item[field]=val;
+  // A human just edited this row — whatever ambiguity the migration flagged
+  // is now resolved, so clear the review flag (Part 4: "Once confirmed, the
+  // project should no longer show the migration warning").
+  if(item.migration_review)item.migration_review=false;
   clearTimeout(ppHardwareSaveTimer[id]);
   ppHardwareSaveTimer[id]=setTimeout(async()=>{
     const{error}=await sb.from('hardware_line_items').update({
       so_tag:item.so_tag||null,model:item.model||'',quantity:item.quantity||1,
       screen_size:item.screen_size||'',peripherals:item.peripherals||'',
+      hardware_type:item.hardware_type||null,migration_review:false,
     }).eq('id',id);
     if(error){console.warn('hardware_line_items update error',error);showToast('⚠ Save failed: '+error.message);return;}
+    syncGlobalHardwareRow(item);
     logActivity('edited hardware line',field,item.model||'(unnamed)',ppProjId);
     showPPSaved();
   },600);
@@ -8480,13 +8815,14 @@ async function ppAddHardware(){
   const soList=getSOList(proj);
   const{data,error}=await sb.from('hardware_line_items').insert({
     project_id:ppProjId,so_tag:soList.length===1?soList[0]:null,
-    model:'',quantity:1,screen_size:'',peripherals:'',
+    model:'',quantity:1,screen_size:'',peripherals:'',hardware_type:null,
     sort_order:ppData.hardware.length,created_by:currentUserName,
   }).select().single();
   guardEnd('ppAddHardware');
   if(error){console.warn('hardware_line_items insert error',error);showToast('⚠ Save failed: '+error.message);return;}
   if(!data)return;
   ppData.hardware.push(data);
+  syncGlobalHardwareRow(data);
   logActivity('added hardware line','','',ppProjId);
   ppConfigActiveTab='hardware';
   if(!ppRefreshConfigOverlay())renderProjPageBody();
@@ -8497,6 +8833,7 @@ async function ppDelHardware(id){
   if(error){console.warn('hardware_line_items delete error',error);showToast('⚠ Delete failed: '+error.message);return;}
   const removed=ppData.hardware.find(h=>h.id===id);
   ppData.hardware=ppData.hardware.filter(h=>h.id!==id);
+  if(removed)syncGlobalHardwareRow(removed,true);
   logActivity('deleted hardware line',removed?.model||'',ppProjId);
   ppConfigActiveTab='hardware';
   if(!ppRefreshConfigOverlay())renderProjPageBody();
@@ -8504,23 +8841,31 @@ async function ppDelHardware(id){
 }
 // Explicit, user-triggered conversion only — never auto-created just by
 // opening the page, per the requirement that legacy data isn't silently
-// migrated without user action.
+// migrated without user action. Uses the same deriveLegacyHardwareLines
+// helper as the bulk migration, so a project with multiple legacy form
+// factors gets one row per label (flagged for quantity review) instead of
+// one row with the labels jammed into a single model string.
 async function ppConvertLegacyHardware(){
   const proj=projects.find(p=>p.id===ppProjId);
   if(!proj)return;
   const soList=getSOList(proj);
-  const{data,error}=await sb.from('hardware_line_items').insert({
-    project_id:ppProjId,so_tag:soList.length===1?soList[0]:null,
-    model:proj.product_type||proj.form_factor||'',quantity:proj.quantity||1,
-    screen_size:'',peripherals:'',sort_order:0,created_by:currentUserName,
-  }).select().single();
+  const soTag=soList.length===1?soList[0]:null;
+  const lines=deriveLegacyHardwareLines(proj);
+  if(!lines.length){showToast('No legacy hardware data found to convert');return;}
+  const inserts=lines.map((line,i)=>({
+    project_id:ppProjId,so_tag:soTag,model:line.model,quantity:line.quantity,
+    screen_size:'',peripherals:'',sort_order:ppData.hardware.length+i,created_by:currentUserName,
+    hardware_type:line.hardware_type||null,migration_review:!!line.migration_review,
+    migration_legacy_qty:line.migration_legacy_qty||null,migration_legacy_note:line.migration_legacy_note||null,
+  }));
+  const{data,error}=await sb.from('hardware_line_items').insert(inserts).select();
   if(error){showToast('⚠ Conversion failed: '+error.message);return;}
   if(!data)return;
-  ppData.hardware.push(data);
-  logActivity('converted legacy hardware to line item',data.model||'',ppProjId);
+  data.forEach(row=>{ppData.hardware.push(row);syncGlobalHardwareRow(row);});
+  logActivity('converted legacy hardware to line item(s)','hardware',data.map(d=>d.model).join(', '),ppProjId);
   ppConfigActiveTab='hardware';
   if(!ppRefreshConfigOverlay())renderProjPageBody();
-  showToast('Hardware line created ✓');
+  showToast(data.length>1?`${data.length} hardware lines created — review quantities ✓`:'Hardware line created ✓');
 }
 
 // Shipping locations CRUD
@@ -8732,27 +9077,17 @@ function restoreDocFormState(){
   }
 }
 
-// Best-effort mapping from the granular form-factor/product-type list
-// (getProductTypes(), ~19 SKU-level entries) to the 5 broad UAT machine
-// types the checklist templates are organized around. This is a heuristic,
-// not an authoritative mapping — surfaced as a dropdown the admin can
-// override rather than presented as certain, since e.g. "Stand-up TED" vs
-// "TED SU" naming doesn't map with full confidence.
-function formFactorToUATMachineTypes(formFactorStr){
-  const s=(formFactorStr||'').toLowerCase();
-  const types=new Set();
-  if(s.includes('sparkxl')||s.includes('spark xl'))types.add('Spark XL');
-  if(s.includes('companion'))types.add('Companion');
-  if(s.includes('locker'))types.add('Locker');
-  if(s.includes('sit-down ted')||s==='ted'||/\bted\b/.test(s)&&!s.includes('su')&&!s.includes('stand'))types.add('TED');
-  if(s.includes('stand-up ted')||s.includes('ted su'))types.add('TED SU');
-  return[...types];
-}
+// NOTE: the old form-factor-text-based formFactorToUATMachineTypes() was
+// removed here — all call sites now use the canonical hardwareToUATMachineTypes()
+// (defined near the hardware resolver block, ~line 814), which reads
+// hardware_line_items via getProjectHardware()/effectiveHardwareType() instead
+// of parsing projects.form_factor text, so Add-on Locker vs Standalone Locker
+// is distinguished correctly.
 function renderUATDocTab(){
   const dp=projects.find(p=>p.id===selectedDocProjId);
   if(!dp)return'<div class="empty-state">Select a project above.</div>';
   const confirmed=Array.isArray(dp.uat_machine_types)&&dp.uat_machine_types.length>0;
-  const guessed=formFactorToUATMachineTypes(dp.form_factor);
+  const guessed=hardwareToUATMachineTypes(dp.id);
   const candidates=confirmed?dp.uat_machine_types:guessed;
   if(!window._uatDocSelectedType||!candidates.includes(window._uatDocSelectedType))window._uatDocSelectedType=candidates[0]||UAT_MACHINE_TYPES[0];
   if(!uatLoaded){loadUATAdmin().then(renderGenDocs);return'<div class="empty-state">Loading checklist templates…</div>';}
@@ -8763,7 +9098,7 @@ function renderUATDocTab(){
       <b>This tab is the exporter, not the editor.</b> The PM completes UAT on the machine itself (mobile checklist runner — coming in Phase 2C). Once a session is completed, this tab will export the actual recorded answers, notes, and photos into the official workbook. Until then, this shows a live preview of the checklist that will be used, pulled from the same database the mobile app reads.
     </div>
     ${!confirmed?`<div style="background:#fffaf0;border:1px solid #f5d99a;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:12px;color:#92600a">
-      This project's UAT machine type hasn't been confirmed yet — showing a guess from Form Factor. <button type="button" onclick="openEditProj('${dp.id}')" style="color:#92600a;font-weight:600;background:none;border:none;padding:0;text-decoration:underline;cursor:pointer;font-family:var(--font);font-size:inherit">Confirm it in Edit Project</button> so it's set once instead of re-guessed every time.
+      This project's UAT machine type hasn't been confirmed yet — showing a guess from configured Hardware. <button type="button" onclick="openEditProj('${dp.id}')" style="color:#92600a;font-weight:600;background:none;border:none;padding:0;text-decoration:underline;cursor:pointer;font-family:var(--font);font-size:inherit">Confirm it in Edit Project</button> so it's set once instead of re-guessed every time.
     </div>`:''}
     <div class="proj-select-row" style="margin-bottom:12px">
       <label>Machine type</label>
@@ -9011,7 +9346,7 @@ async function buildProjectDocPackage(projId,soTag=''){
 
   // 3. Scope of work
   const scope={
-    formFactor:cfg.form_factor||'',voltage:proj.voltage||'',plugType:proj.plug_type||'',
+    formFactor:getHardwareSummary(projId,effectiveSO)||'',voltage:proj.voltage||'',plugType:proj.plug_type||'',
     connectivity:projectConnectivitySummary(proj),hosting:proj.hosting||'',
     authentication:projectAuthenticationSummary(proj),
     workflow:Array.isArray(proj.workflow_types)?proj.workflow_types.join(', '):'',workflowNotes:proj.workflow_notes||'',
@@ -9025,7 +9360,7 @@ async function buildProjectDocPackage(projId,soTag=''){
     // Populated below once `hardware` is computed.
     peripherals:null,
   };
-  if(!scope.formFactor)flag('Configuration / form factor','important');
+  if(!scope.formFactor)flag('Hardware / configuration','important');
   // "N/A" is a real, deliberately-chosen value — !proj.deployment_type etc.
   // is only true for genuinely unset fields, so N/A never gets flagged here.
   if(!proj.deployment_type)flag('Deployment type','optional');
@@ -9034,21 +9369,19 @@ async function buildProjectDocPackage(projId,soTag=''){
   if(!proj.shipping_packaging)flag('Shipping packaging','optional');
   if(!proj.shipping_service_level)flag('Shipping service level','optional');
 
-  // 3a. Hardware line items — new normalized table (hardware_line_items),
-  // falling back to the single legacy quantity/product_type captured at
-  // intake if no line items have been entered yet. Uses the shared
-  // resolveProjectHardware so this and the Weekly Status Report never
-  // disagree on the fallback logic.
+  // 3a. Hardware line items — canonical resolver (getProjectHardware), the
+  // exact same function every other page (Project Page, Production, QA,
+  // Planogram, Vinyl, Shipping, Exports) reads through. This document can
+  // therefore never disagree with what's shown on screen. getProjectHardware
+  // internally falls back to a read-only synthesis of the legacy
+  // product_type/form_factor/quantity fields when no real hardware_line_items
+  // rows exist yet (never writes them back), same as everywhere else.
   let hardware=[];
   {
-    const hwRes=await sb.from('hardware_line_items').select('*').eq('project_id',projId).order('sort_order');
-    if(hwRes.error)console.warn('hardware_line_items load error',hwRes.error);
-    const allRows=(hwRes.data||[]).filter(h=>!effectiveSO||!h.so_tag||h.so_tag===effectiveSO);
-    hardware=allRows.map(h=>({soTag:h.so_tag||'',model:h.model||'',quantity:h.quantity||1,screenSize:h.screen_size||'',peripherals:h.peripherals||''}));
-    const hwResolved=resolveProjectHardware(proj,allRows);
-    if(!hardware.length&&hwResolved.source==='legacy'){
-      hardware=[{soTag:'',model:proj.product_type||cfg.form_factor||'',quantity:hwResolved.quantity,screenSize:'',peripherals:'',_legacy:true}];
-      flag(`Hardware is using the legacy project quantity (${hwResolved.quantity}). Convert it to detailed hardware lines under Hardware to add screen size and peripherals.`,'optional');
+    const rows=getProjectHardware(projId,effectiveSO);
+    hardware=rows.map(h=>({soTag:h.so_tag||'',model:h.model||'',quantity:h.quantity||1,screenSize:h.screen_size||'',peripherals:h.peripherals||'',_legacy:!!h._legacy}));
+    if(hardware.length&&hardware.every(h=>h._legacy)){
+      flag(`Hardware is using the legacy project quantity/product type. Convert it to detailed hardware lines under Hardware to add screen size and peripherals.`,'optional');
     }
     if(!hardware.length)flag('Hardware details have not been entered. Add hardware models and quantities under Hardware.','important');
     // Peripherals — collect from EVERY hardware line, not just the first
@@ -9643,10 +9976,12 @@ async function buildWeeklyStatusPackage(projId,soScope=''){
   const completionPct=completionStats.percentage;
   const nextMs=applicableMs.filter(m=>!isMilestoneDone(m)&&m.date).sort((a,b)=>(a.date||'').localeCompare(b.date||''))[0];
   const shipMs=projMs.find(m=>m.key==='shipping');
-  const hwRes=await sb.from('hardware_line_items').select('quantity').eq('project_id',projId);
-  if(hwRes.error)console.warn('hardware_line_items load error (weekly status)',hwRes.error);
-  const hwResolved=resolveProjectHardware(proj,hwRes.data);
-  const machineCount=hwResolved.quantity;
+  // Canonical resolver — same source Vinyl/Planogram/Production/QA/Shipping
+  // and the Kickoff Deck use, scoped to this report's SO so a per-SO weekly
+  // status never shows another SO's hardware count.
+  const hwRowsWS=getProjectHardware(projId,soScope);
+  const machineCount=hwRowsWS.reduce((s,h)=>s+Number(h.quantity||0),0);
+  const hwResolved={source:hwRowsWS.length&&hwRowsWS.every(h=>h._legacy)?'legacy':'line-items'};
   const shipRes=await sb.from('shipping_locations').select('id').eq('project_id',projId);
   if(shipRes.error)console.warn('shipping_locations load error (weekly status)',shipRes.error);
   const shipResolved=resolveProjectShippingLocations(proj,shipRes.data);
@@ -10198,7 +10533,10 @@ function renderInstallForm(){
   const soDet=getEffectiveSODetail(p,selectedDocSO);
   const naming=soDet?.naming_convention??p.naming_convention??'';
   const address=soDet?.address??p.address??'';
-  const formFactor=soDet?.form_factor||[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'';
+  // Canonical resolver, scoped to this doc's SO — SO-scoped documents show
+  // only that SO's hardware plus hardware explicitly marked "All SOs", the
+  // exact same filtering getProjectHardware uses everywhere else.
+  const formFactor=getHardwareSummary(p.id,selectedDocSO,{docStyle:true})||'';
   const soNum=selectedDocSO||p.so_number||'';
   const qaTaskUrl=getDocLink('QA Task');
   return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()" onfocusout="saveDocFormState(true)">
@@ -10255,7 +10593,10 @@ function renderInstallForm(){
 function renderUIForm(){
   const p=getDocProj();
   const soDet=getEffectiveSODetail(p,selectedDocSO);
-  const formFactor=soDet?.form_factor||[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'';
+  // Canonical resolver, scoped to this doc's SO — SO-scoped documents show
+  // only that SO's hardware plus hardware explicitly marked "All SOs", the
+  // exact same filtering getProjectHardware uses everywhere else.
+  const formFactor=getHardwareSummary(p.id,selectedDocSO,{docStyle:true})||'';
   return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()" onfocusout="saveDocFormState(true)">
     <div class="doc-section-lbl">Project identifiers</div>
     ${fld('uf-cp','Channel Partner (CP)','e.g. TD Synnex, Direct','')}
@@ -10294,7 +10635,10 @@ function renderQAForm(){
   const soNum=selectedDocSO||(getSOList(p).length===1?(p.so_number||'').trim():p.so_number||'');
   const address=soDet?.address??p.address??'';
   const naming=soDet?.naming_convention??p.naming_convention??'';
-  const formFactor=soDet?.form_factor||[p.product_type,p.form_factor].filter(Boolean).join(' — ')||'';
+  // Canonical resolver, scoped to this doc's SO — SO-scoped documents show
+  // only that SO's hardware plus hardware explicitly marked "All SOs", the
+  // exact same filtering getProjectHardware uses everywhere else.
+  const formFactor=getHardwareSummary(p.id,selectedDocSO,{docStyle:true})||'';
   return`<div class="doc-form-grid" oninput="saveDocFormState()" onchange="saveDocFormState()" onfocusout="saveDocFormState(true)">
     <div class="doc-section-lbl">Dates (auto-filled)</div>
     ${fld('qf-ship','Shipping date','','','text',shipDate)}
@@ -10391,7 +10735,7 @@ function generateDoc(type){
     const instSoDet=getEffectiveSODetail(instP,selectedDocSO);
     const instNaming=instSoDet?.naming_convention??instP.naming_convention??'';
     const instAddress=instSoDet?.address??instP.address??'';
-    const instFormFactor=instSoDet?.form_factor||[instP.product_type,instP.form_factor].filter(Boolean).join(' — ')||'';
+    const instFormFactor=getHardwareSummary(instP.id,selectedDocSO,{docStyle:true})||'';
     const instSoNum=selectedDocSO||instP.so_number||'';
     const sectionDivider='-----------------------------------------------';
     text=`INSTALLATION TICKET
@@ -10541,7 +10885,7 @@ ${g('qf-special')?`\nSpecial Requirements:\n${g('qf-special')}`:''}`;
       address:htmlSoDet?.address??htmlP.address??'',
       pocName:g('if-poc-name'),pocPhone:g('if-poc-phone'),pocEmail:g('if-poc-email'),
       instDate:g('if-inst'),
-      formFactor:htmlSoDet?.form_factor||[htmlP.product_type,htmlP.form_factor].filter(Boolean).join(' — ')||'',
+      formFactor:getHardwareSummary(htmlP.id,selectedDocSO,{docStyle:true})||'',
       soNum:selectedDocSO||htmlP.so_number||'',
       cp:htmlP.channel_partner||'',client:htmlP.client||'',
       connectivity:g('if-connectivity'),
@@ -11361,6 +11705,23 @@ async function addChildProject(masterId){
     if(msErr){showToast('⚠ Child created but milestones failed to clone: '+msErr.message);}
     if(createdMs)milestones.push(...createdMs);
   }
+  // Clone master's real hardware_line_items rows (if any exist) so the child
+  // starts with the same hardware configuration instead of only inheriting
+  // the deprecated product_type/form_factor text fields above. Only clones
+  // actual rows — never invents new ones — so a master still on legacy
+  // fields (no real hardware_line_items yet) simply leaves the child to fall
+  // back to its own cloned legacy fields via getProjectHardware(), same as
+  // any other unmigrated project.
+  const masterHw=hardwareLineItems.filter(h=>h.project_id===masterId);
+  if(masterHw.length){
+    const newHw=masterHw.map(h=>({
+      project_id:child.id,so_tag:so||h.so_tag||null,model:h.model,quantity:h.quantity,
+      hardware_type:h.hardware_type||null,screen_size:h.screen_size||'',peripherals:h.peripherals||'',
+      sort_order:h.sort_order||0,migration_review:false,created_by:currentUserName,
+    }));
+    const{error:hwErr}=await sb.from('hardware_line_items').insert(newHw);
+    if(hwErr)showToast('⚠ Child created but hardware failed to clone: '+hwErr.message);
+  }
   // Mark master as campaign master
   await sb.from('projects').update({is_master:true}).eq('id',masterId);
   master.is_master=true;
@@ -11489,7 +11850,13 @@ function getExpectedProjectValue(projectId,fieldKey,soTag){
   // can have a different address/naming per SO via so_details) — falls back to the
   // project-level value when no SO is selected/applicable.
   const soCfg=getSOConfigSummary(proj,soTag||'');
-  const directMap={form_factor:proj.form_factor,naming_convention:soCfg.naming_convention,address:soCfg.address,product_type:proj.product_type,location:proj.location,so_number:proj.so_number,client:proj.client,voltage:proj.voltage,hosting:proj.hosting,plug_type:proj.plug_type,connectivity:projectConnectivitySummary(proj),primary_connectivity:proj.primary_connectivity,backup_connectivity:proj.backup_connectivity,authentication_types:proj.authentication_types,badge_reader_type:proj.badge_reader_type,payment_device_required:proj.payment_device_required,workflow_types:proj.workflow_types,workflow_notes:proj.workflow_notes,languages:proj.languages,language_notes:proj.language_notes,power_requirements:proj.power_requirements};
+  // form_factor / product_type are kept as directMap keys (rather than removed)
+  // because expected_field is a free-text admin input (see the UAT question
+  // builder, ~line 12395) — an admin may already have typed either key into an
+  // existing question. Both now resolve through the canonical hardware
+  // summary instead of the raw legacy text fields, so existing questions keep
+  // working and never disagree with what's shown elsewhere.
+  const directMap={form_factor:getHardwareSummary(proj.id,soTag),naming_convention:soCfg.naming_convention,address:soCfg.address,product_type:getHardwareSummary(proj.id,soTag),location:proj.location,so_number:proj.so_number,client:proj.client,voltage:proj.voltage,hosting:proj.hosting,plug_type:proj.plug_type,connectivity:projectConnectivitySummary(proj),primary_connectivity:proj.primary_connectivity,backup_connectivity:proj.backup_connectivity,authentication_types:proj.authentication_types,badge_reader_type:proj.badge_reader_type,payment_device_required:proj.payment_device_required,workflow_types:proj.workflow_types,workflow_notes:proj.workflow_notes,languages:proj.languages,language_notes:proj.language_notes,power_requirements:proj.power_requirements};
   if(Object.prototype.hasOwnProperty.call(directMap,fieldKey))return directMap[fieldKey]||null;
   const genKey=UAT_GENDOC_FIELD_MAP[fieldKey];
   if(genKey){
@@ -11857,7 +12224,7 @@ async function exportUATSessionExcel(sessionId){
   infoRow('SO:',soTag||proj.so_number);
   infoRow('Customer / Channel:',proj.client);
   infoRow('Address:',soCfg.address);
-  infoRow('Form Factor:',proj.form_factor);
+  infoRow('Hardware:',getHardwareSummary(proj.id,soTag));
   infoRow('Naming Convention:',soCfg.naming_convention);
   infoRow('Machine Type:',machine.machine_type);
   infoRow('Date Completed:',session.completed_date?session.completed_date.slice(0,10):'');
@@ -12030,7 +12397,7 @@ function renderUATRun(){
   }
   const soCfg=getSOConfigSummary(proj,uatRunnerSOTag);
   const scopedMachines=uatMachines.filter(m=>(m.so_tag||'')===uatRunnerSOTag);
-  const confirmedTypes=Array.isArray(proj.uat_machine_types)&&proj.uat_machine_types.length?proj.uat_machine_types:formFactorToUATMachineTypes(proj.form_factor);
+  const confirmedTypes=Array.isArray(proj.uat_machine_types)&&proj.uat_machine_types.length?proj.uat_machine_types:hardwareToUATMachineTypes(proj.id,uatRunnerSOTag);
   el.innerHTML=header+`<div style="max-width:520px;padding:0 16px 24px">
     <button onclick="uatRunnerProjId=null;renderUAT()" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-bottom:10px">← Change project</button>
     ${soList.length>1?`<button onclick="uatRunnerSOTag='';renderUAT()" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;margin-bottom:10px;margin-left:14px">← Change SO</button>`:''}
@@ -12055,7 +12422,7 @@ function renderUATRun(){
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${(confirmedTypes.length?confirmedTypes:UAT_MACHINE_TYPES).map(t=>`<button onclick="uatAddMachine('${t}')" style="font-size:12px;padding:8px 14px;border-radius:20px;border:1px solid var(--gray-300);background:var(--white);cursor:pointer">+ ${t}</button>`).join('')}
     </div>
-    ${!Array.isArray(proj.uat_machine_types)||!proj.uat_machine_types.length?`<div style="font-size:11px;color:var(--gray-400);margin-top:8px">Machine type isn't confirmed on this project yet, so these are guessed from Form Factor — confirm it in Edit Project for accuracy.</div>`:''}
+    ${!Array.isArray(proj.uat_machine_types)||!proj.uat_machine_types.length?`<div style="font-size:11px;color:var(--gray-400);margin-top:8px">Machine type isn't confirmed on this project yet, so these are guessed from configured Hardware — confirm it in Edit Project for accuracy.</div>`:''}
   </div>`;
 }
 
@@ -12972,7 +13339,7 @@ function openLinksPopout(soOverride=''){
   <div class="modal-backdrop" onclick="closeModal()">
     <div class="modal" data-modal="links-popout" style="width:600px;max-height:85vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
       <div class="modal-head"><span class="modal-title">🔗 Quick links — ${proj.name||''}${activeSO?' · '+activeSO:''}</span><button class="modal-close" onclick="closeModal()">×</button></div>
-      ${soList.length>1?`<div style="padding:10px 20px;border-bottom:1px solid var(--gray-100);display:flex;align-items:center;gap:8px"><label style="font-size:11px;font-weight:600;color:var(--gray-500)">SO configuration</label><select onchange="openLinksPopout(this.value)" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value="">Master defaults</option>${soList.map(so=>`<option value="${so}"${activeSO===so?' selected':''}>${so}</option>`).join('')}</select>${activeSO&&soConfig.form_factor?`<span style="font-size:11px;color:var(--gray-500)">${soConfig.form_factor}</span>`:''}</div>`:''}
+      ${soList.length>1?`<div style="padding:10px 20px;border-bottom:1px solid var(--gray-100);display:flex;align-items:center;gap:8px"><label style="font-size:11px;font-weight:600;color:var(--gray-500)">SO configuration</label><select onchange="openLinksPopout(this.value)" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:1px solid var(--gray-300);border-radius:var(--radius)"><option value="">Master defaults</option>${soList.map(so=>`<option value="${so}"${activeSO===so?' selected':''}>${so}</option>`).join('')}</select>${activeSO?(()=>{const hw=getHardwareSummary(proj.id,activeSO);return hw?`<span style="font-size:11px;color:var(--gray-500)">${esc(hw)}</span>`:'';})():''}</div>`:''}
       <div style="overflow-y:auto;flex:1;padding:12px 0">${catsHtml.join('')}</div>
       <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>
     </div>
@@ -13002,7 +13369,7 @@ function exportProjPageExcel(){
     ['PROJECT PAGE EXPORT',''],['Generated',dateStr],['',''],
     ['PROJECT INFORMATION',''],['Project Name',proj.name||''],['Sales Order (SO)',proj.so_number||''],
     ['Client',proj.client||''],['Project Manager',proj.pm||''],['Status',statusLbl],
-    ['Current Phase',getSection('phase')||''],['Product Type',proj.product_type||''],['Location',proj.location||''],
+    ['Current Phase',getSection('phase')||''],['Hardware',getHardwareSummary(proj.id)||''],['Location',proj.location||''],
     ['',''],['INTERNAL PROJECT SUMMARY',''],[(getSection('summary')||''),''],
     ['',''],['KEY LINKS',''],
     ['Odoo Task',proj.odoo_url||''],['Jira / UI Task',proj.ui_task_url||''],
