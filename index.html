@@ -2257,6 +2257,93 @@ async function clearScheduleFlag(msId){
   renderTab();
 }
 
+// ── INDIVIDUAL MILESTONE "PUSH DOWNSTREAM" ──────────────────
+// There is no stored dependency graph anywhere in this schema — milestones
+// are flat {key,label,date} rows, and TEMPLATES[].offsets (see the
+// Templates tab, ~13840) is a single flat day-offset table used ONLY to
+// pre-fill the New Project intake form (applyTemplateToIntake). It is NOT
+// a causal graph: walking its offset order would make Vinyl look
+// "downstream of" UI End purely because of where it happens to sit in the
+// standard-unit template's offset list — the exact chronological-order
+// trap this feature has to avoid (confirmed by hand-tracing all 4
+// templates before writing this).
+//
+// So MS_CHAINS below is a new, additive, hand-authored, deliberately
+// CONSERVATIVE set of chains. A milestone's "downstream" set is only the
+// entries strictly AFTER it in its OWN chain — there is no cross-chain
+// cascading:
+//   • Production moving never reaches Quality/UAT. That boundary already
+//     existed on purpose (see DOWNSTREAM_MS_KEYS/flagDownstreamAsInconsistent
+//     above, which flags production-driven drift for a human to review
+//     instead of auto-moving it) — this feature doesn't change that, it
+//     just adds a genuine same-chain push within Production's own steps.
+//   • Quality/UAT moving never auto-reaches Shipping/Delivery/Installation.
+//     Those are treated as externally-committed dates that need a
+//     deliberate human decision, not an automatic slip when internal QA
+//     runs long — this is also why the worked example in this feature's
+//     own spec only expects UI End + UAT Start to move, not Shipping.
+//   • Vinyl has no downstream by default, matching the existing
+//     DOWNSTREAM_MS_KEYS precedent, which already excludes it.
+// Most 'other'-keyed milestones (Planogram, Customer care, etc.) share one
+// generic key and are only told apart by label text, so the UI/software
+// entries below additionally match on the two canonical labels used at
+// intake ('UI start' / 'UI end', case-insensitive). Any other custom label
+// on an 'other'-keyed milestone simply isn't recognized as chain-linked —
+// no match means no auto-push, the safe default, not an error.
+const MS_CHAINS=[
+  // Internal production sequence.
+  [{key:'parts-ordering-start'},{key:'mo-release'},{key:'po-release'},{key:'arrival'},{key:'inventory-pick'},{key:'production-start'},{key:'production-end'}],
+  // UI/software development feeds into the same QA→UAT sequence a
+  // hardware project's own QA steps use (mirrors the real software-only
+  // template's UI→QA→UAT flow), while still working for a hybrid project
+  // that has both production AND a UI workstream.
+  [{key:'other',labels:['ui start']},{key:'other',labels:['ui end']},{key:'quality-start'},{key:'quality-end'},{key:'final-qc'},{key:'uat'}],
+  // Fulfillment — its own bounded chain, not an automatic continuation of
+  // Quality/UAT (see boundary note above).
+  [{key:'shipping'},{key:'delivery'},{key:'installation'},{key:'uninstallation'},{key:'training'}],
+];
+function msChainMatches(m,entry){
+  if((m.key||'other')!==entry.key)return false;
+  if(!entry.labels)return true;
+  return entry.labels.includes((m.label||'').trim().toLowerCase());
+}
+// Real milestone ROWS (not chain entries) downstream of `m`, in chain
+// order, restricted to `siblings` (caller passes same-project+same-SO-tag
+// rows) and excluding `m` itself. Returns [] if `m` doesn't match any known
+// chain, or if nothing later in its chain exists on this project.
+function getDownstreamMilestones(m,siblings){
+  for(const chain of MS_CHAINS){
+    const idx=chain.findIndex(entry=>msChainMatches(m,entry));
+    if(idx===-1)continue;
+    const result=[];
+    chain.slice(idx+1).forEach(entry=>{
+      const match=siblings.find(x=>x.id!==m.id&&msChainMatches(x,entry));
+      if(match)result.push(match);
+    });
+    return result;
+  }
+  return[];
+}
+// Adds N days (positive or negative) to a 'YYYY-MM-DD' string, reusing the
+// existing addD/isoD Date helpers rather than hand-rolling date math again.
+function shiftDateStr(s,n){return isoD(addD(new Date(s+'T00:00:00'),n));}
+// Applies the date-safety rules (never move N/A, never move Complete, never
+// invent a date for an undated milestone) and returns what a downstream
+// push would actually do, WITHOUT writing anything — used to build the
+// confirmation dialog and by the apply step, so what the user is shown is
+// exactly what gets saved.
+function computeDownstreamForMs(ms,siblings,deltaDays){
+  const downstream=getDownstreamMilestones(ms,siblings);
+  const moved=[],skipped=[];
+  downstream.forEach(d=>{
+    if(d.not_applicable){skipped.push({m:d,reason:'marked N/A'});return;}
+    if(!d.date){skipped.push({m:d,reason:'no date set'});return;}
+    if(isMilestoneEffectivelyDone(d)){skipped.push({m:d,reason:'already complete'});return;}
+    moved.push({id:d.id,label:d.label,oldDate:d.date,newDate:shiftDateStr(d.date,deltaDays)});
+  });
+  return{moved,skipped};
+}
+
 // Dragging a card is a REAL reschedule, not a preview: you're asked exactly how many
 // days to move it (pre-filled with the gap to the week you dropped it on, but you can
 // type any number). Production's own dates move; everything downstream just gets
@@ -7406,8 +7493,229 @@ function openEditMs(id,label,date,soTag,projId){
     '<div class="field"><label>Reason for change <span style=\'font-weight:400;color:var(--gray-400)\'>— shown in history</span></label><input id="em-reason" placeholder="e.g. Parts delayed, client requested push..." style="font-size:12px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>'+
     historyHtml+
     '</div>'+
-    '<div class="modal-actions"><button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="deleteMs(\''+id+'\')">Remove</button><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditMs(\''+id+'\',\''+label+'\',\''+( date||'')+'\')">Save</button></div>'+
+    // Three distinct, separately-invoked operations (individual milestone push) —
+    // Save only and Push downstream are the two PRIMARY, equally-weighted actions;
+    // the small link beneath them reaches the ORIGINAL, unmodified whole-project
+    // cascade (still fully intact — see saveEditMs) as the clearly secondary,
+    // broader alternative, per the reviewed UX hierarchy. Remove/Cancel sit apart
+    // on their own row so they don't compete visually with the two primaries.
+    '<div class="modal-actions" style="flex-direction:column;align-items:stretch;gap:8px">'+
+    '<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">'+
+    '<button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="deleteMs(\''+id+'\')">Remove</button>'+
+    '<div style="display:flex;gap:6px;flex-wrap:wrap">'+
+    '<button class="btn" onclick="closeModal()">Cancel</button>'+
+    '<button class="btn btn-primary" title="Change only this milestone — nothing else moves" onclick="saveEditMsOnly(\''+id+'\',\''+label+'\',\''+( date||'')+'\')">Save only</button>'+
+    '<button class="btn btn-primary" title="Preview and optionally shift same-chain milestones downstream of this one by the same number of days" onclick="saveEditMsPushDownstream(\''+id+'\',\''+label+'\',\''+( date||'')+'\')">Push downstream</button>'+
+    '</div></div>'+
+    '<div style="text-align:right"><a href="javascript:void(0)" onclick="saveEditMs(\''+id+'\',\''+label+'\',\''+( date||'')+'\')" style="font-size:10.5px;color:var(--gray-400);text-decoration:underline">or push ALL later project dates instead →</a></div>'+
+    '</div>'+
   '</div></div>';
+}
+// Persists exactly this ONE milestone's label/date/N-A to the DB + local
+// state + milestone_history/activity log, with no cascade of any kind —
+// shared by "Save only" and by the first step of "Push downstream" (which
+// saves the source milestone the same way, then separately pushes its
+// chain). Deliberately a NEW function rather than a refactor of saveEditMs
+// below — saveEditMs (the original whole-project cascade flow) is left
+// byte-for-byte untouched so that existing "Push all later dates"
+// capability can't regress.
+async function persistSingleMsEdit(id,oldLabel,oldDate){
+  const isNA=document.getElementById('em-na')?.checked||false;
+  const newDate=isNA?null:document.getElementById('em-dt').value;
+  const newLabel=document.getElementById('em-lbl').value.trim();
+  const reason=document.getElementById('em-reason')?.value.trim()||'';
+  const ms=milestones.find(m=>m.id===id);
+  const proj=ms?projects.find(p=>p.id===ms.project_id):null;
+  const update={label:newLabel,date:newDate||null,not_applicable:isNA,changed_by:currentUserName,changed_at:new Date().toISOString()};
+  if(!ms?.original_date&&newDate)update.original_date=newDate;
+  const{error}=await sb.from('milestones').update(update).eq('id',id);
+  if(error){alert('Error: '+error.message);return null;}
+  if(ms){ms.date=newDate;ms.label=newLabel;ms.not_applicable=isNA;}
+  if(oldDate&&newDate&&oldDate!==newDate){
+    await sb.from('milestone_history').insert({milestone_id:id,project_id:proj?.id||null,old_date:oldDate,new_date:newDate,changed_by:currentUserName,reason:reason||null});
+    await logActivity('updated date',newLabel,newLabel,proj?.id||null,oldDate,newDate);
+    if(ms)await syncMsDateToVinyl(ms,newDate);
+  }
+  return{ms,proj,newDate,newLabel,isNA};
+}
+// SAVE ONLY — changes exactly this milestone's date. Still offers the
+// existing (unrelated) same-milestone-across-SOs sync prompt, since that's
+// about keeping ONE milestone's identity in sync across an SO split, not
+// about other/downstream milestones — orthogonal to this feature, left as-is.
+async function saveEditMsOnly(id,oldLabel,oldDate){
+  const res=await persistSingleMsEdit(id,oldLabel,oldDate);
+  if(!res)return;
+  const{ms,proj,newDate,newLabel}=res;
+  if(ms?.so_tag&&newDate&&oldDate!==newDate&&proj){
+    const soList=getSOList(proj);
+    const otherSOs=soList.filter(s=>s!==ms.so_tag);
+    if(otherSOs.length){
+      closeModal();
+      document.getElementById('modal-root').innerHTML=`
+      <div class="modal-backdrop">
+        <div class="modal" style="width:420px" onclick="event.stopPropagation()">
+          <div class="modal-head"><span class="modal-title">📅 Push to other SOs?</span><button class="modal-close" onclick="closeModal();loadAll()">×</button></div>
+          <div style="padding:16px;font-size:13px;color:var(--gray-600)">
+            <strong>${esc(newLabel)}</strong> changed to <strong>${fmt(newDate)}</strong> on <strong>SO ${esc(ms.so_tag)}</strong>.<br><br>
+            Push this date to the other ${otherSOs.length} SO${otherSOs.length>1?'s':''}: <strong>${esc(otherSOs.join(', '))}</strong>?
+          </div>
+          <div class="modal-actions">
+            <button class="btn" onclick="closeModal();loadAll()">Just this SO</button>
+            <button class="btn btn-primary" onclick="pushSODateToOthers('${proj.id}','${ms.so_tag}','${ms.key}','${newDate}','${escJsAttr(newLabel)}')">Push to all SOs →</button>
+          </div>
+        </div>
+      </div>`;
+      return;
+    }
+  }
+  closeModal();
+  showUndoToast(`${newLabel} updated to ${newDate?fmt(newDate):'no date'}`,async()=>{
+    await sb.from('milestones').update({label:oldLabel,date:oldDate||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',id);
+    if(oldDate!==newDate){
+      await sb.from('milestone_history').insert({milestone_id:id,project_id:proj?.id||null,old_date:newDate||null,new_date:oldDate||null,changed_by:currentUserName,reason:'Undo of manual edit'});
+    }
+    await loadAll();
+    showToast('Undone ✓');
+  });
+  await loadAll();
+}
+// PUSH DOWNSTREAM — READ-ONLY until the user confirms. Nothing is written
+// to Supabase here: the delta is computed from the still-PERSISTED source
+// date (oldDate, as passed in from openEditMs) against whatever's currently
+// typed in the form, the downstream set is computed against a virtual copy
+// of the source (so chain-matching sees the new label/N-A state without
+// mutating anything real), and the result is only ever shown as a preview.
+// Cancel — or the modal's ×, or just navigating away — leaves the source
+// milestone AND every downstream milestone exactly as they were, because
+// this function never touches the database or the in-memory `milestones`
+// array. Only applyDownstreamPush() (invoked by "Push dates →") writes
+// anything, and it saves both the source and the downstream rows together
+// as one user operation (see there for the fail-fast error handling).
+function saveEditMsPushDownstream(id,oldLabel,oldDate){
+  const isNA=document.getElementById('em-na')?.checked||false;
+  const newDate=isNA?null:document.getElementById('em-dt').value;
+  const newLabel=document.getElementById('em-lbl').value.trim();
+  const reason=document.getElementById('em-reason')?.value.trim()||'';
+  const ms=milestones.find(m=>m.id===id);
+  const proj=ms?projects.find(p=>p.id===ms.project_id):null;
+  if(!ms||!proj)return;
+  if(!oldDate||!newDate||oldDate===newDate){
+    // No real date delta to push (was undated, got cleared, or is
+    // unchanged) — behaves like Save only, since there's nothing to preview.
+    saveEditMsOnly(id,oldLabel,oldDate);
+    return;
+  }
+  const deltaDays=Math.round((new Date(newDate+'T00:00:00')-new Date(oldDate+'T00:00:00'))/86400000);
+  // Virtual copy only — used purely so chain-matching sees the label/N-A the
+  // user is about to save; the real `ms` object in `milestones` is untouched.
+  const virtualSource={...ms,date:newDate,label:newLabel,not_applicable:isNA};
+  const siblings=milestones.filter(m=>m.project_id===proj.id&&(m.so_tag||null)===(ms.so_tag||null));
+  const{moved,skipped}=computeDownstreamForMs(virtualSource,siblings,deltaDays);
+  closeModal();
+  if(!moved.length){
+    // Nothing downstream to preview — safe to just save the one field
+    // (identical to Save only) rather than showing an empty confirmation.
+    saveEditMsOnly(id,oldLabel,oldDate);
+    return;
+  }
+  // Everything the confirm step needs is captured here — including the
+  // SOURCE's own not-yet-saved values — so applyDownstreamPush() can save
+  // the source and the downstream rows together, only once the user commits.
+  window._downstreamPushData={
+    sourceId:id,sourceOldLabel:oldLabel,sourceOldDate:oldDate,sourceReason:reason,
+    sourceNewLabel:newLabel,sourceNewDate:newDate,sourceIsNA:isNA,
+    moved,projId:proj.id,deltaDays
+  };
+  const rows=moved.map(m=>`<tr><td style="padding:3px 8px 3px 0;color:var(--gray-700)">${esc(m.label)}</td><td style="padding:3px 8px;color:var(--gray-400)">${fmt(m.oldDate)}</td><td style="padding:3px 0;color:var(--gray-700)">→ ${fmt(m.newDate)}</td></tr>`).join('');
+  const skippedNote=skipped.length?`<div style="margin-top:8px;font-size:11px;color:var(--gray-500)">Skipped (won't move): ${skipped.map(s=>esc(s.m.label)+' — '+s.reason).join('; ')}</div>`:'';
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop">
+    <div class="modal" style="width:480px" onclick="event.stopPropagation()">
+      <div class="modal-head"><span class="modal-title">📅 Push downstream milestones?</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div style="padding:16px;font-size:13px;color:var(--gray-600)">
+        <strong>${esc(newLabel)}</strong><br>${fmt(oldDate)} → ${fmt(newDate)}<br><br>
+        This will move ${moved.length} downstream milestone${moved.length>1?'s':''} by ${deltaDays>0?'+':''}${deltaDays} day${Math.abs(deltaDays)===1?'':'s'}:
+        <table style="margin-top:10px;font-size:12px;border-collapse:collapse">${rows}</table>
+        ${skippedNote}
+        <div style="margin-top:10px;font-size:11px;color:var(--gray-400)">Unrelated project dates will not be changed. Nothing is saved until you click "Push dates".</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="applyDownstreamPush()">Push dates →</button>
+      </div>
+    </div>
+  </div>`;
+}
+// Only this function actually writes anything for the Push Downstream flow
+// — called only by the confirmation's "Push dates" button. Saves the SOURCE
+// milestone first, then each downstream milestone, in sequence. There is no
+// multi-statement transaction available anywhere in this codebase (every
+// existing multi-row operation — applyCascadeShift, pushSODateToOthers,
+// campaign clone, etc. — is a plain sequential loop of awaited
+// sb.from(...).update() calls with no rollback), so introducing one here
+// would be new persistence architecture the task explicitly said not to
+// add. Instead this uses the same pattern already used by the single-row
+// save path (persistSingleMsEdit / saveEditMs), just fail-fast on every
+// write: if any update reports an error, it stops immediately, tells the
+// user exactly what did and didn't get saved instead of showing a success
+// toast, and reloads from Supabase so the screen reflects the true state
+// rather than a partially-applied change dressed up as complete.
+async function applyDownstreamPush(){
+  const cd=window._downstreamPushData;
+  if(!cd||!cd.moved?.length){closeModal();return;}
+  window._downstreamPushData=null;
+  const ms=milestones.find(m=>m.id===cd.sourceId);
+  const proj=ms?projects.find(p=>p.id===ms.project_id):null;
+
+  // Step 1 — save the source milestone (same shape as persistSingleMsEdit).
+  const srcUpdate={label:cd.sourceNewLabel,date:cd.sourceNewDate||null,not_applicable:cd.sourceIsNA,changed_by:currentUserName,changed_at:new Date().toISOString()};
+  if(!ms?.original_date&&cd.sourceNewDate)srcUpdate.original_date=cd.sourceNewDate;
+  const{error:srcErr}=await sb.from('milestones').update(srcUpdate).eq('id',cd.sourceId);
+  if(srcErr){
+    closeModal();
+    alert('Push downstream failed while saving "'+cd.sourceNewLabel+'": '+srcErr.message+'\n\nNothing was changed — please try again.');
+    await loadAll();
+    return;
+  }
+  if(ms){ms.date=cd.sourceNewDate;ms.label=cd.sourceNewLabel;ms.not_applicable=cd.sourceIsNA;}
+  await sb.from('milestone_history').insert({milestone_id:cd.sourceId,project_id:proj?.id||null,old_date:cd.sourceOldDate,new_date:cd.sourceNewDate,changed_by:currentUserName,reason:cd.sourceReason||null});
+  await logActivity('updated date',cd.sourceNewLabel,cd.sourceNewLabel,proj?.id||null,cd.sourceOldDate,cd.sourceNewDate);
+  if(ms)await syncMsDateToVinyl(ms,cd.sourceNewDate);
+
+  // Step 2 — save each downstream milestone. Fail-fast: the source above is
+  // already committed at this point (Supabase has no cross-table rollback
+  // available here), so a failure partway through Step 2 is reported as
+  // exactly that — partial — rather than as either full success or full
+  // failure, and the screen is reloaded to show precisely what's true.
+  for(let i=0;i<cd.moved.length;i++){
+    const m=cd.moved[i];
+    const{error}=await sb.from('milestones').update({date:m.newDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
+    if(error){
+      closeModal();
+      alert('"'+cd.sourceNewLabel+'" was saved, but pushing "'+m.label+'" failed: '+error.message+'\n\n'+i+' of '+cd.moved.length+' downstream milestone(s) were pushed before this happened. Reloading to show the current state — please review and finish manually if needed.');
+      await loadAll();
+      return;
+    }
+    await sb.from('milestone_history').insert({milestone_id:m.id,project_id:cd.projId,old_date:m.oldDate,new_date:m.newDate,changed_by:currentUserName,reason:'Pushed downstream '+(cd.deltaDays>0?'+':'')+cd.deltaDays+'d following "'+cd.sourceNewLabel+'" date change'});
+    const full=milestones.find(x=>x.id===m.id);
+    if(full){full.date=m.newDate;await syncMsDateToVinyl(full,m.newDate);}
+  }
+  await logActivity('pushed '+cd.moved.length+' downstream milestone'+(cd.moved.length>1?'s':''),cd.sourceNewLabel,cd.sourceNewLabel,cd.projId,null,null);
+  closeModal();
+  const moved=cd.moved,deltaDays=cd.deltaDays,projId=cd.projId,srcId=cd.sourceId,srcOldDate=cd.sourceOldDate,srcOldLabel=cd.sourceOldLabel,srcNewDate=cd.sourceNewDate,srcNewLabel=cd.sourceNewLabel;
+  showUndoToast(`"${srcNewLabel}" + ${moved.length} downstream milestone${moved.length>1?'s':''} pushed ${deltaDays>0?'+':''}${deltaDays}d`,async()=>{
+    await sb.from('milestones').update({label:srcOldLabel,date:srcOldDate||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',srcId);
+    await sb.from('milestone_history').insert({milestone_id:srcId,project_id:projId,old_date:srcNewDate,new_date:srcOldDate,changed_by:currentUserName,reason:'Undo of downstream push'});
+    for(const m of moved){
+      await sb.from('milestones').update({date:m.oldDate,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',m.id);
+      await sb.from('milestone_history').insert({milestone_id:m.id,project_id:projId,old_date:m.newDate,new_date:m.oldDate,changed_by:currentUserName,reason:'Undo of downstream push'});
+      const full=milestones.find(x=>x.id===m.id);
+      if(full)full.date=m.oldDate;
+    }
+    await loadAll();
+    showToast('Downstream push undone ✓');
+  });
+  await loadAll();
 }
 async function saveEditMs(id,oldLabel,oldDate){
   const isNA=document.getElementById('em-na')?.checked||false;
