@@ -1723,15 +1723,46 @@ async function loadAll(){
   const savedVinyl=vsRes.data||[];
   const savedPlan=psRes.data||[];
 
-  // Build vinyl schedule: saved rows + any projects not yet in the table
+  // Build vinyl schedule: saved rows + a placeholder for any project/SO that
+  // doesn't have one yet.
+  // FIX: this used to only check whether the PROJECT had ANY saved row at
+  // all (vinylProjectIds). A multi-SO project that had rows for SOME of its
+  // SOs — e.g. one SO added after the others, or a row that simply never
+  // got created — kept the rows it had and silently showed nothing for the
+  // rest, with no fallback, even though "This Week" and every other
+  // milestone-driven view saw all of them fine (they read straight from
+  // `milestones`, which is always complete). The check is now per
+  // (project, SO) pair instead of per project, so a partially-covered
+  // multi-SO project gets a placeholder for exactly the SOs it's missing —
+  // not the whole project, and not the SOs it already has a row for.
   const vinylProjectIds=new Set(savedVinyl.map(v=>v.project_id).filter(Boolean));
-  const newVinylRows=projects.filter(p=>!vinylProjectIds.has(p.id)).flatMap((p,i)=>{
-    const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl');
-    const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping');
+  // Tokenizes each saved row's own `so` field the same way a project's
+  // so_number gets tokenized, so a saved row whose `so` is itself a
+  // multi-SO blob (one combined job entered as a single string spanning
+  // many SOs) still counts as covering every SO it names — instead of every
+  // token inside that blob being mistaken for a brand-new missing SO and
+  // spawning a flood of spurious placeholder rows.
+  const savedVinylSOs=new Set(
+    savedVinyl.filter(v=>!v.is_standalone&&v.project_id)
+      .flatMap(v=>getSOList(v.so).map(so=>v.project_id+'|'+so))
+  );
+  const newVinylRows=projects.flatMap((p,i)=>{
     const soList=getSOList(p);
     // One row per SO if multiple, otherwise one row with full SO string
     const entries=soList.length>1?soList:[p.so_number||''];
-    return entries.map((so,j)=>({id:null,project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),so,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+j+1,is_standalone:false}));
+    // Multi-SO: only the SOs this project doesn't already have a row for.
+    // Single-SO: unchanged — only when the project has no saved row at all.
+    const missingEntries=soList.length>1
+      ?entries.filter(so=>!savedVinylSOs.has(p.id+'|'+so))
+      :(vinylProjectIds.has(p.id)?[]:entries);
+    return missingEntries.map((so,j)=>{
+      // Match the milestone for THIS SO specifically where the project is
+      // SO-split, so a multi-SO project doesn't get one SO's date stamped
+      // onto every other missing placeholder.
+      const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'&&(soList.length>1?m.so_tag===so:true));
+      const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping'&&(soList.length>1?m.so_tag===so:true));
+      return{id:null,project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),so,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+j+1,is_standalone:false};
+    });
   });
   // Merge saved rows with fresh project data — saved row dates take priority over milestone dates
   vinylSchedule=savedVinyl.map(v=>{
@@ -4265,19 +4296,56 @@ function renderCustomerOverview(){
 // Page, Gen Docs, and UAT each had their own near-identical (or, for Gen
 // Docs/UAT, not-quite-identical — they ignored the PM/Sales filter) version
 // of this logic.
+// FIX: this used to (1) compare the typed SO number to `val` with
+// case-sensitive `val.includes(p.so_number)` — backwards for a search
+// (checks whether what you TYPED contains the SO, not the other way
+// round) and broken by any case mismatch, and (2) for multi-SO projects,
+// `p.so_number` is the WHOLE comma/space-joined blob ("S18501, S18500,
+// ..."), so typing any one real SO off that list (the single most natural
+// way to search this tool) could never match — `val` is never a superset
+// of the entire blob. And (3) the only fallback was startsWith on the full
+// name/display string, so a query that wasn't the very first characters of
+// the project name (a client name, "HCL", part of an SO, anything
+// mid-string) never matched either. Fixed by tokenizing so_number the same
+// way getSOList() already does everywhere else in the app (so each
+// individual SO is compared on its own, case-insensitively) and by adding
+// a genuine substring tier (name, client, or any individual SO) below the
+// existing exact/starts-with tiers, so match priority still favors the
+// most precise hit first.
 function matchProjectByPickerText(val,list){
   if(!val||val.length<2)return null;
-  const vl=val.toLowerCase();
+  const vl=val.toLowerCase().trim();
   const pool=list||projects;
-  return pool.find(p=>{
-    const display=p.name+(p.so_number?' — '+p.so_number:'');
-    if(display.toLowerCase()===vl)return true;
+  // Tier 1: exact match — full "name — SO" display, name alone, or one
+  // individual SO number, all case-insensitive. Covers picking a
+  // suggestion from the datalist (which fills the input with the exact
+  // display string) and typing a full project name or SO number verbatim.
+  const exact=pool.find(p=>{
+    const display=(p.name+(p.so_number?' — '+p.so_number:'')).toLowerCase();
+    if(display===vl)return true;
     if(p.name.toLowerCase()===vl)return true;
-    if(p.so_number&&val.includes(p.so_number))return true;
+    if(p.so_number&&getSOList(p).some(so=>so.toLowerCase()===vl))return true;
     return false;
-  })||pool.find(p=>{
-    const display=p.name+(p.so_number?' — '+p.so_number:'');
-    return display.toLowerCase().startsWith(vl)||p.name.toLowerCase().startsWith(vl);
+  });
+  if(exact)return exact;
+  // Tier 2: typed text is the START of the display/name, or of one
+  // individual SO number (handles a partially-typed SO on a multi-SO
+  // project, e.g. "S185" while more SOs remain unfinished).
+  const startsWith=pool.find(p=>{
+    const display=(p.name+(p.so_number?' — '+p.so_number:'')).toLowerCase();
+    if(display.startsWith(vl)||p.name.toLowerCase().startsWith(vl))return true;
+    if(p.so_number&&getSOList(p).some(so=>so.toLowerCase().startsWith(vl)))return true;
+    return false;
+  });
+  if(startsWith)return startsWith;
+  // Tier 3: genuine substring match anywhere in the name, client, or any
+  // individual SO — so "Fargo", "HCL", or "flowserve" find their project
+  // even though none of those start at character one.
+  return pool.find(p=>{
+    if(p.name.toLowerCase().includes(vl))return true;
+    if(p.client&&p.client.toLowerCase().includes(vl))return true;
+    if(p.so_number&&getSOList(p).some(so=>so.toLowerCase().includes(vl)))return true;
+    return false;
   });
 }
 function pickerProjectList(){return filterBySA(filterBySales(filterByPM(projects))).sort((a,b)=>(a.name||'').localeCompare(b.name||''));}
@@ -7467,6 +7535,15 @@ async function pushSODatesToAll(projId,fromSO){
 function openEditMs(id,label,date,soTag,projId){
   const ms=milestones.find(m=>m.id===id);
   const isNA=ms?.not_applicable||false;
+  // Multi-SO detection for the "Push to all SOs" action below — mirrors the
+  // "All SO Milestones" screen's own isSoSplit check (milestones actually
+  // tagged with an so_tag), not just whether the project's SO field lists
+  // more than one SO, so the button doesn't appear promising a propagation
+  // that has nothing to match against yet (unsplit projects get pointed at
+  // "Split milestones by SO" elsewhere, not silently no-op here).
+  const emProj=projects.find(p=>p.id===projId);
+  const emIsSoSplit=milestones.some(m=>m.project_id===projId&&m.so_tag);
+  const emIsMultiSO=!!(emProj&&emIsSoSplit&&getSOList(emProj).length>1);
   const history=milestoneHistory[id]||[];
   const originalDate=ms?.original_date||null;
   const hasChanged=originalDate&&date&&originalDate!==date;
@@ -7493,18 +7570,28 @@ function openEditMs(id,label,date,soTag,projId){
     '<div class="field"><label>Reason for change <span style=\'font-weight:400;color:var(--gray-400)\'>— shown in history</span></label><input id="em-reason" placeholder="e.g. Parts delayed, client requested push..." style="font-size:12px;padding:7px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%"></div>'+
     historyHtml+
     '</div>'+
-    // Three distinct, separately-invoked operations (individual milestone push) —
-    // Save only and Push downstream are the two PRIMARY, equally-weighted actions;
-    // the small link beneath them reaches the ORIGINAL, unmodified whole-project
-    // cascade (still fully intact — see saveEditMs) as the clearly secondary,
-    // broader alternative, per the reviewed UX hierarchy. Remove/Cancel sit apart
-    // on their own row so they don't compete visually with the two primaries.
+    // Four distinct, separately-invoked operations (individual milestone push):
+    //   1. Save this SO / Save only — this milestone, this SO, nothing else.
+    //   2. Push to all SOs (multi-SO projects only) — copies just THIS
+    //      milestone's date to the same milestone on every other SO, no
+    //      other milestone type touched. Reuses the existing
+    //      pushSODateToOthers matching/write logic (see
+    //      saveEditMsPushToAllSOs/applyPushToAllSOs below).
+    //   3. Push downstream — the dependency-chain feature.
+    // These three are the equally-weighted PRIMARY actions; the small link
+    // beneath them reaches the ORIGINAL, unmodified whole-project cascade
+    // (still fully intact — see saveEditMs) as the clearly secondary,
+    // broader alternative. Remove/Cancel sit apart on their own row so they
+    // don't compete visually with the primaries. "Save only" is relabeled
+    // "Save this SO" only when the project is actually SO-split, to avoid
+    // ambiguous wording once there's something to distinguish it from.
     '<div class="modal-actions" style="flex-direction:column;align-items:stretch;gap:8px">'+
     '<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">'+
     '<button class="btn" style="color:var(--red);border-color:var(--red-mid)" onclick="deleteMs(\''+id+'\')">Remove</button>'+
     '<div style="display:flex;gap:6px;flex-wrap:wrap">'+
     '<button class="btn" onclick="closeModal()">Cancel</button>'+
-    '<button class="btn btn-primary" title="Change only this milestone — nothing else moves" onclick="saveEditMsOnly(\''+id+'\',\''+label+'\',\''+( date||'')+'\')">Save only</button>'+
+    '<button class="btn btn-primary" title="'+(emIsMultiSO?'Change only this SO’s instance of this milestone — nothing else moves':'Change only this milestone — nothing else moves')+'" onclick="saveEditMsOnly(\''+id+'\',\''+label+'\',\''+( date||'')+'\')">'+(emIsMultiSO?'Save this SO':'Save only')+'</button>'+
+    (emIsMultiSO?'<button class="btn btn-primary" title="Apply this '+esc(label)+' date to the same milestone on every SO in this project. No other milestone dates will change." onclick="saveEditMsPushToAllSOs(\''+id+'\',\''+label+'\',\''+( date||'')+'\')">Push to all SOs</button>':'')+
     '<button class="btn btn-primary" title="Preview and optionally shift same-chain milestones downstream of this one by the same number of days" onclick="saveEditMsPushDownstream(\''+id+'\',\''+label+'\',\''+( date||'')+'\')">Push downstream</button>'+
     '</div></div>'+
     '<div style="text-align:right"><a href="javascript:void(0)" onclick="saveEditMs(\''+id+'\',\''+label+'\',\''+( date||'')+'\')" style="font-size:10.5px;color:var(--gray-400);text-decoration:underline">or push ALL later project dates instead →</a></div>'+
@@ -7578,6 +7665,112 @@ async function saveEditMsOnly(id,oldLabel,oldDate){
     showToast('Undone ✓');
   });
   await loadAll();
+}
+// PUSH TO ALL SOs — Emma's original request: copy just THIS ONE milestone's
+// date to the SAME milestone (matched by key, with the same key+label
+// fallback chain pushSODateToOthers already uses) on every OTHER SO in the
+// project. Does not shift downstream dates, does not touch any other
+// milestone type, does not infer dependencies — this is explicit,
+// user-requested synchronization, not the chain-based Push Downstream
+// feature. READ-ONLY until confirmed, same safe preview/commit pattern as
+// Push Downstream: nothing is written here, only computed and previewed.
+// Only shown in the edit modal for SO-split, multi-SO projects (see
+// emIsMultiSO in openEditMs) — single-SO projects have nothing to sync to.
+function saveEditMsPushToAllSOs(id,oldLabel,oldDate){
+  const isNA=document.getElementById('em-na')?.checked||false;
+  const newDate=isNA?null:document.getElementById('em-dt').value;
+  const newLabel=document.getElementById('em-lbl').value.trim();
+  const reason=document.getElementById('em-reason')?.value.trim()||'';
+  const ms=milestones.find(m=>m.id===id);
+  const proj=ms?projects.find(p=>p.id===ms.project_id):null;
+  if(!ms||!proj||!newDate)return;
+  const soList=getSOList(proj);
+  const fromSO=ms.so_tag||'';
+  const otherSOs=soList.filter(so=>so!==fromSO);
+  if(!otherSOs.length){
+    // Nothing to sync to — behaves like Save this SO.
+    saveEditMsOnly(id,oldLabel,oldDate);
+    return;
+  }
+  // Same matching chain as pushSODateToOthers (key+label, then label-only,
+  // then key-only) so the preview and the actual write can never disagree
+  // about which milestone on each SO is "the same one".
+  const targets=[];
+  otherSOs.forEach(so=>{
+    const tgt=milestones.find(m=>m.project_id===proj.id&&m.so_tag===so&&m.key===ms.key&&m.label===newLabel)
+            ||milestones.find(m=>m.project_id===proj.id&&m.so_tag===so&&m.label===newLabel)
+            ||milestones.find(m=>m.project_id===proj.id&&m.so_tag===so&&m.key===ms.key);
+    if(tgt)targets.push({id:tgt.id,so,label:tgt.label,oldDate:tgt.date});
+  });
+  closeModal();
+  if(!targets.length){
+    saveEditMsOnly(id,oldLabel,oldDate);
+    return;
+  }
+  // Everything the confirm step needs — including the source's own
+  // not-yet-saved values — so applyPushToAllSOs() can save the source and
+  // push to the other SOs together, only once the user commits.
+  window._pushAllSOsData={
+    sourceId:id,sourceOldLabel:oldLabel,sourceOldDate:oldDate,sourceReason:reason,
+    sourceNewLabel:newLabel,sourceNewDate:newDate,sourceIsNA:isNA,sourceKey:ms.key,
+    sourceSO:fromSO,targets,projId:proj.id
+  };
+  const rows=targets.map(t=>`<tr><td style="padding:3px 8px 3px 0;color:var(--gray-700)">SO ${esc(t.so)}</td><td style="padding:3px 8px;color:var(--gray-400)">${t.oldDate?fmt(t.oldDate):'—'}</td><td style="padding:3px 0;color:var(--gray-700)">→ ${fmt(newDate)}</td></tr>`).join('');
+  document.getElementById('modal-root').innerHTML=`
+  <div class="modal-backdrop">
+    <div class="modal" style="width:460px" onclick="event.stopPropagation()">
+      <div class="modal-head"><span class="modal-title">📋 Push ${esc(newLabel)} to all SOs?</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div style="padding:16px;font-size:13px;color:var(--gray-600)">
+        SO ${esc(fromSO)}: <strong>${fmt(newDate)}</strong>
+        <table style="margin-top:10px;font-size:12px;border-collapse:collapse">${rows}</table>
+        <div style="margin-top:10px;font-size:11px;color:var(--gray-400)">Only ${esc(newLabel)} will be changed. All other milestone dates remain unchanged. Nothing is saved until you click "Push to all SOs".</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="applyPushToAllSOs()">Push to all SOs →</button>
+      </div>
+    </div>
+  </div>`;
+}
+// Only this function writes anything for the Push to all SOs flow. Saves
+// the source SO's own edit first (fail-fast, same shape/error-handling as
+// applyDownstreamPush's source-save step), then hands off to the EXISTING
+// pushSODateToOthers — unmodified — to write every other SO's matching
+// milestone. No duplicate persistence logic: the actual cross-SO write,
+// matching, per-target syncMsDateToVinyl, and final loadAll() are all the
+// same code already used by the post-"Save this SO" prompt and by "Match
+// all" on the All SO Milestones screen.
+// NOTE on N/A / Complete targets: pushSODateToOthers (reused here
+// unchanged) does not currently skip a target milestone that's marked N/A
+// or already Complete — it overwrites the date unconditionally, same as it
+// already does for those two existing entry points. This function
+// preserves that exact pre-existing behavior rather than inventing new
+// skip semantics; see the completion report for this task.
+async function applyPushToAllSOs(){
+  const cd=window._pushAllSOsData;
+  if(!cd||!cd.targets?.length){closeModal();return;}
+  window._pushAllSOsData=null;
+  const ms=milestones.find(m=>m.id===cd.sourceId);
+  const proj=ms?projects.find(p=>p.id===ms.project_id):null;
+
+  const srcUpdate={label:cd.sourceNewLabel,date:cd.sourceNewDate||null,not_applicable:cd.sourceIsNA,changed_by:currentUserName,changed_at:new Date().toISOString()};
+  if(!ms?.original_date&&cd.sourceNewDate)srcUpdate.original_date=cd.sourceNewDate;
+  const{error:srcErr}=await sb.from('milestones').update(srcUpdate).eq('id',cd.sourceId);
+  if(srcErr){
+    closeModal();
+    alert('Push to all SOs failed while saving "'+cd.sourceNewLabel+'": '+srcErr.message+'\n\nNothing was changed — please try again.');
+    await loadAll();
+    return;
+  }
+  if(ms){ms.date=cd.sourceNewDate;ms.label=cd.sourceNewLabel;ms.not_applicable=cd.sourceIsNA;}
+  await sb.from('milestone_history').insert({milestone_id:cd.sourceId,project_id:proj?.id||null,old_date:cd.sourceOldDate,new_date:cd.sourceNewDate,changed_by:currentUserName,reason:cd.sourceReason||null});
+  await logActivity('updated date',cd.sourceNewLabel,cd.sourceNewLabel,proj?.id||null,cd.sourceOldDate,cd.sourceNewDate);
+  if(ms)await syncMsDateToVinyl(ms,cd.sourceNewDate);
+  closeModal();
+  // Reused as-is — same matching, same (lack of) N/A/Complete skip, same
+  // lack of per-target history/activity rows, same syncMsDateToVinyl per
+  // target, same closing loadAll(). See the note above this function.
+  await pushSODateToOthers(cd.projId,cd.sourceSO,cd.sourceKey,cd.sourceNewDate,cd.sourceNewLabel);
 }
 // PUSH DOWNSTREAM — READ-ONLY until the user confirms. Nothing is written
 // to Supabase here: the delta is computed from the still-PERSISTED source
