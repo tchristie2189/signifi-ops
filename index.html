@@ -8227,23 +8227,33 @@ function renderProjPage(){
   const el=document.getElementById('tab-projpage');
   if(!projects.length){el.innerHTML='<div class="empty-state">No projects yet.</div>';return;}
   if(!ppProjId)ppProjId=selectedProjId||projects[0].id;
-  // ONE canonical project picker (Part 4 #11) — a single typeahead input
-  // built from the same shared pickerProjectList()/projectSearchOptions()
-  // trio used by Gen Docs, UAT, and Project Overview, so this page respects
-  // PM/Sales/SA filters exactly like everywhere else instead of hand-rolling
-  // its own filtered list. There used to be a SECOND, independent <select>
-  // here (grouped by master/child) that could silently fall out of sync
-  // with this input because switching via one control never updated the
-  // other — removed rather than patched, so there is no longer a second
-  // source of truth to desync from.
+  // ONE canonical project picker (Part 4 #11), now matching the SAME
+  // search-input-plus-select pattern as Project Overview (previously this
+  // page only had the typeahead input, no visible dropdown list — Overview
+  // has both). Both controls are built from the same shared
+  // pickerProjectList()/projectSearchOptions() used by Gen Docs, UAT, and
+  // Overview, so this page respects PM/Sales/SA filters exactly like
+  // everywhere else, and the <select>'s options are exactly the filtered
+  // set the person just chose — selecting a PM/Sales/SA actually narrows
+  // what's pickable here, same as Overview.
+  // A <select> lived here once before and was removed because it could
+  // silently fall out of sync with the search input — switching via one
+  // control never updated the other. That's fixed this time by having
+  // BOTH controls funnel through the same switchProjPage(id) (see below),
+  // which now syncs both #pp-proj-search and #pp-proj-select on every
+  // switch — one source of truth (ppProjId), two controls that both just
+  // reflect it, not two independent state machines.
   const pickerList=pickerProjectList();
-  if(pmFilter&&ppProjId&&!pickerList.find(p=>p.id===ppProjId)&&pickerList.length){ppProjId=pickerList[0].id;selectedProjId=ppProjId;}
+  if((pmFilter||salesFilter||saFilter)&&ppProjId&&!pickerList.find(p=>p.id===ppProjId)&&pickerList.length){ppProjId=pickerList[0].id;selectedProjId=ppProjId;}
   el.innerHTML=`
     <div class="proj-sel-bar">
       <label>Project</label>
-      <div style="flex:1;display:flex;gap:6px">
-        <input id="pp-proj-search" list="pp-proj-list" placeholder="Type to search... (supports master + child/SO-split projects)" style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);flex:1;min-width:0" onchange="onProjPageSearch(this.value)">
+      <div style="flex:1;display:flex;gap:6px;min-width:0">
+        <input id="pp-proj-search" list="pp-proj-list" placeholder="Type to search..." style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);width:170px;flex:0 0 auto" onchange="onProjPageSearch(this.value)">
         <datalist id="pp-proj-list">${projectSearchOptions(pickerList)}</datalist>
+        <select id="pp-proj-select" onchange="switchProjPage(this.value)" style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);flex:1;min-width:0">
+          ${pickerList.map(p=>`<option value="${p.id}"${p.id===ppProjId?' selected':''}>${esc(p.name)}${p.so_number?' — '+esc(p.so_number):''}</option>`).join('')}
+        </select>
       </div>
       ${pmDropdown('renderProjPage')}${salesDropdown('renderProjPage')}${saDropdown('renderProjPage')}
       <span id="pp-saved" class="pp-saved">Saved ✓</span>
@@ -8503,16 +8513,22 @@ function switchProjPageBySO(so){
 async function switchProjPage(id){
   ppProjId=id;
   selectedProjId=id;
-  // Keep the ONE header picker in sync no matter which of its several
-  // internal callers (child/SO-split pills, retry buttons, "Split by SO"
-  // actions) triggered the switch — this is the fix for Part 4 #11: since
-  // there's now only one project selector, "in sync" just means this input
-  // always reflects ppProjId after any switch, including ones that don't
-  // go through a full renderProjPage() (this function intentionally only
-  // reloads #pp-body for snappiness, not the whole header).
+  // Keep BOTH header pickers in sync no matter which of its several callers
+  // (the search input, the select dropdown, child/SO-split pills, retry
+  // buttons, "Split by SO" actions) triggered the switch — this input and
+  // the select are two separate DOM elements, so picking a project through
+  // one of them does not, on its own, update the other. Routing every
+  // switch through this single function and explicitly setting both
+  // values here is what keeps them from silently disagreeing about which
+  // project is showing (the exact desync bug an earlier, now-removed
+  // <select> here used to have) — including switches that don't go through
+  // a full renderProjPage() (this function intentionally only reloads
+  // #pp-body for snappiness, not the whole header).
   const inp=document.getElementById('pp-proj-search');
+  const sel=document.getElementById('pp-proj-select');
   const proj=projects.find(p=>p.id===id);
   if(inp&&proj)inp.value=proj.name+(proj.so_number?' — '+proj.so_number:'');
+  if(sel&&[...sel.options].some(o=>o.value===id))sel.value=id;
   document.getElementById('pp-body').innerHTML='<div style="text-align:center;padding:3rem;color:var(--gray-500)">Loading...</div>';
   await loadProjPage(id);
   renderProjPageBody();
