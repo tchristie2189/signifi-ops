@@ -4406,7 +4406,17 @@ function todoProjectPickerList(){return pickerProjectList().filter(p=>p.status!=
 // exists; only a brand-new one (via the quick-add box or the "+ To-Do"
 // entry points) has a single explicit add step, and even that requires
 // nothing but the task text.
-let todoFilters={search:'',projectId:'',customer:'',priority:'',showCrossedOut:false};
+// REGRESSION FIX (user report: "when you checkmark a todo it deletes it..
+// it should cross it out and leave it for past reference"): the DB write in
+// toggleTodo() was always correct (completed:true, row kept) — the bug was
+// purely in this page's default view, which hid completed rows behind a
+// "Show crossed out" toggle the moment they were checked, so a checked item
+// visually vanished with nothing to suggest it had only moved rather than
+// been deleted. hideCompleted replaces the old showCrossedOut flag with the
+// opposite default: crossed-out items now stay visible (struck through, per
+// spec) in the same list by default; this is purely an opt-in declutter for
+// a long history, not the thing standing between "checked" and "gone".
+let todoFilters={search:'',projectId:'',customer:'',priority:'',hideCompleted:false};
 function myTodos(){return todos.filter(t=>t.owner===currentUserName);}
 function todoDueBucket(t){
   if(!t.due_date)return'undated';
@@ -4586,25 +4596,27 @@ function renderTodosPage(){
   const mine=myTodos();
   const active=mine.filter(t=>!t.completed);
   const done=mine.filter(t=>t.completed);
-  let filtered=active;
-  if(todoFilters.search){
-    const q=todoFilters.search.toLowerCase();
-    filtered=filtered.filter(t=>(t.task_text||'').toLowerCase().includes(q)||(t.notes||'').toLowerCase().includes(q));
+  function applyCommonFilters(list){
+    let out=list;
+    if(todoFilters.search){
+      const q=todoFilters.search.toLowerCase();
+      out=out.filter(t=>(t.task_text||'').toLowerCase().includes(q)||(t.notes||'').toLowerCase().includes(q));
+    }
+    if(todoFilters.projectId)out=out.filter(t=>t.project_id===todoFilters.projectId);
+    if(todoFilters.customer)out=out.filter(t=>t.customer===todoFilters.customer);
+    if(todoFilters.priority)out=out.filter(t=>(t.priority||'Normal')===todoFilters.priority);
+    return out;
   }
-  if(todoFilters.projectId)filtered=filtered.filter(t=>t.project_id===todoFilters.projectId);
-  if(todoFilters.customer)filtered=filtered.filter(t=>t.customer===todoFilters.customer);
-  if(todoFilters.priority)filtered=filtered.filter(t=>(t.priority||'Normal')===todoFilters.priority);
-  const sorted=sortTodos(filtered);
+  const sorted=sortTodos(applyCommonFilters(active));
   const overdueCount=active.filter(t=>todoDueBucket(t)==='overdue').length;
   const todayCount=active.filter(t=>todoDueBucket(t)==='today').length;
   const projList=todoProjectPickerList();
   const customerList=[...new Set(mine.map(t=>t.customer).filter(Boolean))].sort();
-  const doneFiltered=todoFilters.showCrossedOut?sortTodos(done.filter(t=>{
-    if(todoFilters.projectId&&t.project_id!==todoFilters.projectId)return false;
-    if(todoFilters.customer&&t.customer!==todoFilters.customer)return false;
-    if(todoFilters.priority&&(t.priority||'Normal')!==todoFilters.priority)return false;
-    return true;
-  })):[];
+  // Crossed-out items stay visible in the same list by default (per the
+  // "cross it out, leave it for past reference" fix) — most-recently-checked
+  // first. "Hide crossed out" is an opt-in declutter for a long history, not
+  // the default — checking something off must never make it disappear.
+  const doneFiltered=todoFilters.hideCompleted?[]:applyCommonFilters(done).sort((a,b)=>new Date(b.completed_at||b.created_at)-new Date(a.completed_at||a.created_at));
   el.innerHTML=`
     <div class="section-header"><h2>📝 My To-Dos</h2>
       <div style="font-size:12px;color:var(--gray-500)">${overdueCount?overdueCount+' overdue · ':''}${todayCount?todayCount+' due today · ':''}${active.length} active</div>
@@ -4629,10 +4641,10 @@ function renderTodosPage(){
         <option${todoFilters.priority==='High'?' selected':''}>High</option>
         <option${todoFilters.priority==='Urgent'?' selected':''}>Urgent</option>
       </select>
-      <label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox"${todoFilters.showCrossedOut?' checked':''} onchange="todoFilters.showCrossedOut=this.checked;renderTodosPage()"> Show crossed out</label>
+      <label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox"${todoFilters.hideCompleted?' checked':''} onchange="todoFilters.hideCompleted=this.checked;renderTodosPage()"> Hide crossed out</label>
     </div>
     <div>${sorted.length?sorted.map(todoRowHtml).join(''):'<div style="padding:2rem;text-align:center;color:var(--gray-400);font-size:13px">Nothing on your list — type above to add one.</div>'}</div>
-    ${todoFilters.showCrossedOut?`<div style="margin-top:20px"><div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Crossed out (${doneFiltered.length})</div>${doneFiltered.length?doneFiltered.map(todoRowHtml).join(''):'<div style="font-size:12px;color:var(--gray-400)">None yet.</div>'}</div>`:''}
+    ${doneFiltered.length?`<div style="margin-top:20px"><div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Crossed out (${doneFiltered.length})</div>${doneFiltered.map(todoRowHtml).join('')}</div>`:''}
   `;
 }
 
