@@ -1110,8 +1110,13 @@ function getSOConfigSummary(proj,soTag=''){
     odoo_url:d?.odoo_url||proj?.odoo_url||'',
     install_ticket_url:d?.install_ticket_url||proj?.install_ticket_url||'',
     ui_task_url:d?.ui_task_url||proj?.ui_task_url||'',
-    address:d?.address??proj?.address??'',
-    naming_convention:d?.naming_convention??proj?.naming_convention??'',
+    // address and naming_convention are SO-specific: on a multi-SO project they
+    // must never fall through to the project-level legacy column, because one
+    // project-level value cannot be correct for every location. The URL and
+    // form_factor fields above keep their project fallback — those genuinely
+    // are project-wide defaults.
+    address:resolveSOConfigField(proj,soTag,'address').value||'',
+    naming_convention:resolveSOConfigField(proj,soTag,'naming_convention').value||'',
   };
 }
 
@@ -1154,6 +1159,103 @@ function stageStatus(start,end){
   return{label:fmt(start),chip:'chip-future'};
 }
 function getMsDate(pid,key){return milestones.find(m=>m.project_id===pid&&m.key===key)?.date||null;}
+
+// ── CANONICAL SO-AWARE RESOLVERS ────────────────────────────
+// One place decides what a given SO's value is, so the Project Page, the
+// schedules, the Generate Docs form and the generated document can never
+// disagree. Milestone IDENTITY is the `key` column and only the `key` column —
+// production labels for key='shipping' include "Pack & ship", "PAck and ship",
+// "Pick-up date", "Unit pick up", "Shipping - Brazil" and "p", so any
+// label.includes() match silently misses rows and picks up the wrong ones.
+const NOT_CONFIGURED_SO='Not configured for this SO';
+// Exist ONLY per-SO. No project-level column, so they can never be borrowed.
+const SO_ONLY_CONFIG_FIELDS=['poc_name','poc_phone','poc_email','install_time','technician_details','carrier','tracking_number'];
+// Exist on BOTH projects (legacy) and so_details. The legacy project value is
+// readable for single-SO projects only — never for a multi-SO project, where
+// one project-level value cannot be true for every location.
+const SO_OVERRIDE_CONFIG_FIELDS=['address','naming_convention','voltage','plug_type','power_requirements','primary_connectivity','backup_connectivity'];
+function isMultiSOProject(proj){return getSOList(proj).length>1;}
+// The SO a resolver should actually use: the explicitly selected one, or the
+// only one when a project has exactly one (single-SO projects never make the
+// user pick). Multi-SO with nothing selected deliberately resolves to ''.
+function effectiveSOFor(proj,soTag){
+  if(!proj)return'';
+  const list=getSOList(proj);
+  return soTag||(list.length===1?list[0]:'');
+}
+// Resolves ONE SO-specific milestone by project + key + so_tag. On a multi-SO
+// project an so_tag is REQUIRED and matched exactly: an untagged row, a
+// sibling SO's row, and "whichever row Array.find hit first" are all wrong
+// answers and all return null instead.
+function resolveMsForSO(pid,key,soTag){
+  const proj=projects.find(p=>p.id===pid);
+  const rows=milestones.filter(m=>m.project_id===pid&&m.key===key);
+  if(!rows.length)return null;
+  const eff=effectiveSOFor(proj,soTag);
+  if(proj&&isMultiSOProject(proj)){
+    if(!eff)return null;
+    return rows.find(m=>m.so_tag===eff)||null;
+  }
+  // Single-SO (and orphan) projects keep the legacy behaviour: the tagged row
+  // if there is one, otherwise the untagged row.
+  return(eff?rows.find(m=>m.so_tag===eff):null)||rows.find(m=>!m.so_tag)||rows[0]||null;
+}
+function resolveMsDateForSO(pid,key,soTag){return resolveMsForSO(pid,key,soTag)?.date||null;}
+// Resolves one SO configuration field. Returns {value,configured,reason} so
+// callers can tell "deliberately blank" apart from "this SO was never
+// configured" — on a multi-SO project those must never render the same way.
+function resolveSOConfigField(proj,soTag,field){
+  if(!proj)return{value:'',configured:false,reason:'no-project'};
+  const eff=effectiveSOFor(proj,soTag);
+  const det=eff?soDetails.find(d=>d.project_id===proj.id&&d.so_tag===eff):null;
+  const soVal=det?det[field]:null;
+  if(soVal!==null&&soVal!==undefined&&soVal!=='')return{value:soVal,configured:true,reason:'so'};
+  if(isMultiSOProject(proj)){
+    // Never borrow — not from the project record, not from a sibling SO.
+    return{value:'',configured:false,reason:!eff?'no-so-selected':(det?'so-blank':'no-so-row')};
+  }
+  if(SO_ONLY_CONFIG_FIELDS.includes(field))return{value:'',configured:false,reason:'so-blank'};
+  const legacy=proj[field];
+  if(legacy!==null&&legacy!==undefined&&legacy!=='')return{value:legacy,configured:true,reason:'project-legacy'};
+  return{value:'',configured:false,reason:'unset'};
+}
+// The single place that decides what an unconfigured SO field looks like, on
+// screen and in a generated document alike.
+function soConfigText(proj,soTag,field){
+  const r=resolveSOConfigField(proj,soTag,field);
+  if(r.configured)return r.value;
+  return(proj&&isMultiSOProject(proj))?NOT_CONFIGURED_SO:'';
+}
+// " (SO: S901)" on a multi-SO project, nothing on a single-SO one — so a PM
+// can see at a glance which location a value belongs to.
+function soScopeLbl(proj,soTag){
+  if(!proj||!isMultiSOProject(proj))return'';
+  const eff=effectiveSOFor(proj,soTag===undefined?(typeof selectedDocSO!=='undefined'?selectedDocSO:''):soTag);
+  return eff?' (SO: '+eff+')':' — no SO selected';
+}
+function soEditHint(proj){
+  return(proj&&isMultiSOProject(proj))?'edit via SO Configuration':'edit via Project Page';
+}
+// Documents whose content is location-specific. On a multi-SO project these
+// must not be generated from "All SOs (master defaults)" — there is no single
+// correct address/kiosk ID/power value to put in them.
+const SO_REQUIRED_DOC_TYPES=new Set(['install','qa']);
+function docSOGate(type){
+  const proj=projects.find(p=>p.id===selectedDocProjId);
+  if(!proj)return{ok:false,reason:'Select a project first.'};
+  if(!SO_REQUIRED_DOC_TYPES.has(type))return{ok:true};
+  if(!isMultiSOProject(proj))return{ok:true};
+  if(effectiveSOFor(proj,selectedDocSO))return{ok:true};
+  return{ok:false,reason:'This project has '+getSOList(proj).length+' SOs. Pick the SO this document is for — address, kiosk ID, power, POC and dates all differ by SO, so "All SOs (master defaults)" cannot produce a correct document.'};
+}
+// SO-aware equivalent of projectConnectivitySummary.
+function soConnectivitySummary(proj,soTag){
+  const pri=resolveSOConfigField(proj,soTag,'primary_connectivity');
+  const bak=resolveSOConfigField(proj,soTag,'backup_connectivity');
+  const parts=[pri.configured?'Primary: '+pri.value:'',bak.configured?'Backup: '+bak.value:''].filter(Boolean);
+  if(parts.length)return parts.join(' | ');
+  return(proj&&isMultiSOProject(proj))?NOT_CONFIGURED_SO:'';
+}
 function showToast(msg,dur=2500){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>{t.style.display='none';},dur);}
 
 // Generic "X changed — Undo (15s)" utility. One pending undo at a time — a new
@@ -1797,9 +1899,10 @@ async function loadAll(){
       // Match the milestone for THIS SO specifically where the project is
       // SO-split, so a multi-SO project doesn't get one SO's date stamped
       // onto every other missing placeholder.
-      const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'&&(soList.length>1?m.so_tag===so:true));
-      const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping'&&(soList.length>1?m.so_tag===so:true));
-      return{id:null,project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),so,client:p.client,vinyl_type:p.vinyl_type||'',date:vm?.date||'',ship_date:sh?.date||'',pm:p.pm||'',form_factor:p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+j+1,is_standalone:false};
+      // Canonical resolver — project + key + so_tag, never "first row wins".
+      const vmDate=resolveMsDateForSO(p.id,'vinyl',so);
+      const shDate=resolveMsDateForSO(p.id,'shipping',so);
+      return{id:null,project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),so,client:p.client,vinyl_type:p.vinyl_type||'',date:vmDate||'',ship_date:shDate||'',pm:p.pm||'',form_factor:p.form_factor||'',status:'Scheduled',priority:savedVinyl.length+i+j+1,is_standalone:false};
     });
   });
   // Merge saved rows with fresh project data — saved row dates take priority over milestone dates
@@ -1807,13 +1910,19 @@ async function loadAll(){
     if(v.is_standalone)return{...v,id:v.id,vinylType:v.vinyl_type,shipDate:v.ship_date,formFactor:v.form_factor};
     const p=projects.find(x=>x.id===v.project_id);
     // Find milestone matching this SO (so_tag) if split, otherwise untagged
-    const vm=p?milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'&&(v.so?m.so_tag===v.so:!m.so_tag)):null;
-    const sh=p?milestones.find(m=>m.project_id===p.id&&m.key==='shipping'&&(v.so?m.so_tag===v.so:!m.so_tag)):null;
-    // Saved vinyl row date takes priority — only fall back to milestone if vinyl row has no date
+    // CANONICAL SOURCE: milestones (project_id + key + so_tag). This used to be
+    // `v.date||vm?.date` — the saved vinyl_schedule copy winning over the
+    // milestone — which is how 80/200 vinyl dates and 55/200 ship dates drifted
+    // apart from the milestone tracker. The vinyl_schedule.date/ship_date
+    // columns are retained (nothing is deleted) but are no longer read for a
+    // project-linked row, so there is exactly one source of truth.
+    const vmDate=p?resolveMsDateForSO(p.id,'vinyl',v.so||''):null;
+    const shDate=p?resolveMsDateForSO(p.id,'shipping',v.so||''):null;
     return{...v,
       vinylType:p?.vinyl_type||v.vinyl_type||'',
-      date:v.date||vm?.date||'',
-      shipDate:v.ship_date||sh?.date||'',
+      date:(p?(vmDate||''):(v.date||'')),
+      shipDate:(p?(shDate||''):(v.ship_date||'')),
+      _legacyVinylDate:v.date||'',_legacyShipDate:v.ship_date||'',
       pm:p?.pm||v.pm||'',
       formFactor:v.form_factor||p?.form_factor||'',
       name:v.name||p?.name||'',
@@ -3173,7 +3282,12 @@ function renderProductionBoardView(){
       const rl=(pbHub.reasons.find(r=>r.code===b.waiting_reason)||{}).label||b.waiting_reason||'';
       const late=prodEnd&&daysDiff(prodEnd)<0&&pbHubStageOf(p)!=='shipped';
       const machine=getHardwareSummary(p.id);
-      const naming=(getSOConfigSummary(p).naming_convention||'');
+      // Production Board cards are per-project (dates above are deliberately
+      // project-wide aggregates), so on a multi-SO project list every SO's
+      // kiosk ID rather than passing off one of them as "the" kiosk ID.
+      const naming=isMultiSOProject(p)
+        ?getSOList(p).map(so=>{const r=resolveSOConfigField(p,so,'naming_convention');return r.configured?r.value:null;}).filter(Boolean).join(' • ')
+        :(getSOConfigSummary(p).naming_convention||'');
       const prodNote=getGlobalSection(p.id,'notes_production');
       return`<div class="pb-card ${b.waiting?'pb-waiting':''}" style="border-left-color:${b.waiting?'#d97706':s.color}" onclick="goToProjPage('${p.id}')">
         ${img?`<img class="pb-img" src="${img.url}" draggable="false" onclick="pbHubAddPhoto(event,'${p.id}')" style="cursor:pointer" title="Click to replace" onerror="this.outerHTML='<div class=\\'pb-noimg\\' onclick=\\'pbHubAddPhoto(event,&quot;${p.id}&quot;)\\'>📷 Image link broken — click to replace</div>'">`
@@ -5254,7 +5368,21 @@ function renderOverview(){
   const thisWeek=milestones.filter(m=>m.date&&daysDiff(m.date)>=0&&daysDiff(m.date)<=6).length;
   const adHocThisWeekOv=adHocMsOv.filter(m=>daysDiff(m.date)>=0&&daysDiff(m.date)<=6&&m._status!=='Complete').length;
   const proj=activeProjects('overview').find(p=>p.id===selectedProjId)||projects.find(p=>p.id===selectedProjId);
-  const overviewNaming=proj?(getSOConfigSummary(proj).naming_convention||''):'';
+  // Kiosk ID in the Overview header. On a multi-SO project there is no single
+  // correct value, so this no longer calls getSOConfigSummary(proj) with no SO
+  // (which silently fell through to the project-level legacy field and
+  // presented one location's kiosk ID as though it applied to all of them).
+  // Instead each SO's own value is listed, and SOs with none say so.
+  let overviewNaming='';
+  if(proj&&isMultiSOProject(proj)){
+    const parts=getSOList(proj).map(so=>{
+      const r=resolveSOConfigField(proj,so,'naming_convention');
+      return so+': '+(r.configured?r.value:NOT_CONFIGURED_SO);
+    });
+    overviewNaming=parts.join('  •  ');
+  } else if(proj){
+    overviewNaming=getSOConfigSummary(proj).naming_convention||'';
+  }
   const overviewNamingSafe=overviewNaming.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const projMs=milestones.filter(m=>m.project_id===selectedProjId);
   // Check if milestones are already split by SO
@@ -5454,23 +5582,30 @@ async function quickUpdateMs(msId,newDate){
   await loadAll();
 }
 
-// Syncs a changed milestone date back to the matching vinyl_schedule row so
-// the vinyl schedule never shows a stale date after a milestone edit.
+// RETIRED AS A WRITE PATH. The milestone (project_id + key + so_tag) is now the
+// source of truth and the Vinyl Schedule reads from it, so there is nothing to
+// copy into vinyl_schedule.date/ship_date any more. This is kept as an
+// in-memory refresh only — ~19 call sites depend on the schedule reflecting a
+// milestone edit without a full reload — and it no longer touches the database.
+//
+// The old implementation matched rows with `ms.so_tag ? v.so===ms.so_tag : true`,
+// so editing an UNTAGGED vinyl or shipping milestone rewrote EVERY SO's row on
+// that project. That was an active multi-SO data-corruption path and is the
+// mechanism behind a large share of the measured date drift.
 async function syncMsDateToVinyl(ms,newDate){
-  if(ms.key!=='vinyl'&&ms.key!=='shipping')return;
-  const dbField=ms.key==='vinyl'?'date':'ship_date';
-  const inMemField=ms.key==='vinyl'?'date':'shipDate';
-  // Find matching vinyl schedule rows for this project/SO
-  const rows=vinylSchedule.filter(v=>
-    v.project_id===ms.project_id&&
-    (ms.so_tag?v.so===ms.so_tag:true)&&
-    v.id // only saved rows
-  );
-  if(!rows.length)return;
-  await Promise.all(rows.map(v=>
-    sb.from('vinyl_schedule').update({[dbField]:newDate,updated_at:new Date().toISOString()}).eq('id',v.id)
-  ));
-  rows.forEach(v=>{v[inMemField]=newDate;if(ms.key==='vinyl')v.date=newDate;else v.shipDate=newDate;});
+  if(!ms||(ms.key!=='vinyl'&&ms.key!=='shipping'))return;
+  const proj=projects.find(p=>p.id===ms.project_id);
+  const multi=proj?isMultiSOProject(proj):false;
+  vinylSchedule.forEach(v=>{
+    if(v.project_id!==ms.project_id)return;
+    // Exact SO match only — an untagged milestone never updates a tagged row.
+    if(multi){
+      if(!ms.so_tag||v.so!==ms.so_tag)return;
+    } else if(ms.so_tag&&v.so&&v.so!==ms.so_tag){
+      return;
+    }
+    if(ms.key==='vinyl')v.date=newDate;else v.shipDate=newDate;
+  });
 }
 // Cleans up exact duplicate milestone rows (same label + same SO tag) for one
 // project — the kind of leftover the Overview page's dupe-detector banner
@@ -6062,7 +6197,7 @@ function renderVinyl(){
       <th onclick="sortVinyl('status')" style="cursor:pointer">Status ↕</th>
       <th style="width:28px"></th>
     </tr></thead><tbody>${rows||'<tr><td colspan="12" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
-    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('vinyl')">+ Add vinyl job</button><button onclick="syncVinylFromProjects()" style="font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--blue);background:var(--blue-bg);color:var(--blue);cursor:pointer;font-family:var(--font);font-weight:500;margin-left:8px">↻ Sync from projects</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
+    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('vinyl')">+ Add vinyl job</button><button onclick="syncVinylFromProjects()" style="font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--blue);background:var(--blue-bg);color:var(--blue);cursor:pointer;font-family:var(--font);font-weight:500;margin-left:8px">↻ Sync from projects</button><button onclick="reportVinylDateDrift()" style="font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font);font-weight:500;margin-left:6px" title="Read-only: compare legacy vinyl_schedule date columns against the canonical milestones">⚠ Legacy date drift</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
   </div>`;
   attachScheduleFilterEvents('vinyl',renderVinyl);
 }
@@ -6283,19 +6418,24 @@ async function syncVinylFromProjects(){
   const today_str=isoD(today());
   const toAdd=[];
   for(const p of projects.filter(p=>p.status!=='complete')){
-    const vm=milestones.find(m=>m.project_id===p.id&&m.key==='vinyl'&&m.date&&m.date>=today_str);
-    const sh=milestones.find(m=>m.project_id===p.id&&m.key==='shipping');
-    if(!vm)continue;
     const soList=getSOList(p);
     const entries=soList.length>1?soList:[p.so_number||''];
     for(const so of entries){
+      // Canonical, per-SO resolution. This used to take
+      // milestones.find(project_id && key==='vinyl') and
+      // milestones.find(project_id && key==='shipping') ONCE for the whole
+      // project — so on a multi-SO project every SO's new row was stamped with
+      // whichever SO's dates happened to come first in the array.
+      const vmDate=resolveMsDateForSO(p.id,'vinyl',so);
+      const shDate=resolveMsDateForSO(p.id,'shipping',so);
+      if(!vmDate||vmDate<today_str)continue;
       // Only check project-linked rows (never standalone/ad hoc)
       const alreadyExists=vinylSchedule.filter(v=>!v.is_standalone).some(v=>v.project_id===p.id&&(v.so===so||soList.length===1));
       if(!alreadyExists){
         toAdd.push({
           project_id:p.id,name:p.name+(soList.length>1?' ('+so+')':''),
           so,client:p.client||'',vinyl_type:p.vinyl_type||'',
-          date:vm.date,ship_date:sh?.date||null,
+          date:vmDate,ship_date:shDate||null,
           pm:p.pm||'',form_factor:p.form_factor||'',
           status:'Scheduled',priority:vinylSchedule.length+toAdd.length+1,
           is_standalone:false,updated_at:new Date().toISOString()
@@ -6309,6 +6449,30 @@ async function syncVinylFromProjects(){
   if(error){alert('Error: '+error.message);return;}
   showToast('Restored '+toAdd.length+' row'+(toAdd.length>1?'s':'')+' — ad hoc rows untouched ✓');
   await loadAll();
+}
+// READ-ONLY diagnostic. Lists rows whose retired vinyl_schedule.date /
+// ship_date columns disagree with the canonical milestone now driving the
+// schedule. Historical production data is deliberately NOT mass-corrected —
+// this only reports, so the drift can be reviewed and fixed deliberately.
+function reportVinylDateDrift(){
+  const rows=[];
+  vinylSchedule.forEach(v=>{
+    if(!v.project_id||v.is_standalone)return;
+    const legacyV=v._legacyVinylDate||'',legacyS=v._legacyShipDate||'';
+    const canonV=resolveMsDateForSO(v.project_id,'vinyl',v.so||'')||'';
+    const canonS=resolveMsDateForSO(v.project_id,'shipping',v.so||'')||'';
+    const vDrift=legacyV&&legacyV!==canonV,sDrift=legacyS&&legacyS!==canonS;
+    if(vDrift||sDrift){
+      rows.push((v.name||'(unnamed)')+(v.so?' ['+v.so+']':'')
+        +(vDrift?'\n    Vinyl — canonical: '+(canonV?fmt(canonV):'none')+'   legacy copy: '+fmt(legacyV):'')
+        +(sDrift?'\n    Ship  — canonical: '+(canonS?fmt(canonS):'none')+'   legacy copy: '+fmt(legacyS):''));
+    }
+  });
+  if(!rows.length){alert('No drift found.\n\nEvery project-linked vinyl schedule row agrees with its canonical milestone.');return;}
+  alert('LEGACY DATE DRIFT — '+rows.length+' row'+(rows.length>1?'s':'')+'\n\n'
+    +'The schedule now reads the canonical milestone (project + key + SO). These rows still\n'
+    +'carry a different value in the retired vinyl_schedule date columns. Nothing has been\n'
+    +'changed or deleted — this is a report only.\n\n'+rows.join('\n\n'));
 }
 function vinylFormFactorCell(item,origIdx){
   // Project-linked rows show the canonical hardware summary and edit through
@@ -6407,7 +6571,13 @@ function ps2(itemId,k,v){
     }).select().single().then(({data})=>{if(data){item.id=data.id;showToast('Saved ✓');}});
   }
 }
-// Vinyl date sync — updates both the local schedule AND the milestone in Supabase
+// Vinyl / ship date edit — writes the CANONICAL milestone only.
+// Previously this wrote vinyl_schedule.date/ship_date first and then tried to
+// mirror the milestone, leaving two independently editable stores that drifted
+// (80/200 vinyl and 55/200 ship dates disagreed in production). The
+// vinyl_schedule date columns are no longer written for project-linked rows;
+// standalone rows (no project) keep using their own columns since they have no
+// milestone to own the date.
 async function vinylDateSync(idOrIdx,val,type){
   // Accept either a DB id (string UUID) or 'idx:N' for virtual rows
   let item;
@@ -6419,52 +6589,110 @@ async function vinylDateSync(idOrIdx,val,type){
   if(!item){console.warn('vinylDateSync: item not found',idOrIdx);showToast('Save error — row not found');return;}
   const field=type==='ship'?'shipDate':'date';
   const dbField=type==='ship'?'ship_date':'date';
+  const msKey=type==='ship'?'shipping':'vinyl';
+  const msLabel=type==='ship'?'Pack & ship':'Vinyl / branding';
   item[field]=val;
-  // If no DB row exists yet, insert one first
-  if(!item.id){
-    const{data,error}=await sb.from('vinyl_schedule').insert({
-      project_id:item.project_id||null,
-      name:item.name||'',so:item.so||'',client:item.client||'',
-      vinyl_type:item.vinylType||'',pm:item.pm||'',
-      form_factor:item.formFactor||'',status:item.status||'Scheduled',
-      [dbField]:val||null,priority:item.priority||99,
-      is_standalone:item.is_standalone||false,updated_at:new Date().toISOString()
-    }).select().single();
-    if(error){console.warn('vinyl_schedule insert error',error);showToast('⚠ Save failed: '+error.message);return;}
-    if(data){item.id=data.id;}
-  } else {
-    // Always update by row ID
-    const{error}=await sb.from('vinyl_schedule').update({[dbField]:val||null,updated_at:new Date().toISOString()}).eq('id',item.id);
-    if(error){console.warn('vinyl save error',error);showToast('Save error: '+error.message);return;}
-  }
-  // Sync back to the matching project milestone
   const proj=projects.find(p=>p.id===item.project_id);
-  if(proj&&val){
-    const msKey=type==='ship'?'shipping':'vinyl';
-    const msLabel=type==='ship'?'Pack & ship':'Vinyl / branding';
-    const existing=milestones.find(m=>m.project_id===proj.id&&m.key===msKey&&(item.so?m.so_tag===item.so:!m.so_tag));
-    if(existing){await sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id);}
-    else{await sb.from('milestones').insert({project_id:proj.id,key:msKey,label:msLabel,date:val,so_tag:item.so||null,changed_by:currentUserName});}
+
+  // ── Standalone row (not tied to a project): vinyl_schedule owns it ──
+  if(!proj){
+    if(!item.id){
+      const{data,error}=await sb.from('vinyl_schedule').insert({
+        project_id:item.project_id||null,
+        name:item.name||'',so:item.so||'',client:item.client||'',
+        vinyl_type:item.vinylType||'',pm:item.pm||'',
+        form_factor:item.formFactor||'',status:item.status||'Scheduled',
+        [dbField]:val||null,priority:item.priority||99,
+        is_standalone:item.is_standalone||false,updated_at:new Date().toISOString()
+      }).select().single();
+      if(error){console.warn('vinyl_schedule insert error',error);showToast('⚠ Save failed: '+error.message);return;}
+      if(data){item.id=data.id;}
+    } else {
+      const{error}=await sb.from('vinyl_schedule').update({[dbField]:val||null,updated_at:new Date().toISOString()}).eq('id',item.id);
+      if(error){console.warn('vinyl save error',error);showToast('Save error: '+error.message);return;}
+    }
     showToast('Date saved ✓');
-    await loadAll();
-  } else {
-    showToast('Date saved ✓');
+    return;
   }
+
+  // ── Project-linked row: the milestone is the source of truth ──
+  // Resolved by project_id + key + so_tag. On a multi-SO project an untagged
+  // milestone is never accepted and never created, so editing one SO's row can
+  // no longer move another SO's date.
+  const multi=isMultiSOProject(proj);
+  if(multi&&!item.so){
+    showToast('⚠ This row has no SO — open the project and set the SO before editing dates');
+    return;
+  }
+  const existing=resolveMsForSO(proj.id,msKey,item.so||'');
+  if(existing){
+    if(!existing.original_date&&existing.date){
+      await sb.from('milestones').update({original_date:existing.date}).eq('id',existing.id);
+      existing.original_date=existing.date;
+    }
+    const{error}=await sb.from('milestones').update({date:val||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id);
+    if(error){console.warn('milestone save error',error);showToast('⚠ Save failed: '+error.message);return;}
+    logActivity('updated date',type==='ship'?'shipping':'vinyl',msLabel,proj.id,existing.date,val);
+    existing.date=val||null;
+  } else {
+    const{error}=await sb.from('milestones').insert({project_id:proj.id,key:msKey,label:msLabel,date:val||null,so_tag:item.so||null,changed_by:currentUserName});
+    if(error){console.warn('milestone insert error',error);showToast('⚠ Save failed: '+error.message);return;}
+    logActivity('added milestone',type==='ship'?'shipping':'vinyl',msLabel,proj.id,null,val);
+  }
+  showToast('Date saved ✓');
+  await loadAll();
 }
+// Planogram schedule date edit. The vinyl branch was removed — vinyl dates go
+// through vinylDateSync, which writes the canonical milestone.
+//
+// Planogram is the one milestone with no dedicated `key` of its own: it is
+// stored as key='other' with the label 'Planogram sign-off'. Until it gets a
+// real key, label is the only identifier available here — so this uses an
+// EXACT label match on the canonical label, never the old
+// label.toLowerCase().includes('planogram'), which also matched
+// 'Planogram start' and 'Planogram end' and would move the wrong row. It is
+// also scoped by so_tag so one SO's edit cannot move another SO's date.
+const PLANOGRAM_MS_LABEL='Planogram sign-off';
 function vsDate(i,field,val,type){
   const data=type==='vinyl'?vinylSchedule:planogramSchedule;
+  if(!data[i])return;
   data[i][field]=val;
-  // Use project_id (not id which is the schedule row UUID)
-  const proj=projects.find(p=>p.id===data[i].project_id);
-  if(proj&&val){
-    const key=type==='vinyl'?'vinyl':'other';
-    const label=type==='vinyl'?'Vinyl / branding':'Planogram sign-off';
-    const existing=milestones.find(m=>m.project_id===proj.id&&m.key===key&&(type==='vinyl'||(m.label||'').toLowerCase().includes('planogram')));
-    if(existing){sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id).then(({error})=>{if(error){showToast('⚠ Sync failed: '+error.message);return;}logActivity('updated date',type,label,proj.id,existing.date,val);showToast('Date synced to project ✓');});}
-    else{sb.from('milestones').insert({project_id:proj.id,key,label,date:val,changed_by:currentUserName}).then(({error})=>{if(error){showToast('⚠ Sync failed: '+error.message);return;}logActivity('added milestone',type,label,proj.id,null,val);loadAll();showToast('Date synced to project ✓');});}
-  } else if(val){
-    showToast('Date saved ✓');
+  if(type==='vinyl'){
+    // Route through the canonical writer rather than duplicating it here.
+    vsDateVinylFallback(data[i],field,val);
+    return;
   }
+  const proj=projects.find(p=>p.id===data[i].project_id);
+  if(!proj||!val){if(val)showToast('Date saved ✓');return;}
+  const soTag=data[i].so||'';
+  if(isMultiSOProject(proj)&&!soTag){
+    showToast('⚠ This row has no SO — set the SO before editing dates');
+    return;
+  }
+  const candidates=milestones.filter(m=>m.project_id===proj.id&&m.key==='other'&&m.label===PLANOGRAM_MS_LABEL);
+  const existing=isMultiSOProject(proj)
+    ?candidates.find(m=>m.so_tag===soTag)
+    :(candidates.find(m=>m.so_tag===soTag)||candidates.find(m=>!m.so_tag)||candidates[0]);
+  if(existing){
+    sb.from('milestones').update({date:val,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id).then(({error})=>{
+      if(error){showToast('⚠ Sync failed: '+error.message);return;}
+      logActivity('updated date',type,PLANOGRAM_MS_LABEL,proj.id,existing.date,val);
+      existing.date=val;
+      showToast('Date synced to project ✓');
+    });
+  } else {
+    sb.from('milestones').insert({project_id:proj.id,key:'other',label:PLANOGRAM_MS_LABEL,date:val,so_tag:soTag||null,changed_by:currentUserName}).then(({error})=>{
+      if(error){showToast('⚠ Sync failed: '+error.message);return;}
+      logActivity('added milestone',type,PLANOGRAM_MS_LABEL,proj.id,null,val);
+      loadAll();
+      showToast('Date synced to project ✓');
+    });
+  }
+}
+// Kept so any remaining vinyl caller still lands on the canonical writer.
+function vsDateVinylFallback(item,field,val){
+  const type=field==='shipDate'?'ship':'vinyl';
+  vinylDateSync(item.id||('idx:'+vinylSchedule.indexOf(item)),val,type);
 }
 
 async function syncPlanToProject(idx){
@@ -9220,8 +9448,23 @@ function renderProjPageBody(){
           <span>👤 PM: <strong>${proj.pm||'—'}</strong></span>
           <span>🏢 ${proj.client||'—'}</span>
           ${(()=>{const hs=getHardwareSummary(proj.id);return hs?`<span>📦 ${esc(hs)}</span>`:'';})()}
-          ${proj.naming_convention?`<span>🏷 ${esc(proj.naming_convention)}</span>`:''}
-          ${proj.address?`<span>📍 ${esc(proj.address)}</span>`:''}
+          ${(()=>{
+            // Kiosk ID / address in the Project Page summary. On a multi-SO
+            // project the project-level fields describe no single location, so
+            // showing them here presented one site's details as the project's.
+            // Multi-SO now lists each SO's own value (and says which are not
+            // configured); single-SO is unchanged.
+            if(isMultiSOProject(proj)){
+              return getSOList(proj).map(so=>{
+                const n=resolveSOConfigField(proj,so,'naming_convention');
+                const a=resolveSOConfigField(proj,so,'address');
+                const bits=[n.configured?'🏷 '+esc(n.value):'',a.configured?'📍 '+esc(a.value):''].filter(Boolean).join(' ');
+                return`<span title="SO ${esc(so)}" style="margin-right:10px"><strong style="color:var(--red)">${esc(so)}</strong> ${bits||'<span style="color:#a16207">'+NOT_CONFIGURED_SO+'</span>'}</span>`;
+              }).join('');
+            }
+            return(proj.naming_convention?`<span>🏷 ${esc(proj.naming_convention)}</span>`:'')
+                 +(proj.address?`<span>📍 ${esc(proj.address)}</span>`:'');
+          })()}
           ${proj.location&&proj.location!==proj.address?`<span>🗺 <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(proj.location)}" target="_blank" style="color:#93c5fd;text-decoration:underline">${proj.location}</a></span>`:''}
           ${goLive?`<span>🎯 Go-live: <strong>${fmt(goLive)}</strong></span>`:''}
           ${(()=>{const b=getProjectBlocker(proj);if(!b)return'';return`<span style="color:${b.overdue?'#fca5a5':'#93c5fd'}">🔗 ${esc(b.blockedStage.label)} blocked by ${esc(b.blockingStage.label)} · ${b.estimate}</span>`;})()}
@@ -9377,18 +9620,32 @@ function renderProjPageBody(){
               }
               return ppSoList.filter(so=>!ppSelectedMsSO||so===ppSelectedMsSO).map(so=>{
                 const saved=soDetails.find(d=>d.project_id===proj.id&&d.so_tag===so);
-                const naming=saved?.naming_convention??proj.naming_convention??'';
-                const address=saved?.address??proj.address??'';
+                // SO-scoped, never project-level. These inputs save on blur, so
+                // pre-filling them from proj.naming_convention/proj.address on a
+                // multi-SO project didn't just display the wrong value — the
+                // next blur wrote it into this SO's row, fanning one location's
+                // config across every SO.
+                const naming=resolveSOConfigField(proj,so,'naming_convention').value||'';
+                const address=resolveSOConfigField(proj,so,'address').value||'';
+                const soLogi=[
+                  saved?.install_time?'🕑 '+saved.install_time:'',
+                  saved?.technician_details?'👷 '+saved.technician_details:'',
+                  saved?.carrier?'🚚 '+saved.carrier:'',
+                  saved?.tracking_number?'#'+saved.tracking_number:'',
+                  saved?.voltage?'⚡ '+saved.voltage:'',
+                  saved?.plug_type?saved.plug_type:'',
+                ].filter(Boolean).map(t=>esc(t)).join('  ·  ');
                 const soMs=pMs.filter(m=>m.so_tag===so).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
                 const soHeader=`<tr style="background:var(--gray-50)"><td colspan="4" style="padding:5px 10px">
                   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                     <span style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.06em;border-left:3px solid var(--red);padding-left:6px;white-space:nowrap">SO: ${so}</span>
-                    <input value="${naming.replace(/"/g,'&quot;')}" placeholder="Naming convention..." style="font-family:var(--mono);font-size:11px;padding:3px 8px;border:1px solid var(--gray-200);border-radius:4px;flex:1;min-width:120px;box-sizing:border-box" onblur="saveSODetail('${proj.id}','${so}','naming_convention',this.value)" onchange="saveSODetail('${proj.id}','${so}','naming_convention',this.value)">
-                    <input value="${address.replace(/"/g,'&quot;')}" placeholder="Installation address..." style="font-family:var(--font);font-size:11px;padding:3px 8px;border:1px solid var(--gray-200);border-radius:4px;flex:2;min-width:160px;box-sizing:border-box" onblur="saveSODetail('${proj.id}','${so}','address',this.value)" onchange="saveSODetail('${proj.id}','${so}','address',this.value)">
+                    <input value="${naming.replace(/"/g,'&quot;')}" placeholder="${naming?'':'Kiosk ID — not configured for this SO'}" style="font-family:var(--mono);font-size:11px;padding:3px 8px;border:1px solid ${naming?'var(--gray-200)':'#f0c36d'};border-radius:4px;flex:1;min-width:120px;box-sizing:border-box" onblur="saveSODetail('${proj.id}','${so}','naming_convention',this.value)" onchange="saveSODetail('${proj.id}','${so}','naming_convention',this.value)">
+                    <input value="${address.replace(/"/g,'&quot;')}" placeholder="${address?'':'Address — not configured for this SO'}" style="font-family:var(--font);font-size:11px;padding:3px 8px;border:1px solid ${address?'var(--gray-200)':'#f0c36d'};border-radius:4px;flex:2;min-width:160px;box-sizing:border-box" onblur="saveSODetail('${proj.id}','${so}','address',this.value)" onchange="saveSODetail('${proj.id}','${so}','address',this.value)">
                     <button onclick="pushSODatesToAll('${proj.id}','${so}')" style="font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font);white-space:nowrap">📅 Push to all</button>
                     <button onclick="openSOConfigModal('${proj.id}','${so}')" style="font-size:10px;padding:3px 8px;border-radius:4px;border:${saved?.coi_required==='yes'?'1px solid #7c3aed':'1px solid var(--gray-200)'};background:${saved?.coi_required==='yes'?'#f5f3ff':'white'};color:${saved?.coi_required==='yes'?'#7c3aed':'var(--gray-600)'};cursor:pointer;font-family:var(--font);font-weight:${saved?.coi_required==='yes'?'700':'500'};white-space:nowrap" title="Set COI Required, form factor, and ticket URLs for this SO">⚙ Config${saved?.coi_required==='yes'?' · 📋 COI Required':''}</button>
                     <button onclick="removeSOFromProject('${proj.id}','${so}')" style="font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--red-mid);background:white;color:var(--red);cursor:pointer;font-family:var(--font);white-space:nowrap" title="Remove this SO from the project and retire its milestones">🗑 Remove SO</button>
                   </div>
+                  ${soLogi?`<div style="font-size:10px;color:var(--gray-500);margin-top:5px;padding-left:9px" title="Edit under ⚙ Config">${soLogi}</div>`:''}
                 </td></tr>`;
                 return soHeader+soMs.map(buildPPMsRow).join('');
               }).join('');
@@ -9559,16 +9816,24 @@ async function saveSODetail(projId,so,field,val){
     existing[field]=val;
   } else {
     const proj=projects.find(p=>p.id===projId);
-    const{data,error}=await sb.from('so_details').insert({
-      project_id:projId,so_tag:so,
-      address:field==='address'?val:(proj?.address||''),
-      naming_convention:field==='naming_convention'?val:(proj?.naming_convention||''),
-      form_factor:field==='form_factor'?val:(proj?.form_factor||''),
-      qa_task_url:field==='qa_task_url'?val:(proj?.qa_task_url||''),
-      odoo_url:field==='odoo_url'?val:(proj?.odoo_url||''),
-      install_ticket_url:field==='install_ticket_url'?val:(proj?.install_ticket_url||''),
-      ui_task_url:field==='ui_task_url'?val:(proj?.ui_task_url||''),
-    }).select().single();
+    // Multi-SO: write ONLY the field being edited. Seeding the rest from the
+    // project record is what used to fan one project-level address / kiosk ID
+    // out to every location the first time an SO row was created.
+    // Single-SO: keep the legacy seeding — there the project record and the
+    // one SO genuinely describe the same site.
+    const row=isMultiSOProject(proj)
+      ?{project_id:projId,so_tag:so,[field]:val}
+      :{
+        project_id:projId,so_tag:so,
+        address:field==='address'?val:(proj?.address||''),
+        naming_convention:field==='naming_convention'?val:(proj?.naming_convention||''),
+        form_factor:field==='form_factor'?val:(proj?.form_factor||''),
+        qa_task_url:field==='qa_task_url'?val:(proj?.qa_task_url||''),
+        odoo_url:field==='odoo_url'?val:(proj?.odoo_url||''),
+        install_ticket_url:field==='install_ticket_url'?val:(proj?.install_ticket_url||''),
+        ui_task_url:field==='ui_task_url'?val:(proj?.ui_task_url||''),
+      };
+    const{data,error}=await sb.from('so_details').insert(row).select().single();
     if(error){console.warn('so_details insert error',error);showToast('⚠ Save failed: '+error.message);return;}
     if(data)soDetails.push(data);
   }
@@ -9578,6 +9843,20 @@ async function saveSODetail(projId,so,field,val){
   if(currentTab==='gendocs')renderGenDocs();
 }
 
+// Small builders for the SO Configuration modal. Kept local to this editor so
+// there is exactly one SO configuration surface, not a second competing one.
+function socHead(label){
+  return`<div style="font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:var(--gray-500);margin:16px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--gray-200)">${esc(label)}</div>`;
+}
+function socFld(id,label,val,ph){
+  return`<div class="field full" style="margin-bottom:10px"><label>${esc(label)}</label>
+    <input id="${id}" value="${String(val||'').replace(/"/g,'&quot;')}" placeholder="${esc(ph||'')}" style="font-size:12px"></div>`;
+}
+function socSel(id,label,val,opts){
+  const options=['<option value="">— not set —</option>'].concat((opts||[]).map(o=>`<option value="${esc(o)}"${o===val?' selected':''}>${esc(o)}</option>`)).join('');
+  return`<div class="field full" style="margin-bottom:10px"><label>${esc(label)}</label>
+    <select id="${id}" style="font-size:12px">${options}</select></div>`;
+}
 function openSOConfigModal(projId,so){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
@@ -9599,6 +9878,33 @@ function openSOConfigModal(projId,so){
         </div>
         <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Hardware is managed in one place — Hardware &amp; Solution Configuration — so it can never disagree with what's shown elsewhere.</div>
       </div>
+      ${socHead('Site')}
+      ${socFld('soc-address','Installation Address',saved?.address||'','e.g. 100 Main St, Toronto ON')}
+      ${socFld('soc-naming','Naming Convention / Kiosk ID',saved?.naming_convention||'','e.g. KIOSK-TOR-01')}
+      ${socHead('Power')}
+      ${socSel('soc-voltage','Voltage',saved?.voltage||'',PROJECT_CONFIG_OPTIONS.voltage)}
+      ${socSel('soc-plug','Plug Type',saved?.plug_type||'',PROJECT_CONFIG_OPTIONS.plug_type)}
+      ${socFld('soc-power','Power Requirements',saved?.power_requirements||'','e.g. 15A dedicated circuit')}
+      ${socHead('IT / Connectivity')}
+      ${socSel('soc-conn-primary','Primary Connectivity',saved?.primary_connectivity||'',PROJECT_CONFIG_OPTIONS.connectivity)}
+      ${socSel('soc-conn-backup','Backup Connectivity',saved?.backup_connectivity||'',PROJECT_CONFIG_OPTIONS.connectivity)}
+      ${socHead('On-site contact')}
+      ${socFld('soc-poc-name','POC Name',saved?.poc_name||'','e.g. Alice Nguyen')}
+      ${socFld('soc-poc-phone','POC Phone',saved?.poc_phone||'','e.g. +1-416-555-0100')}
+      ${socFld('soc-poc-email','POC Email',saved?.poc_email||'','e.g. alice@client.com')}
+      ${socHead('Installation')}
+      <div class="field full" style="margin-bottom:10px"><label>Installation Date <span style="font-size:10px;color:var(--gray-400);font-weight:400">— milestone-driven, edit in the Milestone Tracker</span></label>
+        <div style="font-size:12px;padding:8px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--gray-50);color:var(--gray-700)">${esc(resolveMsDateForSO(projId,'installation',so)?fmtFull(resolveMsDateForSO(projId,'installation',so)):NOT_CONFIGURED_SO)}</div>
+      </div>
+      ${socFld('soc-install-time','Installation Time',saved?.install_time||'','e.g. 09:00 LT')}
+      ${socFld('soc-tech','Technician Details',saved?.technician_details||'','e.g. Mark R. (Signifi) / 3rd party name')}
+      ${socHead('Shipping')}
+      <div class="field full" style="margin-bottom:10px"><label>Pack &amp; Ship Date <span style="font-size:10px;color:var(--gray-400);font-weight:400">— milestone-driven, edit in the Milestone Tracker</span></label>
+        <div style="font-size:12px;padding:8px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--gray-50);color:var(--gray-700)">${esc(resolveMsDateForSO(projId,'shipping',so)?fmtFull(resolveMsDateForSO(projId,'shipping',so)):NOT_CONFIGURED_SO)}</div>
+      </div>
+      ${socFld('soc-carrier','Carrier',saved?.carrier||'','e.g. Purolator')}
+      ${socFld('soc-tracking','Tracking Number',saved?.tracking_number||'','e.g. 1Z999AA10123456784')}
+      ${socHead('Compliance & links')}
       <div class="field full" style="margin-bottom:12px"><label>COI Required <span style="font-size:10px;color:var(--gray-400);font-weight:400">— this SO's location, not the whole project</span></label>
         <select id="soc-coi-required"><option value="no"${coiRequiredVal==='no'?' selected':''}>No</option><option value="yes"${coiRequiredVal==='yes'?' selected':''}>Yes</option></select>
       </div>
@@ -9643,15 +9949,29 @@ async function saveSOConfig(projId,so){
   // Solution Configuration editor (see the Hardware field above). Any
   // pre-existing so_details.form_factor value is left untouched for
   // backwards compatibility (see deriveLegacyHardwareLines/getProjectHardware).
-  const updates={qa_task_url:qaUrl,odoo_url:odooUrl,install_ticket_url:installUrl,ui_task_url:uiUrl,coi_required:coiRequiredVal};
+  const v=id=>{const el=document.getElementById(id);return el?(el.value||'').trim():'';};
+  // Empty string → null so a cleared SO field reads as "not configured"
+  // rather than as a deliberately blank value, and so the CHECK constraints
+  // on voltage/plug_type/connectivity accept it.
+  const n=s=>s===''?null:s;
+  const updates={
+    qa_task_url:qaUrl,odoo_url:odooUrl,install_ticket_url:installUrl,ui_task_url:uiUrl,coi_required:coiRequiredVal,
+    address:n(v('soc-address')),naming_convention:n(v('soc-naming')),
+    voltage:n(v('soc-voltage')),plug_type:n(v('soc-plug')),power_requirements:n(v('soc-power')),
+    primary_connectivity:n(v('soc-conn-primary')),backup_connectivity:n(v('soc-conn-backup')),
+    poc_name:n(v('soc-poc-name')),poc_phone:n(v('soc-poc-phone')),poc_email:n(v('soc-poc-email')),
+    install_time:n(v('soc-install-time')),technician_details:n(v('soc-tech')),
+    carrier:n(v('soc-carrier')),tracking_number:n(v('soc-tracking')),
+  };
   if(existing){
     await sb.from('so_details').update({...updates,updated_at:new Date().toISOString()}).eq('id',existing.id);
     Object.assign(existing,updates);
   } else {
-    const proj=projects.find(p=>p.id===projId);
+    // A NEW so_details row starts empty for SO-specific configuration on a
+    // multi-SO project. Seeding it from the project record was how one
+    // location's address/kiosk ID silently became every location's.
     const{data,error}=await sb.from('so_details').insert({
       project_id:projId,so_tag:so,
-      address:proj?.address||'',naming_convention:proj?.naming_convention||'',
       ...updates,
     }).select().single();
     if(error){console.warn('so_details insert error',error);showToast('⚠ Save failed: '+error.message);return;}
@@ -10624,7 +10944,11 @@ function getDocState(){
   return s;
 }
 // Fields auto-filled from project record — never restore these from state
-const AUTO_FILL_FIELDS=new Set(['qf-address','qf-naming','qf-so','uf-kiosk','qf-kiosk','if-ship','if-del','if-vinyl','if-odoo','if-template','if-badge','if-employee','qf-ship','qf-vinyl','qf-jira-task','qf-jira-product','qf-jira-badge','qf-employee','uf-client']);
+// 'if-inst' is auto-filled from the canonical SO installation milestone, so it
+// must never be restored from saved doc state — otherwise the previously
+// selected project's/SO's date is written back over the correct one and the
+// preview silently disagrees with the milestone tracker.
+const AUTO_FILL_FIELDS=new Set(['qf-address','qf-naming','qf-so','uf-kiosk','qf-kiosk','if-inst','if-ship','if-del','if-vinyl','if-odoo','if-template','if-badge','if-employee','qf-ship','qf-vinyl','qf-jira-task','qf-jira-product','qf-jira-badge','qf-employee','uf-client']);
 
 let _docSaveTimer=null;
 function saveDocFormState(immediate=false){
@@ -10966,12 +11290,15 @@ async function buildProjectDocPackage(projId,soTag=''){
 
   // 3. Scope of work
   const scope={
-    formFactor:getHardwareSummary(projId,effectiveSO)||'',voltage:proj.voltage||'',plugType:proj.plug_type||'',
-    connectivity:projectConnectivitySummary(proj),hosting:proj.hosting||'',
+    // Power / connectivity resolved for the SO this deck is scoped to, same
+    // canonical resolver Generate Docs uses.
+    formFactor:getHardwareSummary(projId,effectiveSO)||'',
+    voltage:soConfigText(proj,effectiveSO,'voltage'),plugType:soConfigText(proj,effectiveSO,'plug_type'),
+    connectivity:soConnectivitySummary(proj,effectiveSO),hosting:proj.hosting||'',
     authentication:projectAuthenticationSummary(proj),
     workflow:Array.isArray(proj.workflow_types)?proj.workflow_types.join(', '):'',workflowNotes:proj.workflow_notes||'',
     language:Array.isArray(proj.languages)?proj.languages.join(', '):'',languageNotes:proj.language_notes||'',
-    namingConvention:cfg.naming_convention||'',powerRequirements:proj.power_requirements||'',
+    namingConvention:cfg.naming_convention||'',powerRequirements:soConfigText(proj,effectiveSO,'power_requirements'),
     deploymentType:proj.deployment_type||'',deploymentNotes:proj.deployment_notes||'',
     shippingMethod:proj.shipping_method||'',shippingMode:proj.shipping_transport_mode||'',
     shippingPackaging:proj.shipping_packaging||'',shippingService:proj.shipping_service_level||'',
@@ -12076,7 +12403,26 @@ function renderGenDocs(){
 }
 
 function getDocProj(){return projects.find(p=>p.id===selectedDocProjId)||{};}
-function getDocDate(key){if(!selectedDocProjId)return'';const m=milestones.find(m=>m.project_id===selectedDocProjId&&m.key===key);return m?fmtFull(m.date):'';}
+// Generate Docs milestone dates — canonical resolver, scoped to the SO the
+// document is actually for. Previously this was a bare
+// milestones.find(project_id && key) with no so_tag filter, so on a multi-SO
+// project it returned whichever SO's row happened to sit first in the array.
+function getDocDateState(key){
+  if(!selectedDocProjId)return{value:'',configured:false,reason:'no-project'};
+  const proj=projects.find(p=>p.id===selectedDocProjId);
+  const ms=resolveMsForSO(selectedDocProjId,key,selectedDocSO);
+  if(!ms||!ms.date){
+    const needsSO=proj&&isMultiSOProject(proj)&&!effectiveSOFor(proj,selectedDocSO);
+    return{value:'',configured:false,reason:needsSO?'no-so-selected':'no-milestone'};
+  }
+  return{value:fmtFull(ms.date),configured:true,reason:'milestone'};
+}
+function getDocDate(key){
+  const s=getDocDateState(key);
+  if(s.configured)return s.value;
+  const proj=projects.find(p=>p.id===selectedDocProjId);
+  return(proj&&isMultiSOProject(proj))?NOT_CONFIGURED_SO:'';
+}
 // Gets a link for Generate Docs — checks project record first, then project_links table
 function getDocLink(label){
   const p=getDocProj();
@@ -12150,9 +12496,10 @@ function pullField(label,val,editHint){
 function renderInstallForm(){
   const p=getDocProj();
   const instDate=getDocDate('installation');
-  const soDet=getEffectiveSODetail(p,selectedDocSO);
-  const naming=soDet?.naming_convention??p.naming_convention??'';
-  const address=soDet?.address??p.address??'';
+  // Every SO-specific value below comes from the same canonical resolver the
+  // generated document uses, so the preview can never disagree with the output.
+  const naming=soConfigText(p,selectedDocSO,'naming_convention');
+  const address=soConfigText(p,selectedDocSO,'address');
   // Canonical resolver, scoped to this doc's SO — SO-scoped documents show
   // only that SO's hardware plus hardware explicitly marked "All SOs", the
   // exact same filtering getProjectHardware uses everywhere else.
@@ -12165,20 +12512,22 @@ function renderInstallForm(){
     ${pullField('Payment device required',p.payment_device_required===true?'Yes':p.payment_device_required===false?'No':'','edit via Project Overview → Edit')}
     ${pullField('Languages',configList(p.languages),'edit via Project Overview → Edit')}
     ${pullField('Hosting',p.hosting||'','edit via Project Overview → Edit')}
-    ${pullField('Voltage',p.voltage||'','edit via Project Overview → Edit')}
-    ${pullField('Plug type',p.plug_type||'','edit via Project Overview → Edit')}
-    ${pullField('Power requirements',p.power_requirements||'','edit via Project Overview → Edit')}
+    ${pullField('Voltage'+soScopeLbl(p),soConfigText(p,selectedDocSO,'voltage'),soEditHint(p))}
+    ${pullField('Plug type'+soScopeLbl(p),soConfigText(p,selectedDocSO,'plug_type'),soEditHint(p))}
+    ${pullField('Power requirements'+soScopeLbl(p),soConfigText(p,selectedDocSO,'power_requirements'),soEditHint(p))}
     ${fld('if-orientation','Orientation','e.g. Per approved retail layout','full')}
     ${pullField('PM',p.pm||'','edit via Project Overview → Edit')}
     ${pullField('Sales',p.sales||'','edit via Project Overview → Edit')}
     <div class="doc-section-lbl">1. Installation address</div>
     ${pullField('Installation address'+(selectedDocSO?' (SO: '+selectedDocSO+')':''),address,'edit via Project Page')}
     <div class="doc-section-lbl">2. On-site point of contact</div>
-    ${fld('if-poc-name','POC name','e.g. Henry Lo 駱弘輝','full')}
-    ${fld('if-poc-phone','POC phone number','e.g. +886 912-708-652','')}
-    ${fld('if-poc-email','POC email','','')}
+    ${pullField('POC name'+soScopeLbl(p),soConfigText(p,selectedDocSO,'poc_name'),soEditHint(p))}
+    ${pullField('POC phone number'+soScopeLbl(p),soConfigText(p,selectedDocSO,'poc_phone'),soEditHint(p))}
+    ${pullField('POC email'+soScopeLbl(p),soConfigText(p,selectedDocSO,'poc_email'),soEditHint(p))}
     <div class="doc-section-lbl">3. Requested installation date</div>
     ${fld('if-inst','Requested installation date','','','text',instDate)}
+    ${pullField('Installation time'+soScopeLbl(p),soConfigText(p,selectedDocSO,'install_time'),soEditHint(p))}
+    ${pullField('Technician details'+soScopeLbl(p),soConfigText(p,selectedDocSO,'technician_details'),soEditHint(p))}
     <div class="doc-section-lbl">4. Unit / form factor</div>
     ${pullField('What type of unit is being installed?',formFactor,'edit via Project Page → Config')}
     <div class="doc-section-lbl">5–6. SO & client</div>
@@ -12186,7 +12535,7 @@ function renderInstallForm(){
     ${pullField('Channel Partner',p.channel_partner||'','edit via Project Overview → Edit')}
     ${pullField('End Client (CX)',p.client||'','edit via Project Overview → Edit')}
     <div class="doc-section-lbl">7. Network connectivity</div>
-    ${pullField('Network connectivity',projectConnectivitySummary(p),'edit via Project Overview → Edit')}
+    ${pullField('Network connectivity'+soScopeLbl(p),soConnectivitySummary(p,selectedDocSO),soEditHint(p))}
     <div class="doc-section-lbl">8. Kiosk ID</div>
     ${pullField('Kiosk ID (Naming Convention)',naming,'edit via Project Page')}
     <div class="doc-section-lbl">9. QA Task URL</div>
@@ -12253,8 +12602,8 @@ function renderQAForm(){
   const shipDate=getDocDate('shipping');
   const vinylDate=getDocDate('vinyl');
   const soNum=selectedDocSO||(getSOList(p).length===1?(p.so_number||'').trim():p.so_number||'');
-  const address=soDet?.address??p.address??'';
-  const naming=soDet?.naming_convention??p.naming_convention??'';
+  const address=soConfigText(p,selectedDocSO,'address');
+  const naming=soConfigText(p,selectedDocSO,'naming_convention');
   // Canonical resolver, scoped to this doc's SO — SO-scoped documents show
   // only that SO's hardware plus hardware explicitly marked "All SOs", the
   // exact same filtering getProjectHardware uses everywhere else.
@@ -12270,7 +12619,7 @@ function renderQAForm(){
     ${fld('qf-kiosk','Kiosk type / product','e.g. SparkXL','','text',formFactor)}
     ${pullField('Languages',configList(p.languages),'edit via Project Overview → Edit')}
     ${pullField('Hosting',p.hosting||'','edit via Project Overview → Edit')}
-    ${pullField('Internet connectivity',projectConnectivitySummary(p),'edit via Project Overview → Edit')}
+    ${pullField('Internet connectivity'+soScopeLbl(p),soConnectivitySummary(p,selectedDocSO),soEditHint(p))}
     ${pullField('Authentication / payment device',[projectAuthenticationSummary(p),p.payment_device_required===true?'Payment device: Yes':p.payment_device_required===false?'Payment device: No':''].filter(Boolean).join(' | '),'edit via Project Overview → Edit')}
     <div class="doc-section-lbl">Workflows</div>
     ${pullField('Workflows',configList(p.workflow_types)+(p.workflow_notes?' | Notes: '+p.workflow_notes:''),'edit via Project Overview → Edit')}
@@ -12304,7 +12653,15 @@ function g(id){
   const p=getDocProj();
   const canonical={
     'if-auth':projectAuthenticationSummary(p),'if-payconfig':p.payment_device_required===true?'Yes':p.payment_device_required===false?'No':'',
-    'if-lang':configList(p.languages),'if-hosting':p.hosting||'','if-voltage':p.voltage||'','if-plug':p.plug_type||'','if-connectivity':projectConnectivitySummary(p),
+    // Power / connectivity are SO-specific: two sites on the same project can
+    // legitimately be 110V/PT(B) and 220V/PT(G). Resolved through the same
+    // canonical resolver the form uses, so preview and output always agree.
+    'if-lang':configList(p.languages),'if-hosting':p.hosting||'',
+    'if-voltage':soConfigText(p,selectedDocSO,'voltage'),'if-plug':soConfigText(p,selectedDocSO,'plug_type'),
+    'if-power':soConfigText(p,selectedDocSO,'power_requirements'),'if-connectivity':soConnectivitySummary(p,selectedDocSO),
+    'if-poc-name':soConfigText(p,selectedDocSO,'poc_name'),'if-poc-phone':soConfigText(p,selectedDocSO,'poc_phone'),
+    'if-poc-email':soConfigText(p,selectedDocSO,'poc_email'),
+    'if-install-time':soConfigText(p,selectedDocSO,'install_time'),'if-tech':soConfigText(p,selectedDocSO,'technician_details'),
     'uf-workflows':configList(p.workflow_types),'uf-auth':projectAuthenticationSummary(p),'uf-payment':p.payment_device_required===true?'Yes':p.payment_device_required===false?'No':'','uf-lang':configList(p.languages),'uf-hosting':p.hosting||'',
     'qf-workflows':configList(p.workflow_types)+(p.workflow_notes?' | Notes: '+p.workflow_notes:''),'qf-auth':[projectAuthenticationSummary(p),p.payment_device_required===true?'Payment device: Yes':p.payment_device_required===false?'Payment device: No':''].filter(Boolean).join(' | '),'qf-lang':configList(p.languages),'qf-hosting':p.hosting||'','qf-connectivity':projectConnectivitySummary(p)
   };
@@ -12319,6 +12676,13 @@ function g(id){
   return'';
 }
 function confirmInstallAttachments(){
+  const gate=docSOGate('install');
+  if(!gate.ok){
+    alert(gate.reason);
+    const sel=document.getElementById('gd-so-select');
+    if(sel){sel.focus();sel.style.outline='2px solid var(--red)';setTimeout(()=>{if(sel)sel.style.outline='';},2500);}
+    return;
+  }
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="event.stopPropagation()"><div class="modal" style="width:420px" onclick="event.stopPropagation()">
     <div class="modal-head"><span class="modal-title">📎 Before you generate</span></div>
     <div class="modal-body">
@@ -12339,6 +12703,16 @@ function confirmInstallAttachments(){
 }
 function generateDoc(type){
   try{
+  // A location-specific document on a multi-SO project must know which SO it
+  // is for. "All SOs (master defaults)" is not a valid answer here — it used
+  // to silently emit the project-level address/kiosk ID/power.
+  const gate=docSOGate(type);
+  if(!gate.ok){
+    alert(gate.reason);
+    const sel=document.getElementById('gd-so-select');
+    if(sel){sel.focus();sel.style.outline='2px solid var(--red)';setTimeout(()=>{if(sel)sel.style.outline='';},2500);}
+    return;
+  }
   // Make sure the right form is rendered before generating
   if(activeDocTab!==type){
     saveDocFormState(true);
@@ -12352,9 +12726,8 @@ function generateDoc(type){
   let text='';
   if(type==='install'){
     const instP=proj||getDocProj();
-    const instSoDet=getEffectiveSODetail(instP,selectedDocSO);
-    const instNaming=instSoDet?.naming_convention??instP.naming_convention??'';
-    const instAddress=instSoDet?.address??instP.address??'';
+    const instNaming=soConfigText(instP,selectedDocSO,'naming_convention');
+    const instAddress=soConfigText(instP,selectedDocSO,'address');
     const instFormFactor=getHardwareSummary(instP.id,selectedDocSO,{docStyle:true})||'';
     const instSoNum=selectedDocSO||instP.so_number||'';
     const sectionDivider='-----------------------------------------------';
@@ -12374,6 +12747,8 @@ Email: ${g('if-poc-email')}
 
 3. REQUESTED INSTALLATION DATE
 ${g('if-inst')}
+Installation time: ${g('if-install-time')}
+Technician: ${g('if-tech')}
 
 4. WHAT TYPE OF UNIT IS BEING INSTALLED?
 ${instFormFactor}
@@ -12417,6 +12792,9 @@ ${g('if-voltage')}
 17. PLUG TYPE
 ${g('if-plug')}
 
+17a. POWER REQUIREMENTS
+${g('if-power')}
+
 18. ORIENTATION
 ${g('if-orientation')}
 
@@ -12451,10 +12829,9 @@ ${g('uf-branding')?`Branding Documents: ${g('uf-branding')}`:''}
 ${g('uf-special')?`\nNotes:\n${g('uf-special')}`:''}`;
   } else {
     const qaP=proj||getDocProj();
-    const qaSoDet=getEffectiveSODetail(qaP,selectedDocSO);
     const qaSoNum=selectedDocSO||(getSOList(qaP).length===1?(qaP.so_number||'').trim():safeGet('qf-so')||qaP.so_number||'');
-    const qaAddress=qaSoDet?.address??safeGet('qf-address')??qaP.address??'';
-    const qaNaming=qaSoDet?.naming_convention??g('qf-naming')??qaP.naming_convention??'';
+    const qaAddress=soConfigText(qaP,selectedDocSO,'address');
+    const qaNaming=soConfigText(qaP,selectedDocSO,'naming_convention');
     text=`QA TASK
 ${'─'.repeat(50)}
 Sales Order (SO): ${qaSoNum}
@@ -12493,8 +12870,7 @@ ${g('qf-special')?`\nSpecial Requirements:\n${g('qf-special')}`:''}`;
   ds[type].__output=text;
   if(type==='install'){
     const htmlP=getDocProj();
-    const htmlSoDet=getEffectiveSODetail(htmlP,selectedDocSO);
-    const namingForSubject=htmlSoDet?.naming_convention??htmlP.naming_convention??'';
+    const namingForSubject=soConfigText(htmlP,selectedDocSO,'naming_convention');
     const subjectParts=['Installation Request',htmlP.client||'',namingForSubject||'',g('if-inst')||''].filter(Boolean);
     const subject=subjectParts.join(' - ');
     ds[type].__subject=subject;
@@ -12502,9 +12878,9 @@ ${g('qf-special')?`\nSpecial Requirements:\n${g('qf-special')}`:''}`;
     if(subjEl)subjEl.textContent=subject;
     ds[type].__outputHtml=buildInstallHTML({
       pm:htmlP.pm||'',sales:htmlP.sales||'',
-      address:htmlSoDet?.address??htmlP.address??'',
+      address:soConfigText(htmlP,selectedDocSO,'address'),
       pocName:g('if-poc-name'),pocPhone:g('if-poc-phone'),pocEmail:g('if-poc-email'),
-      instDate:g('if-inst'),
+      instDate:g('if-inst'),installTime:g('if-install-time'),technician:g('if-tech'),
       formFactor:getHardwareSummary(htmlP.id,selectedDocSO,{docStyle:true})||'',
       soNum:selectedDocSO||htmlP.so_number||'',
       cp:htmlP.channel_partner||'',client:htmlP.client||'',
@@ -12512,7 +12888,7 @@ ${g('qf-special')?`\nSpecial Requirements:\n${g('qf-special')}`:''}`;
       naming:namingForSubject,
       qaTask:getDocLink('QA Task'),
       auth:g('if-auth'),payconfig:g('if-payconfig'),lang:g('if-lang'),ada:g('if-ada'),
-      hosting:g('if-hosting'),survey:g('if-survey'),voltage:g('if-voltage'),plug:g('if-plug'),orientation:g('if-orientation'),
+      hosting:g('if-hosting'),survey:g('if-survey'),voltage:g('if-voltage'),plug:g('if-plug'),power:g('if-power'),orientation:g('if-orientation'),
       scope:g('if-scope')||DEFAULT_INSTALL_SCOPE,
       special:g('if-special')||'(none)',
       odoo:g('if-odoo'),badge:g('if-badge'),employee:g('if-employee'),vinylOdoo:g('if-vinyl-odoo'),
@@ -12522,6 +12898,15 @@ ${g('qf-special')?`\nSpecial Requirements:\n${g('qf-special')}`:''}`;
 }
 
 function generateAllDocs(){
+  // Gate once here rather than letting install and qa each raise their own
+  // alert for the same missing selection.
+  const gate=docSOGate('install');
+  if(!gate.ok){
+    alert(gate.reason);
+    const sel=document.getElementById('gd-so-select');
+    if(sel){sel.focus();sel.style.outline='2px solid var(--red)';setTimeout(()=>{if(sel)sel.style.outline='';},2500);}
+    return;
+  }
   const originalTab=activeDocTab;
   generateDoc('install');
   generateDoc('ui');
@@ -12578,7 +12963,7 @@ function buildInstallHTML(d){
     <table style="width:100%;border-collapse:collapse">
       ${row(1,'Installation Address',nl2br(d.address))}
       ${row(2,'On-Site POC — Name, Phone Number & Email',`Name: ${esc(d.pocName)}<br>Phone: ${esc(d.pocPhone)}<br>Email: ${esc(d.pocEmail)}`)}
-      ${row(3,'Requested Installation Date',esc(d.instDate))}
+      ${row(3,'Requested Installation Date',[esc(d.instDate),d.installTime?'Time: '+esc(d.installTime):'',d.technician?'Technician: '+esc(d.technician):''].filter(Boolean).join('<br>'))}
       ${row(4,'What type of unit is being installed?',esc(d.formFactor))}
       ${row(5,'What is the SO number?',esc(d.soNum))}
       ${row(6,'Who is the Channel Partner and/or End Client?',`Channel Partner: ${esc(d.cp)} / End Client: ${esc(d.client)}`)}
@@ -12593,6 +12978,7 @@ function buildInstallHTML(d){
       ${row(15,'IT Site Survey',esc(d.survey))}
       ${row(16,'Voltage',esc(d.voltage))}
       ${row(17,'Plug Type',esc(d.plug))}
+      ${row('17a','Power Requirements',esc(d.power))}
       ${row(18,'Orientation',esc(d.orientation))}
       ${box('19. What is the Scope of Work (Full Description)',nl2br(d.scope))}
       ${box('20. Any Special Instructions',nl2br(d.special))}
