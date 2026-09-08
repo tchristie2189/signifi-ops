@@ -1717,16 +1717,26 @@ function render(){
   const{start,end}=getWeekRange();
   const dept=currentDept;
 
+  // Shipping keeps unresolved overdue work visible in every week view. A pick-up
+  // or delivery that slipped past its date is exactly what a shipping lead needs
+  // to see — the old `d<start` cut hid it the moment the week rolled over, which
+  // is why shipments appeared to vanish from the list.
+  const shippingDept=dept.passcode==='ship2026';
+  const overdueIds=new Set();
   const deptMilestones=milestones.filter(m=>{
     if(!m.date)return false;
     // A scheduled milestone can still belong to a project marked complete/archived.
     // Keep those projects loaded so Shipping/Check-in can resolve the project name,
     // but suppress truly orphaned milestone rows instead of rendering a blank card.
     if(!m.project_id||!projects.some(p=>p.id===m.project_id))return false;
+    const isDeptItem=dept.milestoneKeys.includes(m.key)
+      ||(dept.labelMatch?dept.labelMatch.some(lbl=>(m.label||'').toLowerCase().includes(lbl.toLowerCase())):false);
+    if(!isDeptItem)return false;
     const d=new Date(m.date+'T00:00:00');
-    if(d<start||d>end)return false;
-    if(dept.milestoneKeys.includes(m.key))return true;
-    if(dept.labelMatch){return dept.labelMatch.some(lbl=>(m.label||'').toLowerCase().includes(lbl.toLowerCase()));}
+    if(d>=start&&d<=end)return true;
+    // Overdue carry-forward (Shipping only): anything dated before today that
+    // has not been checked off stays on the list until it is resolved.
+    if(shippingDept&&d<today()&&!isCheckinResolved(m)){overdueIds.add(m.id);return true;}
     return false;
   });
 
@@ -1736,7 +1746,10 @@ function render(){
       if(!(r.name||'').trim())return;
       const d=r.ship_date||'';if(!d)return;
       const dt=new Date(d+'T00:00:00');
-      if(dt>=start&&dt<=end)adHocItems.push({_id:'adhoc-ship-'+r.id,_adhoc:true,key:'shipping',label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||'',_ticketUrl:r.install_ticket_url||''});
+      const item={_id:'adhoc-ship-'+r.id,_adhoc:true,key:'shipping',label:r.name,date:d,so:r.so||'',client:r.client||'',status:r.status||'',_ticketUrl:r.install_ticket_url||''};
+      // Same overdue carry-forward as tracked milestones.
+      if(dt>=start&&dt<=end)adHocItems.push(item);
+      else if(dt<today()&&!isCheckinResolved(item)){overdueIds.add(item._id);adHocItems.push(item);}
     });
   }
   if(dept.passcode==='deploy2026'){
@@ -1756,13 +1769,24 @@ function render(){
   const deptMilestonesActive=deptMilestones.filter(notDelivered);
   const adHocItemsActive=adHocItems.filter(notDelivered);
 
-  // Deduplicate SO-split milestones smartly:
-  // — Same label + same date = collapse to one row (undifferentiated SOs, no point showing 6 identical rows)
-  // — Same label + different date = keep separate (each SO ships/delivers on its own day)
+  // Deduplicate only TRUE duplicates — never across SOs.
+  //
+  // The old key was project_id|label|date, with no so_tag in it, so two
+  // different SOs shipping on the same day collapsed into a single row. That
+  // silently hid one shipment, and because check-in state (stoplight, notes,
+  // done) is keyed by milestone id, the hidden SO's state was unreachable.
+  //
+  // An SO-tagged row is now identified by project + so_tag + key, and is only
+  // ever merged with another row carrying the SAME so_tag, key, label and date
+  // (i.e. a genuine duplicate milestone record). Untagged rows keep the old
+  // label+date collapse, which is what stops an unsplit legacy project from
+  // rendering six identical undifferentiated rows.
   const dedupedMs=[];
   const seenByProj={};
   [...deptMilestonesActive].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(m=>{
-    const k=m.project_id+'|'+m.label+'|'+(m.date||'');
+    const k=m.so_tag
+      ?m.project_id+'|SO:'+m.so_tag+'|'+m.key+'|'+(m.label||'')+'|'+(m.date||'')
+      :m.project_id+'|~untagged|'+(m.label||'')+'|'+(m.date||'');
     if(!seenByProj[k]){seenByProj[k]=true;dedupedMs.push(m);}
   });
 
@@ -1797,20 +1821,29 @@ function render(){
   showWeekTabs();
 
   const ciContent=document.getElementById('ci-content');
-  if(!allItems.length){ciContent.innerHTML=`<div class="empty"><div class="empty-icon">🎉</div>No ${dept.name} items this ${currentWeek==='this'?'week':'next week'}.<br>Check next week!</div>`;return;}
+  const weekLabel={'this':'this week','next':'next week','2':'week 3','3':'week 4'}[currentWeek]||'this week';
+  if(!allItems.length){ciContent.innerHTML=`<div class="empty"><div class="empty-icon">🎉</div>No ${dept.name} items for ${weekLabel}${shippingDept?', and nothing overdue':''}.<br>Try another week.</div>`;return;}
 
-  // Bucket all items by type
+  // Bucket all items by type. Overdue carry-forward items are pulled into their
+  // own section at the top so they read as "needs attention now" rather than
+  // being mixed into a future week's list.
   const buckets={};
+  const overdueItems=[];
   allItems.forEach(m=>{
+    if(overdueIds.has(m._id||m.id)){overdueItems.push(m);return;}
     const b=getBucket(m);
     if(!buckets[b.id])buckets[b.id]={...b,items:[]};
     buckets[b.id].items.push(m);
   });
+  if(overdueItems.length){
+    buckets['__overdue']={id:'__overdue',label:'Overdue — still open',icon:'⏰',color:'#b91c1c',items:overdueItems};
+  }
   // Sort items within each bucket by date
   Object.values(buckets).forEach(b=>b.items.sort((a,z)=>(a.date||'').localeCompare(z.date||'')));
 
-  // Render bucketed sections
-  const sectionsHtml=Object.values(buckets).map(bucket=>{
+  // Render bucketed sections — Overdue always first.
+  const orderedBuckets=[...(buckets['__overdue']?[buckets['__overdue']]:[]),...Object.values(buckets).filter(b=>b.id!=='__overdue')];
+  const sectionsHtml=orderedBuckets.map(bucket=>{
     const rowsHtml=bucket.items.map(m=>ciRow(m._id||m.id,m,dept,bucket)).join('');
     const allDone=bucket.items.every(m=>{const ci=checkins[m._id||m.id];return ci?.checked&&ci?.stoplight==='green';});
     const hasRed=bucket.items.some(m=>checkins[m._id||m.id]?.stoplight==='red');
@@ -1838,10 +1871,14 @@ function ciRow(id,m,dept,bucket){
   const stoplight=ci.stoplight||'';
   const safeId=id.replace(/[^a-zA-Z0-9]/g,'_');
 
-  // Date badge
+  // Date badge — the actual canonical date is ALWAYS shown. It used to be
+  // replaced entirely by relative text ("3d overdue" / "Today" / "Tomorrow"),
+  // which is precisely the information a shipping lead needs when chasing a
+  // carrier or a site. Relative wording is now an addition, never a substitute.
   const dateBg=d<0?'#fee2e2':d===0?'#dcfce7':d<=2?'#eff6ff':'#f1f5f9';
   const dateColor=d<0?'#991b1b':d===0?'#166534':d<=2?'#1d4ed8':'#475569';
-  const dateLabel=d<0?`${Math.abs(d)}d overdue`:d===0?'Today':d===1?'Tomorrow':fmt(m.date);
+  const relLabel=d<0?`${Math.abs(d)}d overdue`:d===0?'Today':d===1?'Tomorrow':'';
+  const dateLabel=fmt(m.date)+(relLabel?` · ${relLabel}`:'');
 
   // Project info
   const proj=m._adhoc?null:projects.find(p=>p.id===m.project_id);
@@ -2144,6 +2181,21 @@ async function saveCOIDetailModal(projId,soTag){
   Object.assign(existing,upd);
   coiCloseModal();render();showToast('COI updated ✓');
 }
+// Canonical SO list for a project — same parsing Ops Hub uses.
+function ciSOList(proj){
+  const raw=typeof proj==='string'?proj:(proj?.so_number||'');
+  return[...new Set((raw||'').split(/[\s,;]+/).map(v=>v.trim()).filter(Boolean))];
+}
+function ciIsMultiSO(proj){return ciSOList(proj).length>1;}
+// A shipping item stops needing daily attention once it is Delivered or has
+// been checked off green. Used to decide whether an overdue item carries
+// forward into the current view.
+function isCheckinResolved(m){
+  const id=m._id||m.id;
+  const ci=checkins[id];
+  if(ci?.checked&&ci?.stoplight==='green')return true;
+  return getCheckinShippingStatus(m)==='Delivered';
+}
 function getCheckinShippingStatus(m){
   if(m._adhoc){
     const r=(window._adHocShipping||[]).find(x=>'adhoc-ship-'+x.id===m._id);
@@ -2152,10 +2204,17 @@ function getCheckinShippingStatus(m){
   const soTag=m.so_tag||null;
   const proj=projects.find(p=>p.id===m.project_id);
   if(soTag){const soDet=(window._soDetails||[]).find(d=>d.project_id===m.project_id&&d.so_tag===soTag);if(soDet?.shipping_status)return soDet.shipping_status;}
-  if(proj?.shipping_status)return proj.shipping_status;
-  // Auto-compute from milestone state (checkin has milestone data)
-  const shipMs=milestones.find(x=>x.project_id===m.project_id&&x.key==='shipping'&&(soTag?x.so_tag===soTag:true));
-  const delivMs=milestones.find(x=>x.project_id===m.project_id&&x.key==='delivery'&&(soTag?x.so_tag===soTag:true));
+  // projects.shipping_status is a single project-wide value. On a multi-SO
+  // project it cannot describe one location, and using it here made one SO's
+  // status appear on every SO's row. Multi-SO rows fall through to the
+  // per-SO auto-compute below instead.
+  if(proj?.shipping_status&&!ciIsMultiSO(proj))return proj.shipping_status;
+  // Auto-compute from milestone state, scoped to THIS row's SO. On a multi-SO
+  // project an untagged row can no longer match a tagged milestone (the old
+  // `soTag?...:true` meant "any row wins" and picked whichever came first).
+  const scoped=x=>soTag?x.so_tag===soTag:(ciIsMultiSO(proj)?false:true);
+  const shipMs=milestones.find(x=>x.project_id===m.project_id&&x.key==='shipping'&&scoped(x));
+  const delivMs=milestones.find(x=>x.project_id===m.project_id&&x.key==='delivery'&&scoped(x));
   const isDone=(ms)=>ms&&checkins[ms.id]?.checked&&checkins[ms.id]?.stoplight==='green';
   if(delivMs&&isDone(delivMs))return'Delivered';
   if(shipMs&&isDone(shipMs))return'Shipped';
@@ -2174,8 +2233,25 @@ async function saveCheckinShipStatus(m,status){
       if(existing){await sb.from('so_details').update({shipping_status:status,updated_at:new Date().toISOString()}).eq('id',existing.id);existing.shipping_status=status;}
       else{const{data}=await sb.from('so_details').insert({project_id:m.project_id,so_tag:soTag,shipping_status:status}).select().single();if(data)(window._soDetails||[]).push(data);}
     } else {
+      // No so_tag on this row. Writing projects.shipping_status is only safe
+      // when the project has a single SO — on a multi-SO project it would set
+      // one status for every location.
+      const proj=projects.find(x=>x.id===m.project_id);
+      if(ciIsMultiSO(proj)){
+        const only=ciSOList(proj);
+        showToast('⚠ This row has no SO — set status per SO ('+only.join(', ')+') in Ops Hub');
+        return;
+      }
+      // Single-SO project: write the SO row so the value is SO-scoped going
+      // forward, and keep the legacy project column in step for older readers.
+      const soTagSingle=ciSOList(proj)[0]||null;
+      if(soTagSingle){
+        const existing=(window._soDetails||[]).find(d=>d.project_id===m.project_id&&d.so_tag===soTagSingle);
+        if(existing){await sb.from('so_details').update({shipping_status:status,updated_at:new Date().toISOString()}).eq('id',existing.id);existing.shipping_status=status;}
+        else{const{data}=await sb.from('so_details').insert({project_id:m.project_id,so_tag:soTagSingle,shipping_status:status}).select().single();if(data)(window._soDetails||[]).push(data);}
+      }
       await sb.from('projects').update({shipping_status:status}).eq('id',m.project_id);
-      const p=projects.find(x=>x.id===m.project_id);if(p)p.shipping_status=status;
+      if(proj)proj.shipping_status=status;
     }
   }
   render();
