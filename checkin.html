@@ -1835,15 +1835,13 @@ function render(){
     if(!buckets[b.id])buckets[b.id]={...b,items:[]};
     buckets[b.id].items.push(m);
   });
-  if(overdueItems.length){
-    buckets['__overdue']={id:'__overdue',label:'Overdue — still open',icon:'⏰',color:'#b91c1c',items:overdueItems};
-  }
   // Sort items within each bucket by date
   Object.values(buckets).forEach(b=>b.items.sort((a,z)=>(a.date||'').localeCompare(z.date||'')));
+  overdueItems.sort((a,z)=>(a.date||'').localeCompare(z.date||''));
 
-  // Render bucketed sections — Overdue always first.
-  const orderedBuckets=[...(buckets['__overdue']?[buckets['__overdue']]:[]),...Object.values(buckets).filter(b=>b.id!=='__overdue')];
-  const sectionsHtml=orderedBuckets.map(bucket=>{
+  // Render bucketed sections — the selected week's work only. Overdue
+  // carry-forward is rendered separately below, collapsed.
+  const sectionsHtml=Object.values(buckets).map(bucket=>{
     const rowsHtml=bucket.items.map(m=>ciRow(m._id||m.id,m,dept,bucket)).join('');
     const allDone=bucket.items.every(m=>{const ci=checkins[m._id||m.id];return ci?.checked&&ci?.stoplight==='green';});
     const hasRed=bucket.items.some(m=>checkins[m._id||m.id]?.stoplight==='red');
@@ -1860,7 +1858,48 @@ function render(){
     </div>`;
   }).join('');
 
-  ciContent.innerHTML=sectionsHtml;
+  // Older unresolved work sits below the selected week's list, collapsed by
+  // default, so it can never be lost but never competes with today's work
+  // either. Presentation only — these are the same carry-forward items, with
+  // the same cards, controls and behaviour, just rendered last and hidden
+  // until asked for. The cards are always in the DOM (hidden with a style
+  // toggle rather than conditionally rendered) so stoplights, notes, status,
+  // COI, tickets and completion stay wired exactly as before.
+  let overdueHtml='';
+  if(overdueItems.length){
+    const rowsHtml=overdueItems.map(m=>ciRow(m._id||m.id,m,dept,{id:'__overdue'})).join('');
+    const open=!!ciOverdueOpen;
+    overdueHtml=`
+      <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--gray-100)">
+        <button type="button" id="overdue-toggle" onclick="toggleOverdueSection()" aria-expanded="${open?'true':'false'}" aria-controls="overdue-body"
+          style="display:flex;align-items:center;gap:7px;width:100%;text-align:left;background:none;border:none;padding:2px 0;cursor:pointer;font-family:var(--font);color:var(--gray-500)">
+          <span style="font-size:12px;font-weight:600">Older items still open</span>
+          <span style="font-size:11px;font-weight:600;padding:1px 7px;border-radius:12px;background:var(--gray-100);color:var(--gray-500)">${overdueItems.length}</span>
+          <span id="overdue-caret" style="font-size:10px;color:var(--gray-400);transition:transform .15s;${open?'transform:rotate(180deg)':''}">▾</span>
+        </button>
+        <div id="overdue-body" style="display:${open?'flex':'none'};flex-direction:column;gap:6px;margin-top:10px">${rowsHtml}</div>
+      </div>`;
+  }
+
+  // Nothing scheduled for the selected week, but older work is still open —
+  // say so, rather than showing a bare collapsed strip with no context.
+  const noWeekWork=!sectionsHtml&&overdueItems.length
+    ?`<div class="empty" style="padding:1.5rem 0"><div class="empty-icon">🎉</div>Nothing scheduled for ${weekLabel}.</div>`:'';
+  ciContent.innerHTML=noWeekWork+sectionsHtml+overdueHtml;
+}
+
+// Expanded/collapsed state for the "Older items still open" section. Held
+// outside render() so a stoplight click, status change or the 60s auto-refresh
+// doesn't snap the section shut while someone is working in it.
+let ciOverdueOpen=false;
+function toggleOverdueSection(){
+  ciOverdueOpen=!ciOverdueOpen;
+  const body=document.getElementById('overdue-body');
+  const caret=document.getElementById('overdue-caret');
+  const btn=document.getElementById('overdue-toggle');
+  if(body)body.style.display=ciOverdueOpen?'flex':'none';
+  if(caret)caret.style.transform=ciOverdueOpen?'rotate(180deg)':'';
+  if(btn)btn.setAttribute('aria-expanded',ciOverdueOpen?'true':'false');
 }
 
 function ciRow(id,m,dept,bucket){
