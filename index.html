@@ -1248,6 +1248,162 @@ function docSOGate(type){
   if(effectiveSOFor(proj,selectedDocSO))return{ok:true};
   return{ok:false,reason:'This project has '+getSOList(proj).length+' SOs. Pick the SO this document is for — address, kiosk ID, power, POC and dates all differ by SO, so "All SOs (master defaults)" cannot produce a correct document.'};
 }
+// ── LARGE MULTI-SO VIEW MODEL (shared by Project Page + Project Overview) ──
+// A 52-SO project cannot render 52 expanded milestone/config blocks. Both
+// surfaces now use the same two modes and the same selected-SO state, so there
+// is one multi-SO implementation rather than two that drift apart.
+//   summary → one lightweight row per SO (no detail blocks built at all)
+//   detail  → the full existing experience for exactly ONE SO
+// State is per project so switching projects never inherits a stale SO.
+let msoState={};
+function msoGet(pid){
+  if(!pid)return{mode:'summary',so:'',q:''};
+  if(!msoState[pid])msoState[pid]={mode:'summary',so:'',q:''};
+  return msoState[pid];
+}
+function msoReset(pid){ if(pid)delete msoState[pid]; }
+// The selected SO, guaranteed to still exist on the project.
+function msoSelectedSO(proj){
+  if(!proj)return'';
+  const list=getSOList(proj);
+  if(list.length<=1)return list[0]||'';
+  const s=msoGet(proj.id);
+  return list.includes(s.so)?s.so:'';
+}
+// The summary/detail model applies only to a properly SPLIT multi-SO project.
+// A legacy unsplit multi-SO project has one set of untagged milestones — there
+// is nothing per-SO to summarise, and it is not a wall of content either — so
+// it keeps today's flat behaviour untouched.
+function msoActive(proj,projMs){
+  if(!proj||!isMultiSOProject(proj))return false;
+  const ms=projMs||milestones.filter(m=>m.project_id===proj.id);
+  return isProjectFullySplit(ms);
+}
+function msoIsSummary(proj){
+  if(!proj||!isMultiSOProject(proj))return false;
+  const s=msoGet(proj.id);
+  return s.mode!=='detail'||!msoSelectedSO(proj);
+}
+function msoSetMode(pid,mode){
+  const s=msoGet(pid);s.mode=mode;
+  if(mode==='detail'&&!s.so){const p=projects.find(x=>x.id===pid);s.so=getSOList(p)[0]||'';}
+  msoRerender(pid);
+}
+// Opening an SO from the summary switches to detail and selects that SO.
+function msoOpenSO(pid,so){
+  const s=msoGet(pid);s.mode='detail';s.so=so;
+  if(typeof ppSelectedMsSO!=='undefined')ppSelectedMsSO=so;
+  msoRerender(pid);
+}
+function msoStep(pid,delta){
+  const p=projects.find(x=>x.id===pid);const list=getSOList(p);
+  if(list.length<2)return;
+  const cur=list.indexOf(msoGet(pid).so);
+  const next=list[((cur<0?0:cur)+delta+list.length)%list.length];
+  msoOpenSO(pid,next);
+}
+function msoSearch(pid,q){ msoGet(pid).q=q||''; msoRerender(pid); }
+// Re-render whichever surface is on screen. Both call the same state.
+function msoRerender(pid){
+  if(currentTab==='projpage'&&ppProjId===pid)renderProjPageBody();
+  else if(currentTab==='overview')renderOverview();
+}
+// One lightweight summary row per SO, entirely from canonical sources:
+// dates via resolveMsDateForSO(project + key + so_tag), hardware via the
+// existing SO-aware hardware model. No new fields, no borrowing.
+function msoSummaryRows(proj){
+  if(!proj)return[];
+  return getSOList(proj).map(so=>{
+    const soMs=milestones.filter(m=>m.project_id===proj.id&&m.so_tag===so);
+    const applicable=getApplicableMilestones(soMs);
+    const done=applicable.filter(isMilestoneEffectivelyDone).length;
+    let health='🟢',healthLbl='On track';
+    if(applicable.length&&done===applicable.length){health='✅';healthLbl='Complete';}
+    else if(soMs.some(isMilestoneEscalation)){health='🔴';healthLbl='Escalation';}
+    else if(soMs.some(isMilestoneOverdue)){health='🔴';healthLbl='Overdue';}
+    else if(soMs.some(isMilestoneAtRisk)){health='🟡';healthLbl='At risk';}
+    else if(!applicable.length){health='—';healthLbl='No milestones';}
+    return{
+      so,
+      hardware:getHardwareSummary(proj.id,so)||'',
+      qty:getTotalHardwareCount(proj.id,so),
+      prod:resolveMsDateForSO(proj.id,'production-end',so)||resolveMsDateForSO(proj.id,'production-start',so),
+      qa:resolveMsDateForSO(proj.id,'quality-end',so)||resolveMsDateForSO(proj.id,'quality-start',so),
+      ship:resolveMsDateForSO(proj.id,'shipping',so),
+      delivery:resolveMsDateForSO(proj.id,'delivery',so),
+      install:resolveMsDateForSO(proj.id,'installation',so),
+      health,healthLbl,done,total:applicable.length,
+      naming:resolveSOConfigField(proj,so,'naming_convention').value||'',
+    };
+  });
+}
+// Mode switch + searchable SO selector. Deliberately NOT one pill per SO —
+// that is the thing that stops working at 10 SOs and is unusable at 52.
+function msoToolbar(proj){
+  if(!proj||!isMultiSOProject(proj))return'';
+  const list=getSOList(proj);
+  const s=msoGet(proj.id);
+  const sel=msoSelectedSO(proj);
+  const summary=msoIsSummary(proj);
+  const btn=(active,label,onclick)=>`<button onclick="${onclick}" style="font-size:11px;font-weight:600;padding:5px 14px;border-radius:var(--radius);cursor:pointer;font-family:var(--font);border:1px solid ${active?'var(--red)':'var(--gray-200)'};background:${active?'var(--red)':'white'};color:${active?'white':'var(--gray-600)'}">${label}</button>`;
+  const idx=list.indexOf(sel);
+  return`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--gray-100)">
+    ${btn(summary,'📋 Project summary',`msoSetMode('${proj.id}','summary')`)}
+    ${btn(!summary,'🔧 SO detail',`msoSetMode('${proj.id}','detail')`)}
+    <span style="font-size:10px;color:var(--gray-400);font-weight:600">${list.length} SOs</span>
+    ${!summary?`
+      <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
+        <button onclick="msoStep('${proj.id}',-1)" title="Previous SO" style="font-size:11px;padding:4px 9px;border-radius:var(--radius);border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font)">←</button>
+        <input list="mso-so-list-${proj.id}" value="${esc(sel)}" placeholder="🔎 Find SO..." title="Type to search this project's SOs"
+          style="font-family:var(--mono);font-size:12px;padding:5px 10px;border:1px solid var(--red);border-radius:var(--radius);background:white;color:var(--red);font-weight:600;width:150px"
+          onchange="if(this.value)msoOpenSO('${proj.id}',this.value.trim())">
+        <datalist id="mso-so-list-${proj.id}">${list.map(o=>`<option value="${esc(o)}"></option>`).join('')}</datalist>
+        <button onclick="msoStep('${proj.id}',1)" title="Next SO" style="font-size:11px;padding:4px 9px;border-radius:var(--radius);border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font)">→</button>
+        <span style="font-size:10px;color:var(--gray-400);white-space:nowrap">${idx>=0?(idx+1)+' of '+list.length:''}</span>
+      </span>`:`
+      <input value="${esc(s.q||'')}" placeholder="🔎 Search SO or kiosk ID..." oninput="msoSearchDebounced('${proj.id}',this.value)"
+        style="margin-left:auto;font-family:var(--font);font-size:12px;padding:5px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:white;width:210px">`}
+  </div>`;
+}
+let _msoSearchTimer=null;
+function msoSearchDebounced(pid,q){
+  clearTimeout(_msoSearchTimer);
+  _msoSearchTimer=setTimeout(()=>{
+    msoSearch(pid,q);
+    const el=document.querySelector('input[placeholder="🔎 Search SO or kiosk ID..."]');
+    if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);}
+  },180);
+}
+// The compact all-SO table. 52 of these rows is fine; 52 detail panels is not.
+function msoSummaryTable(proj){
+  const s=msoGet(proj.id);
+  const q=(s.q||'').trim().toLowerCase();
+  let rows=msoSummaryRows(proj);
+  const total=rows.length;
+  if(q)rows=rows.filter(r=>r.so.toLowerCase().includes(q)||(r.naming||'').toLowerCase().includes(q)||(r.hardware||'').toLowerCase().includes(q));
+  const cell=v=>v?fmt(v):'<span style="color:var(--gray-300)">—</span>';
+  const body=rows.map(r=>`<tr class="mso-row" onclick="msoOpenSO('${proj.id}','${escJsAttr(r.so)}')" style="cursor:pointer" title="Open SO ${esc(r.so)}">
+    <td style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--red);white-space:nowrap">${esc(r.so)}</td>
+    <td style="font-size:11px;color:var(--gray-700);max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.hardware)}">${r.hardware?esc(r.hardware):'<span style="color:var(--gray-300)">—</span>'}</td>
+    <td style="font-size:11px;text-align:center;color:var(--gray-600)">${r.qty||'<span style="color:var(--gray-300)">—</span>'}</td>
+    <td class="date-cell">${cell(r.prod)}</td>
+    <td class="date-cell">${cell(r.qa)}</td>
+    <td class="date-cell">${cell(r.ship)}</td>
+    <td class="date-cell">${cell(r.delivery)}</td>
+    <td class="date-cell">${cell(r.install)}</td>
+    <td style="text-align:center;white-space:nowrap" title="${esc(r.healthLbl)}">${r.health}<span style="font-size:9px;color:var(--gray-400);margin-left:4px">${r.total?r.done+'/'+r.total:''}</span></td>
+  </tr>`).join('');
+  return`<div style="max-height:70vh;overflow:auto">
+    <table class="pp-table" style="min-width:760px">
+      <thead style="position:sticky;top:0;z-index:2;background:var(--white);box-shadow:0 1px 0 var(--gray-200)"><tr>
+        <th style="text-align:left">SO</th><th style="text-align:left">Form factor</th><th>Qty</th>
+        <th>Production</th><th>QA</th><th>Ship</th><th>Delivery</th><th>Install</th><th>Health</th>
+      </tr></thead>
+      <tbody>${body||`<tr><td colspan="9" style="text-align:center;padding:1.5rem;color:var(--gray-400)">No SO matches "${esc(q)}".</td></tr>`}</tbody>
+    </table>
+  </div>
+  <div style="padding:8px 16px;font-size:10px;color:var(--gray-400);border-top:1px solid var(--gray-100)">${rows.length===total?total+' SOs':rows.length+' of '+total+' SOs'} · click a row to open its full detail</div>`;
+}
 // SO-aware equivalent of projectConnectivitySummary.
 function soConnectivitySummary(proj,soTag){
   const pri=resolveSOConfigField(proj,soTag,'primary_connectivity');
@@ -5375,11 +5531,17 @@ function renderOverview(){
   // Instead each SO's own value is listed, and SOs with none say so.
   let overviewNaming='';
   if(proj&&isMultiSOProject(proj)){
-    const parts=getSOList(proj).map(so=>{
-      const r=resolveSOConfigField(proj,so,'naming_convention');
-      return so+': '+(r.configured?r.value:NOT_CONFIGURED_SO);
-    });
-    overviewNaming=parts.join('  •  ');
+    // Selected SO only in detail mode; a count in summary mode. Listing all of
+    // them put 52 kiosk IDs in the header and showed one SO's value while you
+    // were working on another.
+    const ovSel=msoSelectedSO(proj);
+    if(!msoIsSummary(proj)&&ovSel){
+      const r=resolveSOConfigField(proj,ovSel,'naming_convention');
+      overviewNaming=ovSel+': '+(r.configured?r.value:NOT_CONFIGURED_SO);
+    } else {
+      const lst=getSOList(proj);
+      overviewNaming=lst.filter(so=>resolveSOConfigField(proj,so,'naming_convention').configured).length+' of '+lst.length+' SOs configured';
+    }
   } else if(proj){
     overviewNaming=getSOConfigSummary(proj).naming_convention||'';
   }
@@ -5428,10 +5590,20 @@ function renderOverview(){
     </div>
   </div>`:'';
 
+  // Project Overview uses the SAME summary/detail model and the SAME selected-SO
+  // state as Project Page — one multi-SO implementation, not two. In summary
+  // mode no per-SO milestone markup is built at all; in detail mode exactly one
+  // SO's grid is built. This block used to map over every SO unconditionally,
+  // which is why Overview was a wall of content on a 25- or 52-SO project.
+  const ovMso=msoActive(proj,projMs);
+  const ovSummary=ovMso&&msoIsSummary(proj);
+  const ovOnlySO=ovMso?msoSelectedSO(proj):'';
   let msHtml='';
-  if(hasSoTags){
+  if(ovSummary){
+    msHtml='';
+  } else if(hasSoTags){
     // Milestones are split — group by so_tag
-    msHtml=soList.map(so=>{
+    msHtml=(ovMso?soList.filter(so=>so===ovOnlySO):soList).map(so=>{
       const soMs=projMs.filter(m=>m.so_tag===so);
       const saved=soDetails.find(d=>d.project_id===proj.id&&d.so_tag===so);
       const soNaming=saved?.naming_convention||proj.naming_convention||'';
@@ -5533,7 +5705,8 @@ function renderOverview(){
         const dupeWarning=dupes.length?`<div style="padding:6px 14px;background:#fef3c7;border-bottom:1px solid #fde68a;font-size:11px;color:#92400e;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><span>⚠ ${dupes.length} duplicate milestone${dupes.length>1?'s':''} detected: ${dupes.map(arr=>`"${esc(arr[0].label)}" (${arr.length}×)`).join(', ')} — likely leftover from an SO split.</span><button onclick="removeDuplicateMilestones('${proj.id}')" style="font-size:10px;padding:3px 10px;border-radius:8px;border:1px solid #d97706;background:white;color:#92400e;cursor:pointer;font-family:var(--font);white-space:nowrap;flex-shrink:0">🧹 Review &amp; remove duplicates</button></div>`:'';
         return`<div style="padding:5px 14px;font-size:10.5px;color:var(--gray-400);border-bottom:1px solid var(--gray-50)">${total} milestone${total!==1?'s':''} total for this project${hiddenCount?` · ${hiddenCount} hidden (completed) · ${shownCount} shown`:''}</div>${dupeWarning}`;
       })()}
-      <div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>
+      ${ovMso?msoToolbar(proj):''}
+      ${ovSummary?msoSummaryTable(proj):`<div class="milestone-grid">${msHtml||'<div class="empty-state">No milestones yet.</div>'}</div>`}
     </div>`:'<div class="empty-state">No projects yet.</div>'}`;
 }
 async function quickStatusAdHoc(adHocId,status){
@@ -5686,7 +5859,7 @@ function goToProjPage(id){
   setTab('projpage');
 }
 
-function selProj(id){selectedProjId=id;renderOverview();}
+function selProj(id){selectedProjId=id;msoReset(id);renderOverview();}
 function onOverviewProjSearch(val){
   const match=matchProjectByPickerText(val,filterBySA(filterBySales(filterByPM(activeProjects('overview')))));
   if(match)selProj(match.id);
@@ -8071,7 +8244,7 @@ async function removeSOFromProject(projId,soTag){
   await logActivity('removed SO from project',soTag,soTag,projId,null,null);
   showToast('SO '+soTag+' removed ✓');
   await loadAll();
-  if(ppProjId===projId){ppSelectedMsSO=null;renderProjPageBody();}
+  if(ppProjId===projId){ppSelectedMsSO=null;msoReset(projId);renderProjPageBody();}
 }
 // ── SO SPLITTING ────────────────────────────────────────────
 async function splitMilestonesBySO(projId){
@@ -8121,7 +8294,9 @@ async function pushSODatesToAll(projId,fromSO){
   const soList=getSOList(proj);
   const otherSOs=soList.filter(s=>s!==fromSO);
   if(!otherSOs.length)return;
-  if(!confirm('Push all dates from SO '+fromSO+' to '+otherSOs.join(', ')+'?\n\nThis overwrites their dates.'))return;
+  const soPreview=otherSOs.length<=8?otherSOs.join(', '):otherSOs.slice(0,8).join(', ')+' … +'+(otherSOs.length-8)+' more';
+  if(!confirm('Copy ALL dates from SO '+fromSO+' to the other '+otherSOs.length+' SO'+(otherSOs.length===1?'':'s')+' on this project?\n\n'
+    +soPreview+'\n\nThis overwrites every matching milestone date on those SOs.'))return;
   const sourceMs=milestones.filter(m=>m.project_id===projId&&m.so_tag===fromSO);
   let updated=0;
   for(const so of otherSOs){
@@ -8330,8 +8505,10 @@ function saveEditMsPushToAllSOs(id,oldLabel,oldDate){
     <div class="modal" style="width:460px" onclick="event.stopPropagation()">
       <div class="modal-head"><span class="modal-title">📋 Push ${esc(newLabel)} to all SOs?</span><button class="modal-close" onclick="closeModal()">×</button></div>
       <div style="padding:16px;font-size:13px;color:var(--gray-600)">
+        <div style="font-size:14px;font-weight:600;color:var(--black);margin-bottom:8px">Update <span style="color:var(--red)">${esc(newLabel)}</span> to ${fmt(newDate)} for all ${targets.length+1} SOs?</div>
         SO ${esc(fromSO)}: <strong>${fmt(newDate)}</strong>
-        <table style="margin-top:10px;font-size:12px;border-collapse:collapse">${rows}</table>
+        <div style="max-height:240px;overflow:auto;margin-top:10px;border:1px solid var(--gray-100);border-radius:var(--radius)">
+        <table style="font-size:12px;border-collapse:collapse;width:100%">${rows}</table></div>
         <div style="margin-top:10px;font-size:11px;color:var(--gray-400)">Only ${esc(newLabel)} will be changed. All other milestone dates remain unchanged. Nothing is saved until you click "Push to all SOs".</div>
       </div>
       <div class="modal-actions">
@@ -8813,13 +8990,19 @@ let ppSelectedMsSO=null;
 // SO's own chain — pass null (or omit) for All. Only re-renders the page
 // body, not the whole header, matching the pattern the rest of the
 // Project Page's snappy in-place updates already use.
+// Retained for existing callers. The shared multi-SO state is the source of
+// truth now; this keeps ppSelectedMsSO in step for anything still reading it.
 function ppSelectMsSO(so){
   ppSelectedMsSO=so||null;
+  if(ppProjId){
+    const st=msoGet(ppProjId);
+    if(so){st.mode='detail';st.so=so;} else {st.mode='summary';}
+  }
   renderProjPageBody();
 }
 
 async function loadProjPage(pid){
-  if(ppProjId!==pid)ppSelectedMsSO=null;
+  if(ppProjId!==pid){ppSelectedMsSO=null;msoReset(pid);}
   ppProjId=pid;
   const[team,actions,risks,decisions,sections,links,pmt,hardware,shipping]=await Promise.all([
     sb.from('project_team').select('*').eq('project_id',pid).order('sort_order'),
@@ -9369,7 +9552,12 @@ function renderProjPageBody(){
 
   let msHtml='';
   if(ppHasSoTags&&ppSoList.length>1){
-    // Group by SO with headers + push button
+    // PERF: this whole grouped string used to be built for every SO on the
+    // project and then DISCARDED — the multi-SO branch below renders its own
+    // markup and never reads msHtml. On a 52-SO project that was ~1,100 wasted
+    // milestone rows built on every single re-render. Skipped entirely now.
+    msHtml='';
+  } else if(false){
     msHtml=ppSoList.map(so=>{
       const soMs=pMs.filter(m=>m.so_tag===so).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
       return`<tr><td colspan="4" style="padding:6px 8px 2px;background:var(--gray-50)">
@@ -9455,12 +9643,21 @@ function renderProjPageBody(){
             // Multi-SO now lists each SO's own value (and says which are not
             // configured); single-SO is unchanged.
             if(isMultiSOProject(proj)){
-              return getSOList(proj).map(so=>{
-                const n=resolveSOConfigField(proj,so,'naming_convention');
-                const a=resolveSOConfigField(proj,so,'address');
+              // Never list every SO here — at 25 or 52 SOs that alone is a wall
+              // of text, and it also means one SO's kiosk ID/address is on
+              // screen while you are looking at another. In SO Detail this
+              // shows the SELECTED SO only; in Project Summary it shows how
+              // many SOs are configured, and nothing SO-specific at all.
+              const selHdr=msoSelectedSO(proj);
+              const list=getSOList(proj);
+              if(!msoIsSummary(proj)&&selHdr){
+                const n=resolveSOConfigField(proj,selHdr,'naming_convention');
+                const a=resolveSOConfigField(proj,selHdr,'address');
                 const bits=[n.configured?'🏷 '+esc(n.value):'',a.configured?'📍 '+esc(a.value):''].filter(Boolean).join(' ');
-                return`<span title="SO ${esc(so)}" style="margin-right:10px"><strong style="color:var(--red)">${esc(so)}</strong> ${bits||'<span style="color:#a16207">'+NOT_CONFIGURED_SO+'</span>'}</span>`;
-              }).join('');
+                return`<span><strong style="color:var(--red)">${esc(selHdr)}</strong> ${bits||'<span style="color:#a16207">'+NOT_CONFIGURED_SO+'</span>'}</span>`;
+              }
+              const configured=list.filter(so=>resolveSOConfigField(proj,so,'naming_convention').configured).length;
+              return`<span title="Open an SO to see its kiosk ID and address">🏷 ${configured} of ${list.length} SOs configured</span>`;
             }
             return(proj.naming_convention?`<span>🏷 ${esc(proj.naming_convention)}</span>`:'')
                  +(proj.address?`<span>📍 ${esc(proj.address)}</span>`:'');
@@ -9589,10 +9786,8 @@ function renderProjPageBody(){
           <span class="pp-card-title">Milestone tracker</span>
           <span style="font-size:10px;color:var(--gray-400)">Synced from hub</span>
         </div>
-        ${(ppHasSoTags&&ppSoList.length>1)?`<div style="display:flex;flex-wrap:wrap;gap:6px;padding:10px 16px 0">
-          <button onclick="ppSelectMsSO(null)" style="font-size:11px;font-weight:600;padding:4px 12px;border-radius:14px;cursor:pointer;font-family:var(--font);border:1px solid ${!ppSelectedMsSO?'var(--red)':'var(--gray-200)'};background:${!ppSelectedMsSO?'var(--red)':'white'};color:${!ppSelectedMsSO?'white':'var(--gray-600)'}">All SOs</button>
-          ${ppSoList.map(so=>`<button onclick="ppSelectMsSO('${so}')" style="font-size:11px;font-weight:600;padding:4px 12px;border-radius:14px;cursor:pointer;font-family:var(--mono);border:1px solid ${ppSelectedMsSO===so?'var(--red)':'var(--gray-200)'};background:${ppSelectedMsSO===so?'var(--red)':'white'};color:${ppSelectedMsSO===so?'white':'var(--gray-600)'}">${so} <span style="opacity:0.7">(${pMs.filter(m=>m.so_tag===so).length})</span></button>`).join('')}
-        </div>`:''}
+        ${msoActive(proj,pMs)?msoToolbar(proj):''}
+        ${(msoActive(proj,pMs)&&msoIsSummary(proj))?msoSummaryTable(proj):`
         <div style="overflow-x:auto">
           <table class="pp-table" style="min-width:500px">
             <thead><tr>
@@ -9618,7 +9813,12 @@ function renderProjPageBody(){
                 </td></tr>`;
                 return headerRow+(msHtml||'<tr><td colspan="4" style="text-align:center;padding:2rem;color:var(--gray-300)">No milestones — add them in Project Overview</td></tr>');
               }
-              return ppSoList.filter(so=>!ppSelectedMsSO||so===ppSelectedMsSO).map(so=>{
+              // DETAIL MODE: exactly ONE SO is ever built. Previously an
+              // unset ppSelectedMsSO meant "All SOs", which expanded every SO's
+              // header + milestone rows — the thing that made 25- and 52-SO
+              // projects unusable. The summary view above replaces that.
+              const _msoSel=msoSelectedSO(proj);
+              return ppSoList.filter(so=>so===_msoSel).map(so=>{
                 const saved=soDetails.find(d=>d.project_id===proj.id&&d.so_tag===so);
                 // SO-scoped, never project-level. These inputs save on blur, so
                 // pre-filling them from proj.naming_convention/proj.address on a
@@ -9651,7 +9851,7 @@ function renderProjPageBody(){
               }).join('');
             })()}</tbody>
           </table>
-        </div>
+        </div>`}
         <div style="padding:12px 16px;border-top:1px solid var(--gray-100);background:var(--gray-50)">
           <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Installation dates</div>
           <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;align-items:end">
