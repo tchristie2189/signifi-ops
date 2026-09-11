@@ -1248,6 +1248,642 @@ function docSOGate(type){
   if(effectiveSOFor(proj,selectedDocSO))return{ok:true};
   return{ok:false,reason:'This project has '+getSOList(proj).length+' SOs. Pick the SO this document is for — address, kiosk ID, power, POC and dates all differ by SO, so "All SOs (master defaults)" cannot produce a correct document.'};
 }
+
+// ══════════════════════════════════════════════════════════════════
+// EXCEL BULK SO IMPORT — one engine, two entry points
+// ══════════════════════════════════════════════════════════════════
+// Excel is an INPUT METHOD ONLY. Every value it carries lands in the
+// existing canonical model: so_details for SO configuration,
+// hardware_line_items for hardware, milestones (project_id + key + so_tag)
+// for dates. No new tables, no new fields, no second source of truth.
+// Parsing uses the SheetJS build the app already loads; the downloadable
+// template is generated with the ExcelJS build it already loads.
+const XL_SHEET='Multi-SO Import';
+const XL_HEADERS=['SO Number','Kiosk ID / Naming Convention','Form Factor','Quantity','Site Address','Voltage','Plug Type','Power Requirements','Primary Connectivity','Backup Connectivity','POC Name','POC Email','POC Phone','Production Date','QA Date','Ship Date','Delivery Date','Installation Date','Installation Time','Technician Details','Carrier','Tracking Number'];
+// Excel column → canonical so_details column.
+const XL_SO_CONFIG_MAP={
+  'Kiosk ID / Naming Convention':'naming_convention','Site Address':'address',
+  'Voltage':'voltage','Plug Type':'plug_type','Power Requirements':'power_requirements',
+  'Primary Connectivity':'primary_connectivity','Backup Connectivity':'backup_connectivity',
+  'POC Name':'poc_name','POC Email':'poc_email','POC Phone':'poc_phone',
+  'Installation Time':'install_time','Technician Details':'technician_details',
+  'Carrier':'carrier','Tracking Number':'tracking_number',
+};
+// Excel column → canonical milestone KEY. Identity is the key, never the label.
+// "Production Date" and "QA Date" are single columns while the model has
+// start/end pairs — they map to the START of each phase, which is the date a
+// PM is scheduling when they fill an intake sheet. The preview shows the
+// resolved key so this is never a hidden assumption.
+const XL_DATE_MAP={
+  'Production Date':{key:'production-start',label:'Production start'},
+  'QA Date':{key:'quality-start',label:'Quality start'},
+  'Ship Date':{key:'shipping',label:'Pack & ship'},
+  'Delivery Date':{key:'delivery',label:'Delivery'},
+  'Installation Date':{key:'installation',label:'Installation'},
+};
+// Controlled vocabularies — read from the app's existing single definition, so
+// the importer can never drift from (or be used to bypass) the DB CHECKs.
+function xlVocab(){
+  return{
+    voltage:PROJECT_CONFIG_OPTIONS.voltage,
+    plug_type:PROJECT_CONFIG_OPTIONS.plug_type,
+    primary_connectivity:PROJECT_CONFIG_OPTIONS.connectivity,
+    backup_connectivity:PROJECT_CONFIG_OPTIONS.connectivity,
+  };
+}
+// One normalisation used for every SO comparison in the importer.
+function xlNormSO(v){return String(v==null?'':v).replace(/\s+/g,' ').trim();}
+function xlStr(v){
+  if(v==null)return'';
+  if(v instanceof Date)return'';
+  return String(v).replace(/ /g,' ').trim();
+}
+// Dates: a real Excel date cell is unambiguous and trusted. Text is accepted
+// ONLY as YYYY-MM-DD. Anything like 09/10/26 is rejected rather than guessed
+// between Canadian and US ordering.
+function xlDate(v){
+  if(v==null||v==='')return{ok:true,value:null};
+  if(v instanceof Date&&!isNaN(v))return{ok:true,value:isoD(new Date(v.getTime()+v.getTimezoneOffset()*60000))};
+  const s=String(v).trim();
+  if(!s)return{ok:true,value:null};
+  const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if(m){
+    const d=new Date(s+'T00:00:00');
+    if(isNaN(d)||d.getFullYear()!=+m[1]||(d.getMonth()+1)!=+m[2]||d.getDate()!=+m[3])return{ok:false,reason:'"'+s+'" is not a real date'};
+    return{ok:true,value:s};
+  }
+  if(/^\d+(\.\d+)?$/.test(s)){ // bare Excel serial that arrived as text
+    const n=Number(s);
+    if(n>20000&&n<80000){const d=new Date(Date.UTC(1899,11,30)+n*86400000);return{ok:true,value:isoD(new Date(d.getTime()+d.getTimezoneOffset()*60000))};}
+  }
+  return{ok:false,reason:'"'+s+'" is ambiguous — use YYYY-MM-DD or a real Excel date cell'};
+}
+function xlEmailOk(s){return!s||/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(s);}
+
+// ── PARSE ─────────────────────────────────────────────────────────
+// Untrusted input: values only (no formulas evaluated, no macros — .xlsx only),
+// with hard row/size caps.
+const XL_MAX_BYTES=5*1024*1024, XL_MAX_ROWS=500;
+function xlParseWorkbook(arrayBuffer){
+  let wb;
+  try{ wb=XLSX.read(arrayBuffer,{type:'array',cellDates:true,cellFormula:false,cellHTML:false}); }
+  catch(e){ return{fatal:'Could not read that file as an .xlsx workbook: '+(e.message||e)}; }
+  if(!wb.SheetNames.includes(XL_SHEET))
+    return{fatal:'Missing the "'+XL_SHEET+'" sheet. This workbook has: '+wb.SheetNames.join(', ')+'. Use Download Template to get the right structure.'};
+  const ws=wb.Sheets[XL_SHEET];
+  const grid=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,cellDates:true,defval:null,blankrows:true});
+  // Project Setup: labels on the row that starts with "Customer", values beneath.
+  const setup={};
+  let headerRow=-1;
+  for(let r=0;r<grid.length;r++){
+    const row=grid[r]||[];
+    if(xlStr(row[0])==='Customer'){
+      const vals=grid[r+1]||[];
+      const LBL=['Customer','Project Name','PM','Sales','Solution Architect','Schedule Template'];
+      row.forEach((cell,c)=>{ const l=xlStr(cell); if(LBL.includes(l))setup[l]=xlStr(vals[c]); });
+    }
+    if(xlStr(row[0])==='SO Number'){headerRow=r;break;}
+  }
+  if(headerRow<0)return{fatal:'Could not find the SO table — no "SO Number" header found on the "'+XL_SHEET+'" sheet.'};
+  const hdr=(grid[headerRow]||[]).map(xlStr);
+  const missing=XL_HEADERS.filter(h=>!hdr.includes(h));
+  if(missing.length)return{fatal:'Workbook is missing required column'+(missing.length>1?'s':'')+': '+missing.join(', ')+'. Use Download Template.'};
+  const dupHdr=hdr.filter((h,i)=>h&&XL_HEADERS.includes(h)&&hdr.indexOf(h)!==i);
+  if(dupHdr.length)return{fatal:'Duplicate column header'+(dupHdr.length>1?'s':'')+': '+[...new Set(dupHdr)].join(', ')};
+  const colOf={}; XL_HEADERS.forEach(h=>colOf[h]=hdr.indexOf(h));
+  const rows=[];
+  for(let r=headerRow+1;r<grid.length;r++){
+    const raw=grid[r]||[];
+    const cells={}; let any=false;
+    XL_HEADERS.forEach(h=>{ const v=raw[colOf[h]]; cells[h]=v; if(v!=null&&String(v).trim()!=='')any=true; });
+    if(!any)continue;                       // entirely blank row — ignored, never an error
+    rows.push({excelRow:r+1,cells});
+    if(rows.length>XL_MAX_ROWS)return{fatal:'Workbook has more than '+XL_MAX_ROWS+' SO rows — split it into smaller files.'};
+  }
+  return{setup,rows};
+}
+
+// ── VALIDATE + BUILD IMPORT PLAN ──────────────────────────────────
+// Nothing is written until the PM confirms the plan this produces.
+function xlBuildPlan(parsed,opts){
+  const{projectId}=opts||{};
+  const proj=projectId?projects.find(p=>p.id===projectId):null;
+  const vocab=xlVocab();
+  const soHasData=(so)=>!!proj&&(
+    milestones.some(m=>m.project_id===proj.id&&m.so_tag===so)
+    ||soDetails.some(d=>d.project_id===proj.id&&d.so_tag===so)
+    ||hardwareLineItems.some(hw=>hw.project_id===proj.id&&hw.so_tag===so));
+  const existingSOs=proj?getSOList(proj).map(xlNormSO).filter(soHasData):[];
+  const plan={mode:proj?'existing':'new',project:proj||null,setup:parsed.setup||{},rows:[],projectIssues:[],fileName:opts?.fileName||''};
+
+  // Project Setup. New project → must resolve against existing records.
+  // Existing project → informational only; never silently overwritten.
+  if(!proj){
+    if(!plan.setup['Customer'])plan.projectIssues.push({level:'error',msg:'Project Setup: Customer is required for a new project'});
+    if(!plan.setup['Project Name'])plan.projectIssues.push({level:'error',msg:'Project Setup: Project Name is required for a new project'});
+    const resolveName=(val,list,label)=>{
+      if(!val)return null;
+      const hit=(list||[]).find(x=>String(x).toLowerCase()===val.toLowerCase());
+      if(!hit)plan.projectIssues.push({level:'error',msg:'Project Setup: '+label+' "'+val+'" is not an existing '+label+'. Valid: '+(list||[]).join(', ')});
+      return hit||null;
+    };
+    plan.resolved={
+      pm:resolveName(plan.setup['PM'],getPMList?getPMList():[],'PM'),
+      sales:resolveName(plan.setup['Sales'],getSalesList?getSalesList():[],'Sales'),
+      sa:resolveName(plan.setup['Solution Architect'],getSAList?getSAList():[],'Solution Architect'),
+    };
+    const tplRaw=plan.setup['Schedule Template']||'';
+    if(tplRaw){
+      const t=TEMPLATES.find(x=>x.name.toLowerCase()===tplRaw.toLowerCase()||x.id===tplRaw.toLowerCase()
+        ||x.name.toLowerCase().startsWith(tplRaw.toLowerCase().split('(')[0].trim()));
+      if(!t)plan.projectIssues.push({level:'error',msg:'Project Setup: Schedule Template "'+tplRaw+'" not recognised. Valid: '+TEMPLATES.map(x=>x.name).join(', ')});
+      plan.resolved.template=t||null;
+    } else plan.resolved={...plan.resolved,template:null};
+  } else {
+    const conflict=(k,cur)=>{const v=plan.setup[k];if(v&&cur&&v.toLowerCase()!==String(cur).toLowerCase())
+      plan.projectIssues.push({level:'warning',msg:'Project Setup: workbook says '+k+' "'+v+'" but this project has "'+cur+'". The project value is kept — Excel never changes project-level fields on an existing project.'});};
+    conflict('Customer',proj.client); conflict('Project Name',proj.name);
+    conflict('PM',proj.pm); conflict('Sales',proj.sales); conflict('Solution Architect',proj.solutions);
+  }
+
+  const seen={};
+  parsed.rows.forEach(r=>{
+    const issues=[];
+    const so=xlNormSO(r.cells['SO Number']);
+    const rec={excelRow:r.excelRow,so,issues,cfg:{},dates:{},hardware:null,action:'create',changes:[]};
+    if(!so){
+      issues.push({level:'error',field:'SO Number',msg:'Row '+r.excelRow+' has data but no SO Number'});
+      rec.action='blocked'; plan.rows.push(rec); return;
+    }
+    if(/[,;]/.test(String(r.cells['SO Number']||'')))
+      issues.push({level:'error',field:'SO Number',msg:'One row = one SO — put "'+so+'" on separate rows instead of a list'});
+    if(seen[so]!=null)issues.push({level:'error',field:'SO Number',msg:'Duplicate SO "'+so+'" (also on row '+seen[so]+')'});
+    else seen[so]=r.excelRow;
+
+    // SO configuration
+    Object.entries(XL_SO_CONFIG_MAP).forEach(([col,field])=>{
+      const v=xlStr(r.cells[col]);
+      if(v==='')return;                       // blank = not configured / no change
+      if(vocab[field]&&!vocab[field].includes(v)){
+        issues.push({level:'error',field:col,msg:col+' "'+v+'" is not an accepted value. Accepted: '+vocab[field].join(', ')});
+        return;
+      }
+      if(col==='POC Email'&&!xlEmailOk(v)){issues.push({level:'error',field:col,msg:'"'+v+'" is not a valid email address'});return;}
+      rec.cfg[field]=v;
+    });
+    // Hardware — one primary line per SO for V1
+    const ff=xlStr(r.cells['Form Factor']);
+    const qtyRaw=xlStr(r.cells['Quantity']);
+    if(qtyRaw!==''&&!/^\d+$/.test(qtyRaw))issues.push({level:'error',field:'Quantity',msg:'Quantity "'+qtyRaw+'" must be a whole number'});
+    else if(qtyRaw!==''&&Number(qtyRaw)<1)issues.push({level:'error',field:'Quantity',msg:'Quantity must be at least 1'});
+    else if(qtyRaw!==''&&!ff)issues.push({level:'error',field:'Form Factor',msg:'Quantity given with no Form Factor'});
+    if(ff)rec.hardware={model:ff,quantity:qtyRaw===''?1:Number(qtyRaw)};
+    // Dates
+    Object.entries(XL_DATE_MAP).forEach(([col,def])=>{
+      const parsedDate=xlDate(r.cells[col]);
+      if(!parsedDate.ok){issues.push({level:'error',field:col,msg:col+': '+parsedDate.reason});return;}
+      if(parsedDate.value)rec.dates[def.key]={date:parsedDate.value,label:def.label,col};
+    });
+    // Helpful (non-blocking) gaps
+    if(!rec.cfg.address)issues.push({level:'warning',field:'Site Address',msg:'No site address yet'});
+    if(!rec.cfg.poc_name)issues.push({level:'warning',field:'POC Name',msg:'No site contact yet'});
+    if(!rec.hardware)issues.push({level:'warning',field:'Form Factor',msg:'No hardware yet'});
+    if(!rec.dates['shipping']&&!rec.dates['installation'])issues.push({level:'warning',field:'Dates',msg:'No ship or installation date yet'});
+
+    if(issues.some(i=>i.level==='error'))rec.action='blocked';
+    else if(existingSOs.includes(so)){
+      rec.existing=true;
+      rec.changes=xlDiffExistingSO(proj,so,rec);
+      rec.action=rec.changes.length?'skip':'nochange';   // default for an existing SO is always SKIP
+    }
+    plan.rows.push(rec);
+  });
+  return plan;
+}
+// Field-level diff for an SO that already exists. Blank Excel cells are absent
+// from rec.cfg/rec.dates entirely, so they can never appear as a change.
+function xlDiffExistingSO(proj,so,rec){
+  const out=[];
+  Object.entries(rec.cfg).forEach(([field,val])=>{
+    const cur=resolveSOConfigField(proj,so,field).value||'';
+    if(String(cur)!==String(val))out.push({field,label:field.replace(/_/g,' '),current:cur||'—',incoming:val});
+  });
+  Object.entries(rec.dates).forEach(([key,d])=>{
+    const cur=resolveMsDateForSO(proj.id,key,so);
+    if((cur||'')!==d.date)out.push({field:'date:'+key,label:d.col,current:cur?fmt(cur):'—',incoming:fmt(d.date)});
+  });
+  if(rec.hardware){
+    const curHw=getHardwareSummary(proj.id,so)||'';
+    const inHw=rec.hardware.quantity+'× '+rec.hardware.model;
+    if(curHw!==inHw)out.push({field:'hardware',label:'Hardware',current:curHw||'—',incoming:inHw});
+  }
+  return out;
+}
+
+
+// ── EXECUTE ───────────────────────────────────────────────────────
+// NOT atomic. Supabase's JS client has no client-side transaction, so a
+// 52-SO import is many requests. Instead of pretending otherwise, execution is
+// IDEMPOTENT and RESUMABLE: each SO is completed in full before the next
+// starts, every write re-checks live state first, and on failure the run stops
+// and reports exactly which SOs completed. Re-running the same workbook skips
+// everything already present and finishes the rest. See xlImportAtomicityNote().
+function xlImportAtomicityNote(){
+  return'Imports are applied SO by SO and are safe to re-run: every write checks for an existing row first, so a retry after a failure never duplicates an SO, milestone, configuration or hardware line. They are not a single database transaction — for that a Supabase RPC would be required (see the final report).';
+}
+async function xlExecutePlan(plan,decisions){
+  const res={created:[],updated:[],skipped:[],blocked:[],failed:null,msCreated:0,cfgCreated:0,hwCreated:0,projectId:plan.project?.id||null};
+  // Defence in depth: the preview already disables Import while a project-level
+  // error is unresolved, but nothing should be able to reach the database with
+  // an unresolved PM / Sales / SA / Schedule Template / missing-customer error.
+  const hard=plan.projectIssues.filter(i=>i.level==='error');
+  if(hard.length){res.failed='Import blocked — resolve first:\n• '+hard.map(i=>i.msg).join('\n• ');return res;}
+  let proj=plan.project;
+
+  // 1. New project — created through the same project model the manual intake uses.
+  if(!proj){
+    const tpl=plan.resolved?.template||null;
+    const soAll=plan.rows.filter(r=>r.action!=='blocked').map(r=>r.so);
+    const{data,error}=await sb.from('projects').insert({
+      name:plan.setup['Project Name'],client:plan.setup['Customer'],
+      so_number:soAll.join(', '),status:'active',lifecycle_stage:'delivery',
+      pm:plan.resolved?.pm||null,sales:plan.resolved?.sales||null,solutions:plan.resolved?.sa||null,
+      changed_by:currentUserName,
+    }).select().single();
+    if(error){res.failed='Could not create the project: '+error.message;return res;}
+    proj=data; projects.push(data); res.projectId=data.id; res.projectCreated=true;
+    // The DB seeds starter milestones on insert — clear them so the imported
+    // per-SO skeleton is the only milestone set (same as saveIntake does).
+    const{error:clr}=await sb.from('milestones').delete().eq('project_id',proj.id);
+    if(clr){res.failed='Project created but starter milestones could not be cleared: '+clr.message;return res;}
+    milestones=milestones.filter(m=>m.project_id!==proj.id);
+    res.template=tpl?tpl.name:null;
+  }
+
+  // 2. Make sure every SO in the plan is on the project's SO field first, so
+  //    the canonical multi-SO resolvers recognise them before any row is written.
+  const wanted=plan.rows.filter(r=>decisions[r.so]!=='skip'&&r.action!=='blocked').map(r=>r.so);
+  const already=getSOList(proj).map(xlNormSO);
+  const toAdd=wanted.filter(so=>!already.includes(so));
+  if(toAdd.length){
+    const merged=[...getSOList(proj),...toAdd];
+    const{error}=await sb.from('projects').update({so_number:merged.join(', '),changed_by:currentUserName}).eq('id',proj.id);
+    if(error){res.failed='Could not add the new SOs to the project: '+error.message;return res;}
+    proj.so_number=merged.join(', ');
+  }
+
+  // 3. If this project's existing milestones are still untagged (a single-SO
+  //    project growing into a multi-SO one), hand the ORIGINAL SO its tag
+  //    in place first. Same non-destructive rule as Split SO: ids are kept, so
+  //    completion, history and check-in stay attached.
+  const untagged=milestones.filter(m=>m.project_id===proj.id&&!m.so_tag);
+  if(untagged.length&&getSOList(proj).length>1){
+    const originalSO=already[0]||getSOList(proj)[0];
+    const{error}=await sb.from('milestones').update({so_tag:originalSO,changed_by:currentUserName,changed_at:new Date().toISOString()})
+      .eq('project_id',proj.id).is('so_tag',null);
+    if(error){res.failed='Could not tag the existing milestones for '+originalSO+': '+error.message;return res;}
+    untagged.forEach(m=>{m.so_tag=originalSO;});
+    res.originalSOTagged=originalSO;
+    // Carry the project's legacy single-SO config onto that SO only — identical
+    // rule to applySplitMilestonesBySO, never fanned to the imported SOs.
+    const LEGACY=['address','naming_convention','voltage','plug_type','power_requirements','primary_connectivity','backup_connectivity'];
+    const row=soDetails.find(d=>d.project_id===proj.id&&d.so_tag===originalSO);
+    const payload={};
+    LEGACY.forEach(f=>{const pv=proj[f];if(pv==null||pv==='')return;const sv=row?row[f]:null;if(sv==null||sv==='')payload[f]=pv;});
+    if(Object.keys(payload).length){
+      if(row){await sb.from('so_details').update({...payload,updated_at:new Date().toISOString()}).eq('id',row.id);Object.assign(row,payload);}
+      else{const{data}=await sb.from('so_details').insert({project_id:proj.id,so_tag:originalSO,...payload}).select().single();if(data)soDetails.push(data);}
+    }
+  }
+
+  // 4. Template for a new SO's milestone skeleton: whatever an existing SO on
+  //    this project already has, so imported SOs match the project's own shape.
+  const templateSO=[...new Set(milestones.filter(m=>m.project_id===proj.id&&m.so_tag).map(m=>m.so_tag))]
+    .find(t=>!wanted.includes(t)||milestones.some(m=>m.project_id===proj.id&&m.so_tag===t));
+  let skeleton=templateSO?milestones.filter(m=>m.project_id===proj.id&&m.so_tag===templateSO).map(m=>({key:m.key,label:m.label})):null;
+  if(!skeleton||!skeleton.length){
+    const tpl=plan.resolved?.template;
+    skeleton=xlSkeletonForTemplate(tpl);
+  }
+
+  for(const r of plan.rows){
+    if(r.action==='blocked'){res.blocked.push(r.so||'row '+r.excelRow);continue;}
+    const decision=decisions[r.so]||r.action;
+    if(decision==='skip'||decision==='nochange'){res.skipped.push(r.so);continue;}
+    try{
+      if(r.existing){ await xlApplyToExistingSO(proj,r); res.updated.push(r.so); }
+      else { const c=await xlCreateSO(proj,r,skeleton); res.created.push(r.so); res.msCreated+=c.ms; res.cfgCreated+=c.cfg; res.hwCreated+=c.hw; }
+    }catch(e){
+      res.failed='Stopped at SO '+r.so+': '+(e.message||e);
+      break;
+    }
+  }
+
+  // 5. ONE structured audit entry, not 52×20 rows.
+  await logActivity('Excel SO import',plan.fileName||'workbook.xlsx',
+    (res.created.length+' created, '+res.updated.length+' updated, '+res.skipped.length+' skipped, '+res.blocked.length+' blocked'),
+    proj.id,null,plan.rows.length+' rows');
+  msoReset(proj.id);
+  await loadAll();
+  return res;
+}
+function xlSkeletonForTemplate(tpl){
+  const BASE=[['po-release','PO Release'],['mo-release','MO Release'],['arrival','Parts arrival'],
+    ['production-start','Production start'],['production-end','Production end'],
+    ['quality-start','Quality start'],['quality-end','Quality end'],['final-qc','Final QC'],
+    ['vinyl','Vinyl / branding'],['uat','UAT'],['shipping','Pack & ship'],['delivery','Delivery'],
+    ['training','Training'],['installation','Installation']];
+  if(tpl&&tpl.offsets&&Object.keys(tpl.offsets).length){
+    const wanted=new Set(Object.keys(tpl.offsets));
+    const picked=BASE.filter(([k])=>wanted.has(k));
+    if(picked.length)return picked.map(([key,label])=>({key,label}));
+  }
+  return BASE.map(([key,label])=>({key,label}));
+}
+// Create one SO in full. Every step checks live state first, so re-running an
+// interrupted import can never double-create.
+async function xlCreateSO(proj,r,skeleton){
+  const out={ms:0,cfg:0,hw:0};
+  // milestones
+  const have=milestones.filter(m=>m.project_id===proj.id&&m.so_tag===r.so);
+  if(!have.length){
+    const rows=skeleton.map(s=>({project_id:proj.id,key:s.key,label:s.label,
+      date:r.dates[s.key]?r.dates[s.key].date:null,so_tag:r.so,changed_by:currentUserName}));
+    // A NEW SO's imported date is simply its starting date — no manufactured
+    // variance, so original_date is deliberately left unset.
+    const{data,error}=await sb.from('milestones').insert(rows).select();
+    if(error)throw new Error('milestones — '+error.message);
+    (data||rows).forEach(m=>milestones.push(m)); out.ms=rows.length;
+  } else {
+    // Resuming: fill only dates that are still blank on rows that already exist.
+    for(const[key,d]of Object.entries(r.dates)){
+      const m=have.find(x=>x.key===key);
+      if(m&&!m.date){await sb.from('milestones').update({date:d.date,changed_by:currentUserName}).eq('id',m.id);m.date=d.date;}
+    }
+  }
+  // so_details
+  if(Object.keys(r.cfg).length){
+    const row=soDetails.find(d=>d.project_id===proj.id&&d.so_tag===r.so);
+    if(row){
+      const patch={}; Object.entries(r.cfg).forEach(([f,v])=>{if(row[f]==null||row[f]==='')patch[f]=v;});
+      if(Object.keys(patch).length){
+        const{error}=await sb.from('so_details').update({...patch,updated_at:new Date().toISOString()}).eq('id',row.id);
+        if(error)throw new Error('SO configuration — '+error.message);
+        Object.assign(row,patch); out.cfg=1;
+      }
+    } else {
+      const{data,error}=await sb.from('so_details').insert({project_id:proj.id,so_tag:r.so,...r.cfg}).select().single();
+      if(error)throw new Error('SO configuration — '+error.message);
+      if(data)soDetails.push(data); out.cfg=1;
+    }
+  }
+  // hardware
+  if(r.hardware&&!hardwareLineItems.some(h=>h.project_id===proj.id&&h.so_tag===r.so)){
+    const{data,error}=await sb.from('hardware_line_items').insert({project_id:proj.id,so_tag:r.so,
+      model:r.hardware.model,quantity:r.hardware.quantity,hardware_type:guessHardwareType(r.hardware.model),sort_order:0}).select().single();
+    if(error)throw new Error('hardware — '+error.message);
+    if(data)hardwareLineItems.push(data); out.hw=1;
+  }
+  return out;
+}
+// Update an SO that already exists. Only fields the workbook actually supplied
+// are touched; a blank Excel cell never reaches here at all.
+async function xlApplyToExistingSO(proj,r){
+  if(Object.keys(r.cfg).length){
+    const row=soDetails.find(d=>d.project_id===proj.id&&d.so_tag===r.so);
+    if(row){
+      const{error}=await sb.from('so_details').update({...r.cfg,updated_at:new Date().toISOString()}).eq('id',row.id);
+      if(error)throw new Error('SO configuration — '+error.message);
+      Object.assign(row,r.cfg);
+    } else {
+      const{data,error}=await sb.from('so_details').insert({project_id:proj.id,so_tag:r.so,...r.cfg}).select().single();
+      if(error)throw new Error('SO configuration — '+error.message);
+      if(data)soDetails.push(data);
+    }
+  }
+  // Dates go through the SAME canonical edit semantics the UI uses: the first
+  // change stamps original_date, so variance behaves identically whether the
+  // edit came from a date picker or a spreadsheet.
+  for(const[key,d]of Object.entries(r.dates)){
+    const m=resolveMsForSO(proj.id,key,r.so);
+    if(!m){
+      const{data,error}=await sb.from('milestones').insert({project_id:proj.id,key,label:d.label,date:d.date,so_tag:r.so,changed_by:currentUserName}).select().single();
+      if(error)throw new Error(d.col+' — '+error.message);
+      if(data)milestones.push(data);
+      continue;
+    }
+    if((m.date||'')===d.date)continue;
+    const patch={date:d.date,changed_by:currentUserName,changed_at:new Date().toISOString()};
+    if(!m.original_date&&m.date)patch.original_date=m.date;
+    const{error}=await sb.from('milestones').update(patch).eq('id',m.id);
+    if(error)throw new Error(d.col+' — '+error.message);
+    await sb.from('milestone_history').insert({milestone_id:m.id,project_id:proj.id,old_date:m.date,new_date:d.date,changed_by:currentUserName,reason:'Excel import'});
+    Object.assign(m,patch);
+  }
+  if(r.hardware){
+    const hw=hardwareLineItems.find(h=>h.project_id===proj.id&&h.so_tag===r.so);
+    if(hw){
+      const{error}=await sb.from('hardware_line_items').update({model:r.hardware.model,quantity:r.hardware.quantity}).eq('id',hw.id);
+      if(error)throw new Error('hardware — '+error.message);
+      Object.assign(hw,r.hardware);
+    } else {
+      const{data,error}=await sb.from('hardware_line_items').insert({project_id:proj.id,so_tag:r.so,model:r.hardware.model,quantity:r.hardware.quantity,hardware_type:guessHardwareType(r.hardware.model),sort_order:0}).select().single();
+      if(error)throw new Error('hardware — '+error.message);
+      if(data)hardwareLineItems.push(data);
+    }
+  }
+}
+
+
+// ── UI: file picker → parse → validate → preview → confirm ────────
+let xlPlan=null, xlDecisions={};
+function xlOpenImport(projectId){
+  const inp=document.createElement('input');
+  inp.type='file'; inp.accept='.xlsx';
+  inp.onchange=async()=>{
+    const f=inp.files&&inp.files[0]; if(!f)return;
+    if(!/\.xlsx$/i.test(f.name)){alert('Only .xlsx workbooks are supported (macro-enabled .xlsm files are not accepted).');return;}
+    if(f.size>XL_MAX_BYTES){alert('That file is '+(f.size/1048576).toFixed(1)+' MB. The limit is '+(XL_MAX_BYTES/1048576)+' MB.');return;}
+    showToast('Reading '+f.name+'…');
+    const buf=await f.arrayBuffer();
+    const parsed=xlParseWorkbook(buf);
+    if(parsed.fatal){alert('Import cannot continue.\n\n'+parsed.fatal);return;}
+    if(!parsed.rows.length){alert('No SO rows found in "'+XL_SHEET+'".');return;}
+    xlPlan=xlBuildPlan(parsed,{projectId,fileName:f.name});
+    xlDecisions={}; xlPlan.rows.forEach(r=>{if(r.so)xlDecisions[r.so]=r.action;});
+    xlRenderPreview();
+  };
+  inp.click();
+}
+function xlSetDecision(so,val){xlDecisions[so]=val;xlRenderPreview();}
+function xlToggleRow(so){const el=document.getElementById('xl-det-'+so.replace(/[^A-Za-z0-9]/g,'_'));if(el)el.style.display=el.style.display==='none'?'table-row':'none';}
+function xlSetAllExisting(val){xlPlan.rows.forEach(r=>{if(r.existing&&r.action!=='blocked'&&r.changes.length)xlDecisions[r.so]=val;});xlRenderPreview();}
+function xlRenderPreview(){
+  const p=xlPlan; if(!p)return;
+  const rows=p.rows;
+  const blocked=rows.filter(r=>r.action==='blocked');
+  const newOnes=rows.filter(r=>!r.existing&&r.action!=='blocked');
+  const existing=rows.filter(r=>r.existing&&r.action!=='blocked');
+  const warn=rows.filter(r=>r.action!=='blocked'&&r.issues.some(i=>i.level==='warning'));
+  const projErrors=p.projectIssues.filter(i=>i.level==='error');
+  const canRun=!projErrors.length&&rows.some(r=>r.action!=='blocked'&&xlDecisions[r.so]!=='skip'&&xlDecisions[r.so]!=='nochange');
+  const stat=(n,l,c)=>`<div style="text-align:center"><div style="font-size:19px;font-weight:700;color:${c}">${n}</div><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:.04em">${l}</div></div>`;
+  const esc2=v=>esc(String(v==null?'':v));
+  const body=rows.map(r=>{
+    const sid=(r.so||('row'+r.excelRow)).replace(/[^A-Za-z0-9]/g,'_');
+    const errs=r.issues.filter(i=>i.level==='error'), wrn=r.issues.filter(i=>i.level==='warning');
+    let badge,ctl='';
+    if(r.action==='blocked'){badge=`<span class="status-chip chip-overdue">Error</span>`;}
+    else if(r.existing&&!r.changes.length){badge=`<span class="status-chip chip-done">Existing — no changes</span>`;}
+    else if(r.existing){
+      badge=`<span class="status-chip chip-atrisk">Existing — ${r.changes.length} change${r.changes.length===1?'':'s'}</span>`;
+      ctl=`<select onchange="xlSetDecision('${escJsAttr(r.so)}',this.value)" style="font-size:11px;padding:2px 6px;border:1px solid var(--gray-300);border-radius:var(--radius);font-family:var(--font)">
+        <option value="skip"${xlDecisions[r.so]==='skip'?' selected':''}>Skip</option>
+        <option value="update"${xlDecisions[r.so]==='update'?' selected':''}>Update</option></select>`;
+    }
+    else if(wrn.length){badge=`<span class="status-chip chip-atrisk">Warning</span>`;}
+    else{badge=`<span class="status-chip chip-active">Ready</span>`;}
+    const det=[
+      ...Object.entries(r.cfg).map(([f,v])=>[f.replace(/_/g,' '),v]),
+      ...Object.entries(r.dates).map(([k,d])=>[d.col+' → key "'+k+'"',fmt(d.date)]),
+      r.hardware?['hardware',r.hardware.quantity+'× '+r.hardware.model]:null,
+    ].filter(Boolean);
+    const changeTbl=r.changes.length?`<div style="margin-top:8px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--gray-500);margin-bottom:4px">Changes</div>
+      <table style="font-size:11px;border-collapse:collapse"><tr style="color:var(--gray-400)"><td style="padding:1px 12px 1px 0">Field</td><td style="padding:1px 12px 1px 0">Current</td><td>Excel</td></tr>
+      ${r.changes.map(c=>`<tr><td style="padding:1px 12px 1px 0">${esc2(c.label)}</td><td style="padding:1px 12px 1px 0;color:var(--gray-500)">${esc2(c.current)}</td><td style="color:var(--black);font-weight:600">${esc2(c.incoming)}</td></tr>`).join('')}</table></div>`:'';
+    return`<tr onclick="xlToggleRow('${escJsAttr(r.so||('row'+r.excelRow))}')" style="cursor:pointer">
+      <td style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--red)">${esc2(r.so||'—')}<span style="color:var(--gray-300);font-weight:400"> r${r.excelRow}</span></td>
+      <td style="font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc2(r.cfg.address||'—')}</td>
+      <td style="font-size:11px">${r.hardware?esc2(r.hardware.model):'—'}</td>
+      <td style="font-size:11px;text-align:center">${r.hardware?r.hardware.quantity:'—'}</td>
+      <td class="date-cell">${r.dates['shipping']?fmt(r.dates['shipping'].date):'—'}</td>
+      <td class="date-cell">${r.dates['delivery']?fmt(r.dates['delivery'].date):'—'}</td>
+      <td class="date-cell">${r.dates['installation']?fmt(r.dates['installation'].date):'—'}</td>
+      <td style="white-space:nowrap">${badge} ${ctl}</td>
+    </tr>
+    <tr id="xl-det-${sid}" style="display:none"><td colspan="8" style="background:var(--gray-50);padding:10px 14px">
+      ${errs.length?`<div style="font-size:11px;color:#b91c1c;font-weight:600;margin-bottom:6px">${errs.map(i=>'✕ '+esc2(i.msg)).join('<br>')}</div>`:''}
+      ${wrn.length?`<div style="font-size:11px;color:#a16207;margin-bottom:6px">${wrn.map(i=>'⚠ '+esc2(i.msg)).join('<br>')}</div>`:''}
+      ${det.length?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:3px 14px;font-size:11px">
+        ${det.map(([k,v])=>`<div><span style="color:var(--gray-500)">${esc2(k)}:</span> <strong>${esc2(v)}</strong></div>`).join('')}</div>`
+        :'<div style="font-size:11px;color:var(--gray-400)">No values supplied — SO will be created unconfigured.</div>'}
+      ${changeTbl}
+    </td></tr>`;
+  }).join('');
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:min(1050px,95vw)" onclick="event.stopPropagation()">
+    <div class="modal-head"><span class="modal-title">📊 Import preview — ${esc(p.fileName)}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" style="max-height:74vh;overflow:auto">
+      <div style="display:flex;gap:26px;padding:4px 0 12px;border-bottom:1px solid var(--gray-100);flex-wrap:wrap">
+        ${stat(rows.length,'rows found','var(--black)')}
+        ${stat(newOnes.length,'new SOs','var(--success)')}
+        ${stat(existing.length,'existing SOs','var(--gray-600)')}
+        ${stat(warn.length,'warnings','#a16207')}
+        ${stat(blocked.length,'errors','var(--red)')}
+        <div style="margin-left:auto;font-size:11px;color:var(--gray-500);max-width:280px;align-self:center">
+          ${p.mode==='new'?'A new project will be created.':'Importing into <strong>'+esc(p.project.name)+'</strong>. Project-level fields are never changed by an import.'}
+        </div>
+      </div>
+      ${p.projectIssues.length?`<div style="margin:10px 0;padding:9px 12px;border-radius:var(--radius);background:${projErrors.length?'#fef2f2':'#fffbeb'};border:1px solid ${projErrors.length?'#fecaca':'#fde68a'};font-size:11.5px;line-height:1.55">
+        ${p.projectIssues.map(i=>(i.level==='error'?'✕ ':'⚠ ')+esc2(i.msg)).join('<br>')}</div>`:''}
+      ${existing.filter(r=>r.changes.length).length?`<div style="margin:10px 0;font-size:11px;color:var(--gray-600)">
+        ${existing.filter(r=>r.changes.length).length} existing SO(s) differ from the workbook — default is <strong>Skip</strong>.
+        <button onclick="xlSetAllExisting('update')" style="font-size:11px;margin-left:6px;padding:2px 9px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer;font-family:var(--font)">Update all</button>
+        <button onclick="xlSetAllExisting('skip')" style="font-size:11px;margin-left:4px;padding:2px 9px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer;font-family:var(--font)">Skip all</button></div>`:''}
+      <div style="overflow:auto;max-height:46vh;margin-top:8px">
+        <table class="pp-table" style="min-width:850px"><thead style="position:sticky;top:0;background:var(--white);z-index:2;box-shadow:0 1px 0 var(--gray-200)"><tr>
+          <th style="text-align:left">SO</th><th style="text-align:left">Site</th><th style="text-align:left">Hardware</th><th>Qty</th>
+          <th>Ship</th><th>Delivery</th><th>Install</th><th style="text-align:left">Action</th>
+        </tr></thead><tbody>${body}</tbody></table>
+      </div>
+      <div style="font-size:10px;color:var(--gray-400);margin-top:8px;line-height:1.5">Click any row for its full imported values. Blank cells are never written — for an existing SO a blank cell means no change.<br>${esc(xlImportAtomicityNote())}</div>
+    </div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" ${canRun?'':'disabled style="opacity:.45;cursor:not-allowed"'} onclick="xlRunImport()">${p.mode==='new'?'Create project & import →':'Import →'}</button></div>
+  </div></div>`;
+}
+async function xlRunImport(){
+  const p=xlPlan; if(!p)return;
+  const btns=document.querySelectorAll('.modal-actions button'); btns.forEach(b=>b.disabled=true);
+  showToast('Importing…');
+  const t0=Date.now();
+  const res=await xlExecutePlan(p,xlDecisions);
+  const ms=Date.now()-t0;
+  const line=(n,l)=>`<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12.5px"><span style="color:var(--gray-600)">${l}</span><strong>${n}</strong></div>`;
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:440px" onclick="event.stopPropagation()">
+    <div class="modal-head"><span class="modal-title">${res.failed?'⚠ Import stopped':'✅ Import complete'}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      ${res.failed?`<div style="padding:9px 12px;border-radius:var(--radius);background:#fef2f2;border:1px solid #fecaca;font-size:12px;margin-bottom:12px;line-height:1.5">${esc(res.failed)}<br><br>Everything listed below was written successfully. Re-uploading the same workbook will finish the rest without duplicating anything.</div>`:''}
+      ${line(p.rows.length,'Rows processed')}
+      ${res.projectCreated?line('Yes','Project created'):''}
+      ${res.originalSOTagged?line(res.originalSOTagged,'Original SO tagged in place'):''}
+      ${line(res.created.length,'New SOs created')}
+      ${line(res.updated.length,'Existing SOs updated')}
+      ${line(res.skipped.length,'Existing SOs skipped')}
+      ${line(res.blocked.length,'Rows blocked by errors')}
+      ${line(res.msCreated,'Milestone rows created')}
+      ${line(res.cfgCreated,'SO configurations written')}
+      ${line(res.hwCreated,'Hardware lines created')}
+      <div style="font-size:10px;color:var(--gray-400);margin-top:10px">${ms} ms</div>
+    </div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button>
+      ${res.projectId?`<button class="btn btn-primary" onclick="closeModal();switchProjPage('${res.projectId}');setTab('projpage')">Open Project Summary →</button>`:''}</div>
+  </div></div>`;
+  xlPlan=null; xlDecisions={};
+}
+// ── DOWNLOAD TEMPLATE ─────────────────────────────────────────────
+// Generated to match the attached workbook exactly: one sheet, Project Setup
+// on top, then the SO table. Dropdowns come from the app's live vocabulary, so
+// the template can never offer a value the database would reject.
+async function xlDownloadTemplate(){
+  const wb=new ExcelJS.Workbook();
+  const ws=wb.addWorksheet(XL_SHEET);
+  const RED='FFC8102E';
+  ws.getCell('A1').value='Ops Hub — Multi-SO Excel Import Template';
+  ws.getCell('A1').font={name:'DM Sans',size:14,bold:true,color:{argb:RED}};
+  ws.getCell('A3').value='PROJECT SETUP — complete only when creating a NEW project';
+  ws.getCell('A3').font={name:'DM Sans',size:10,bold:true};
+  const setup=['Customer','Project Name','PM','Sales','Solution Architect','Schedule Template'];
+  setup.forEach((lbl,i)=>{
+    const c=ws.getCell(4,1+i*2); c.value=lbl; c.font={name:'DM Sans',size:10,bold:true};
+    ws.getCell(5,1+i*2).border={bottom:{style:'thin'}};
+  });
+  ws.getCell('A7').value='Required: SO Number. Optional: everything else — blank means "not configured yet".';
+  ws.getCell('A7').font={name:'DM Sans',size:9,italic:true,color:{argb:'FF888888'}};
+  ['• One row = one SO.','• SO Number is required. Everything else may be blank.','• Use YYYY-MM-DD for dates.',
+   '• For existing projects, existing SOs default to Skip.','• Do not add status, milestone completion or history columns.']
+    .forEach((t,i)=>{const c=ws.getCell(4+i,14);c.value=t;c.font={name:'DM Sans',size:9,color:{argb:'FF888888'}};});
+  const GROUPS=[['SO / HARDWARE',1],['SITE / POWER / IT',5],['SITE CONTACT',11],['DATES',14],['INSTALLATION / SHIPPING',19]];
+  GROUPS.forEach(([t,col])=>{const c=ws.getCell(9,col);c.value=t;c.font={name:'DM Sans',size:9,bold:true,color:{argb:RED}};});
+  XL_HEADERS.forEach((h,i)=>{
+    const c=ws.getCell(10,i+1); c.value=h;
+    c.font={name:'DM Sans',size:10,bold:true};
+    c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF3F4F6'}};
+    c.border={bottom:{style:'medium',color:{argb:RED}}};
+    ws.getColumn(i+1).width=Math.max(13,Math.min(30,h.length+4));
+  });
+  const v=xlVocab();
+  const list=arr=>({type:'list',allowBlank:true,formulae:['"'+arr.join(',')+'"']});
+  for(let r=11;r<=70;r++){
+    ws.getCell(r,6).dataValidation=list(v.voltage);
+    ws.getCell(r,7).dataValidation=list(v.plug_type);
+    ws.getCell(r,9).dataValidation=list(v.primary_connectivity);
+    ws.getCell(r,10).dataValidation=list(v.backup_connectivity);
+    [14,15,16,17,18].forEach(c=>{ws.getCell(r,c).numFmt='yyyy-mm-dd';});
+  }
+  ws.getCell(5,11).dataValidation=list(TEMPLATES.map(t=>t.name));
+  ws.views=[{state:'frozen',ySplit:10}];
+  const buf=await wb.xlsx.writeBuffer();
+  const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='Ops_Hub_Multi_SO_Import_Template.xlsx'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  showToast('Template downloaded ✓');
+}
+function xlImportButtons(projectId){
+  return`<button onclick="xlOpenImport(${projectId?"'"+projectId+"'":'null'})" style="font-size:11px;font-weight:600;padding:5px 14px;border-radius:var(--radius);border:1px solid var(--red);background:white;color:var(--red);cursor:pointer;font-family:var(--font)">📊 Import Excel</button>
+  <button onclick="xlDownloadTemplate()" style="font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font)">⬇ Download template</button>`;
+}
+
 // ── LARGE MULTI-SO VIEW MODEL (shared by Project Page + Project Overview) ──
 // A 52-SO project cannot render 52 expanded milestone/config blocks. Both
 // surfaces now use the same two modes and the same selected-SO state, so there
@@ -1351,6 +1987,7 @@ function msoToolbar(proj){
     ${btn(summary,'📋 Project summary',`msoSetMode('${proj.id}','summary')`)}
     ${btn(!summary,'🔧 SO detail',`msoSetMode('${proj.id}','detail')`)}
     <span style="font-size:10px;color:var(--gray-400);font-weight:600">${list.length} SOs</span>
+    ${summary?xlImportButtons(proj.id):''}
     ${!summary?`
       <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
         <button onclick="msoStep('${proj.id}',-1)" title="Previous SO" style="font-size:11px;padding:4px 9px;border-radius:var(--radius);border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font)">←</button>
@@ -2082,7 +2719,12 @@ async function loadAll(){
       pm:p?.pm||v.pm||'',
       formFactor:v.form_factor||p?.form_factor||'',
       name:v.name||p?.name||'',
-      so:v.so||p?.so_number||'',
+      // A saved row with no SO used to fall back to p.so_number — which on a
+      // multi-SO project is the ENTIRE comma-separated list ("S900, S901,
+      // S902"). That string was then used as an so_tag, matched no milestone,
+      // and the edit silently created a junk milestone instead of updating the
+      // real one. Only a genuine single-SO project can infer its SO.
+      so:v.so||(getSOList(p).length===1?(p?.so_number||'').trim():''),
       client:v.client||p?.client||''
     };
   }).concat(newVinylRows)
@@ -6751,6 +7393,17 @@ function ps2(itemId,k,v){
 // vinyl_schedule date columns are no longer written for project-linked rows;
 // standalone rows (no project) keep using their own columns since they have no
 // milestone to own the date.
+// Which SO does this linked Vinyl Schedule row actually belong to?
+// Returns '' when it cannot be determined — the caller must then refuse the
+// save rather than guess, write a junk tag, or fall back to a sibling SO.
+function vinylRowSO(item,proj){
+  if(!proj)return'';
+  const list=getSOList(proj);
+  const raw=String(item.so||'').replace(/\s+/g,' ').trim();
+  if(raw&&list.includes(raw))return raw;
+  if(list.length===1)return list[0];   // single-SO projects never need a tag
+  return'';
+}
 async function vinylDateSync(idOrIdx,val,type){
   // Accept either a DB id (string UUID) or 'idx:N' for virtual rows
   let item;
@@ -6764,6 +7417,7 @@ async function vinylDateSync(idOrIdx,val,type){
   const dbField=type==='ship'?'ship_date':'date';
   const msKey=type==='ship'?'shipping':'vinyl';
   const msLabel=type==='ship'?'Pack & ship':'Vinyl / branding';
+  const prevVal=item[field];
   item[field]=val;
   const proj=projects.find(p=>p.id===item.project_id);
 
@@ -6792,28 +7446,24 @@ async function vinylDateSync(idOrIdx,val,type){
   // Resolved by project_id + key + so_tag. On a multi-SO project an untagged
   // milestone is never accepted and never created, so editing one SO's row can
   // no longer move another SO's date.
-  const multi=isMultiSOProject(proj);
-  if(multi&&!item.so){
-    showToast('⚠ This row has no SO — open the project and set the SO before editing dates');
-    return;
-  }
-  const existing=resolveMsForSO(proj.id,msKey,item.so||'');
-  if(existing){
-    if(!existing.original_date&&existing.date){
-      await sb.from('milestones').update({original_date:existing.date}).eq('id',existing.id);
-      existing.original_date=existing.date;
-    }
-    const{error}=await sb.from('milestones').update({date:val||null,changed_by:currentUserName,changed_at:new Date().toISOString()}).eq('id',existing.id);
-    if(error){console.warn('milestone save error',error);showToast('⚠ Save failed: '+error.message);return;}
-    logActivity('updated date',type==='ship'?'shipping':'vinyl',msLabel,proj.id,existing.date,val);
-    existing.date=val||null;
-  } else {
-    const{error}=await sb.from('milestones').insert({project_id:proj.id,key:msKey,label:msLabel,date:val||null,so_tag:item.so||null,changed_by:currentUserName});
-    if(error){console.warn('milestone insert error',error);showToast('⚠ Save failed: '+error.message);return;}
-    logActivity('added milestone',type==='ship'?'shipping':'vinyl',msLabel,proj.id,null,val);
-  }
-  showToast('Date saved ✓');
-  await loadAll();
+  const soTag=vinylRowSO(item,proj);
+  // Refuse rather than drift. Writing vinyl_schedule.date here, or inventing a
+  // milestone under a guessed tag, is exactly how the two stores diverged
+  // before — so an unresolvable row saves NOTHING and says why.
+  const refuse=(msg)=>{
+    item[field]=prevVal;                  // undo the optimistic in-memory value
+    console.warn('vinylDateSync refused:',msg,{project:proj.name,projectId:proj.id,rowSO:item.so,resolvedSO:soTag,key:msKey,vinylRowId:item.id});
+    alert(msg);
+    renderVinyl();
+  };
+  if(!soTag)return refuse('Unable to update the '+(type==='ship'?'Ship':'Vinyl')+' date: this row is on "'+proj.name+'", which has '+getSOList(proj).length+' SOs, but the row itself has no SO. Set the SO on this row (or use the Project Page) and try again.');
+  const existing=resolveMsForSO(proj.id,msKey,soTag);
+  if(!existing)return refuse('Unable to update the '+(type==='ship'?'Ship':'Vinyl')+' date because the '+msLabel+' milestone could not be found for SO '+soTag+' on "'+proj.name+'". Add that milestone on the Project Page first — nothing has been changed.');
+  // ONE canonical date-save path. quickUpdateMs is the exact helper the Project
+  // Page's inline date inputs use, so original_date stamping, master/child
+  // deviation marking, the schedule refresh and the reload all behave
+  // identically no matter which surface the edit came from.
+  await quickUpdateMs(existing.id,val);
 }
 // Planogram schedule date edit. The vinyl branch was removed — vinyl dates go
 // through vinylDateSync, which writes the canonical milestone.
@@ -7467,7 +8117,7 @@ function intakeReadHwRows(){
 }
 function renderIntake(){
   const el=document.getElementById('tab-intake');
-  el.innerHTML=`<div class="section"><div class="section-head"><div class="section-title">New project intake</div><div class="section-meta">Populates all tabs on submit</div></div>
+  el.innerHTML=`<div class="section"><div class="section-head"><div class="section-title">New project intake</div><div style="display:flex;align-items:center;gap:7px"><span class="section-meta">Fill in below, or bulk-load the SOs from a spreadsheet</span>${xlImportButtons(null)}</div></div>
     <div class="intake-body"><div class="intake-grid">
       <div class="intake-section-lbl">Project information</div>
       <div class="field"><label>Project name *</label><input id="i-name" placeholder="e.g. Smart Control Drawer — Acme Corp"></div>
@@ -8136,6 +8786,19 @@ async function saveEditProj(id){
     // Mixed state detected (some tagged, some not) — this is the exact condition that used
     // to silently create duplicates. Surface it instead of guessing.
     console.warn('Project '+id+' has a mix of tagged and untagged milestones — skipping auto-clone to avoid creating duplicates.',{existingTags,untaggedCount});
+  } else if(existingTags.length===0&&untaggedCount>0&&newSoList.length>1&&brandNewSOs.length>0){
+    // SINGLE-SO → MULTI-SO. The project just gained SOs but its milestones are
+    // still untagged, so nothing is scoped to an SO yet. Previously this case
+    // fell through in silence: the project became multi-SO, every canonical
+    // per-SO resolver correctly refused to answer (an untagged milestone is
+    // never accepted on a multi-SO project), and Generate Docs / the SO
+    // summary went blank with no explanation. Tell the PM what to do next.
+    closeModal();await loadAll();
+    setTimeout(()=>{
+      if(confirm('This project now has '+newSoList.length+' SOs ('+newSoList.join(', ')+'), but its '+untaggedCount+' milestone'+(untaggedCount===1?' is':'s are')+' still shared across all of them.\n\nUntil the milestones are split by SO, each SO cannot have its own dates, and per-SO documents and configuration will show "Not configured for this SO".\n\nSplit them now?\n\nNothing is deleted — the SO you have been running as keeps its existing milestones, completion and history.'))
+        splitMilestonesBySO(id);
+    },100);
+    return;
   }
 
   await syncProjectFieldsToSingleSO(id,{
@@ -8247,45 +8910,131 @@ async function removeSOFromProject(projId,soTag){
   if(ppProjId===projId){ppSelectedMsSO=null;msoReset(projId);renderProjPageBody();}
 }
 // ── SO SPLITTING ────────────────────────────────────────────
+// SPLIT SO — single-SO project becomes multi-SO.
+//
+// This used to DELETE every milestone on the project and re-INSERT clones with
+// brand-new ids. milestone_done, milestone_history and checkin_history are all
+// FK'd to milestones.id with ON DELETE CASCADE, so that delete PERMANENTLY
+// destroyed every completion record, every variance/history row and every
+// check-in history row on the project; checkin_status.milestone_id has no FK,
+// so those rows survived as orphans pointing at dead ids (invisible stoplights
+// and notes). On the live database that was 47 completion records and 4 history
+// rows one click away from deletion, plus 170 completions / 259 history rows /
+// 18 check-ins on single-SO projects that have yet to expand.
+//
+// It is now NON-DESTRUCTIVE. The existing rows are UPDATED in place to carry
+// the original SO's tag — same milestone ids, so completion, history and
+// check-in state stay attached exactly where they were — and only the
+// ADDITIONAL SOs get newly inserted rows.
 async function splitMilestonesBySO(projId){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
   const soList=getSOList(proj);
   if(soList.length<2){showToast('Project needs multiple SOs to split');return;}
-  // IDEMPOTENCY GUARD (fixes the milestone-duplication bug): this function used
-  // to take WHATEVER milestones already existed for the project — tagged or
-  // not — and clone them once per SO in soList, ignoring any so_tag already
-  // present. Every re-invocation therefore multiplied the milestone count by
-  // soList.length again (a 2nd click on an already-split project turned N
-  // clean rows into N×soList.length; a 3rd click would multiply again),
-  // which is exactly the ~430-milestone corruption this fix addresses. A
-  // project that already has ANY so_tag'd milestones is already split — this
-  // function must never run again against it. Use "+Add milestones for these
-  // SOs" (addMissingSOMilestones, from the All SO Milestones screen) to add
-  // rows for a newly-added SO instead; that function is correctly scoped to
-  // only the SOs that truly have zero milestones yet.
+  // IDEMPOTENCY GUARD: a project that already has ANY so_tag'd milestone is
+  // already split and must never be re-split. Use "+ Add milestones for these
+  // SOs" (addMissingSOMilestones) for a newly-added SO instead.
   const alreadySplit=milestones.some(m=>m.project_id===projId&&m.so_tag);
   if(alreadySplit){
     showToast('Already split by SO — use "All SO Milestones" → "+ Add milestones for these SOs" to add a newly-added SO instead');
     return;
   }
-  if(!confirm('Split milestones into '+soList.length+' groups ('+soList.join(', ')+')? This will create a copy of all milestones for each SO.'))return;
   const existingMs=milestones.filter(m=>m.project_id===projId);
+  if(!existingMs.length){showToast('No milestones to split');return;}
+  // WHICH SO OWNS THE EXISTING WORK? The untagged milestones, their completion
+  // and their history belong to whichever SO the project was actually running
+  // as. Guessing that is not safe, so ask — defaulted to the first SO listed.
+  const doneCount=existingMs.filter(m=>milestoneDone[m.id]).length;
+  const histCount=existingMs.filter(m=>m.original_date&&m.original_date!==m.date).length;
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:470px" onclick="event.stopPropagation()">
+    <div class="modal-head"><span class="modal-title">⚡ Split milestones by SO</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="font-size:13px;color:var(--gray-700);line-height:1.55">
+        This project has <strong>${existingMs.length}</strong> milestone${existingMs.length===1?'':'s'} that aren't assigned to an SO yet${doneCount?`, <strong>${doneCount}</strong> of them marked done`:''}${histCount?`, and <strong>${histCount}</strong> with date-change history`:''}.
+      </div>
+      <div class="field full" style="margin-top:14px"><label>Which SO has this project been running as?</label>
+        <select id="split-keep-so" style="font-size:12px;font-family:var(--mono)">${soList.map((o,i)=>`<option value="${esc(o)}"${i===0?' selected':''}>${esc(o)}</option>`).join('')}</select>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:5px">That SO <strong>keeps</strong> the existing milestones, their completion, their history and any check-in notes — nothing is deleted or recreated.</div>
+      </div>
+      <div style="font-size:12px;color:var(--gray-600);margin-top:12px;padding:10px 12px;background:var(--gray-50);border-radius:var(--radius);line-height:1.5">
+        The other <strong>${soList.length-1}</strong> SO${soList.length-1===1?'':'s'} get their own copy of the same milestone list, starting from the same dates. Address, kiosk ID, POC, power, connectivity, technician and tracking are <strong>not</strong> copied — configure those per SO afterwards.
+      </div>
+    </div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="applySplitMilestonesBySO('${projId}')">Split into ${soList.length} SOs →</button></div>
+  </div></div>`;
+}
+async function applySplitMilestonesBySO(projId){
+  const proj=projects.find(p=>p.id===projId);
+  if(!proj)return;
+  const soList=getSOList(proj);
+  const keepSO=document.getElementById('split-keep-so')?.value||soList[0];
+  closeModal();
+  if(milestones.some(m=>m.project_id===projId&&m.so_tag)){showToast('Already split — nothing to do');return;}
+  const existingMs=milestones.filter(m=>m.project_id===projId);
+  if(!existingMs.length){showToast('No milestones to split');return;}
+
+  // 1. The original SO adopts the EXISTING rows. Update, never delete —
+  //    milestone ids are preserved, so milestone_done / milestone_history /
+  //    checkin_status / checkin_history all remain correctly associated.
+  const{error:tagErr}=await sb.from('milestones')
+    .update({so_tag:keepSO,changed_by:currentUserName,changed_at:new Date().toISOString()})
+    .eq('project_id',projId).is('so_tag',null);
+  if(tagErr){alert('Error splitting: '+tagErr.message+'\n\nNothing was changed.');return;}
+  existingMs.forEach(m=>{m.so_tag=keepSO;});
+
+  // 2. Every OTHER SO gets its own copy of the same milestone list, from the
+  //    same dates (the established Split SO behaviour). not_applicable is now
+  //    carried across too — the old clone dropped it, silently un-marking N/A.
+  const others=soList.filter(so=>so!==keepSO);
   const newMs=[];
-  for(const so of soList){
+  for(const so of others){
     for(const m of existingMs){
       newMs.push({project_id:projId,key:m.key,label:m.label,date:m.date,
-        original_date:m.original_date||m.date,so_tag:so,changed_by:currentUserName});
+        original_date:m.original_date||m.date,not_applicable:!!m.not_applicable,
+        so_tag:so,changed_by:currentUserName});
     }
   }
-  const{error:delError}=await sb.from('milestones').delete().eq('project_id',projId);
-  if(delError){alert('Error splitting: '+delError.message);return;}
   if(newMs.length){
     const{error}=await sb.from('milestones').insert(newMs);
-    if(error){alert('Error splitting: '+error.message+'\n\nThe old (untagged) milestones were already removed — reload and check this project\'s milestones before trying again.');return;}
+    if(error){
+      alert('Split partially completed: "'+keepSO+'" now owns the existing milestones, but creating rows for '+others.join(', ')+' failed:\n\n'+error.message+'\n\nNothing was deleted. Use "All SO Milestones" → "+ Add milestones for these SOs" to finish.');
+      await loadAll();return;
+    }
   }
-  await logActivity('split milestones by SO',soList.join(', '),soList.join(', '),projId,null,null);
-  showToast('Split into '+soList.length+' SO groups ✓');
+
+  // 3. Carry the project's legacy single-SO configuration onto the original SO.
+  //    REQUIRED: once the project is multi-SO, resolveSOConfigField refuses the
+  //    project-level fallback by design, so without this the address / kiosk ID
+  //    the PM had been using would read "Not configured for this SO" even
+  //    though the data still exists on the project record. Only the ORIGINAL
+  //    SO is touched, and only fields that are currently blank on it — this
+  //    never fans project values out to the newly added SOs.
+  const migrated=[];
+  {
+    const LEGACY=['address','naming_convention','voltage','plug_type','power_requirements','primary_connectivity','backup_connectivity'];
+    const existingRow=soDetails.find(d=>d.project_id===projId&&d.so_tag===keepSO);
+    const payload={};
+    LEGACY.forEach(f=>{
+      const projVal=proj[f];
+      if(projVal===null||projVal===undefined||projVal==='')return;
+      const soVal=existingRow?existingRow[f]:null;
+      if(soVal===null||soVal===undefined||soVal===''){payload[f]=projVal;migrated.push(f);}
+    });
+    if(Object.keys(payload).length){
+      if(existingRow){
+        const{error}=await sb.from('so_details').update({...payload,updated_at:new Date().toISOString()}).eq('id',existingRow.id);
+        if(error)console.warn('legacy config migration failed',error);else Object.assign(existingRow,payload);
+      } else {
+        const{data,error}=await sb.from('so_details').insert({project_id:projId,so_tag:keepSO,...payload}).select().single();
+        if(error)console.warn('legacy config migration failed',error);else if(data)soDetails.push(data);
+      }
+    }
+  }
+
+  await logActivity('split milestones by SO',keepSO+' kept existing history; added '+others.join(', '),soList.join(', '),projId,null,null);
+  showToast('Split into '+soList.length+' SOs ✓ — '+keepSO+' kept its existing milestones'+(migrated.length?' and configuration':''));
+  msoReset(projId);
   await loadAll();
 }
 async function pushSODatesToAll(projId,fromSO){
