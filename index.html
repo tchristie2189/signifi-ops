@@ -1293,6 +1293,10 @@ function xlVocab(){
 }
 // One normalisation used for every SO comparison in the importer.
 function xlNormSO(v){return String(v==null?'':v).replace(/\s+/g,' ').trim();}
+// Comparison key for controlled lists (PM / Sales / SA / Schedule Template):
+// trims, collapses repeated internal whitespace, case-insensitive. It is a
+// NORMALISATION, not a fuzzy match — "Mohammad" never resolves to "Mohammed".
+function xlNameKey(v){return String(v==null?'':v).replace(/\u00a0/g,' ').replace(/\s+/g,' ').trim().toLowerCase();}
 function xlStr(v){
   if(v==null)return'';
   if(v instanceof Date)return'';
@@ -1331,7 +1335,21 @@ function xlParseWorkbook(arrayBuffer){
   if(!wb.SheetNames.includes(XL_SHEET))
     return{fatal:'Missing the "'+XL_SHEET+'" sheet. This workbook has: '+wb.SheetNames.join(', ')+'. Use Download Template to get the right structure.'};
   const ws=wb.Sheets[XL_SHEET];
+  // TWO views of the same sheet, on purpose.
+  //
+  // grid (raw:false) is the FORMATTED view — each cell as Excel displays it. It
+  // is what every text column wants: a tracking number or phone typed as a large
+  // number comes back as its displayed digits instead of being pushed through a
+  // JS float, and header/Project-Setup label matching behaves exactly as before.
+  //
+  // rawGrid (raw:true) keeps the underlying typed value. A genuine Excel date
+  // cell is a Date here; in the formatted view it is only its display string
+  // ("02-Oct"), which xlDate then correctly refuses as ambiguous. That was the
+  // root cause of the 150-row failure, so the five date columns — and ONLY those
+  // — read from rawGrid. A date cell therefore parses in ANY Excel display
+  // format, while the YYYY-MM-DD-only rule still governs genuinely-text dates.
   const grid=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,cellDates:true,defval:null,blankrows:true});
+  const rawGrid=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,cellDates:true,defval:null,blankrows:true});
   // Project Setup: labels on the row that starts with "Customer", values beneath.
   const setup={};
   let headerRow=-1;
@@ -1353,9 +1371,12 @@ function xlParseWorkbook(arrayBuffer){
   const colOf={}; XL_HEADERS.forEach(h=>colOf[h]=hdr.indexOf(h));
   const rows=[];
   for(let r=headerRow+1;r<grid.length;r++){
-    const raw=grid[r]||[];
+    const disp=grid[r]||[], rawRow=rawGrid[r]||[];
     const cells={}; let any=false;
-    XL_HEADERS.forEach(h=>{ const v=raw[colOf[h]]; cells[h]=v; if(v!=null&&String(v).trim()!=='')any=true; });
+    XL_HEADERS.forEach(h=>{
+      // Date columns take the typed value; everything else takes the display value.
+      const v=(XL_DATE_MAP[h]?rawRow:disp)[colOf[h]];
+      cells[h]=v; if(v!=null&&String(v).trim()!=='')any=true; });
     if(!any)continue;                       // entirely blank row — ignored, never an error
     rows.push({excelRow:r+1,cells});
     if(rows.length>XL_MAX_ROWS)return{fatal:'Workbook has more than '+XL_MAX_ROWS+' SO rows — split it into smaller files.'};
@@ -1369,11 +1390,11 @@ function xlBuildPlan(parsed,opts){
   const{projectId}=opts||{};
   const proj=projectId?projects.find(p=>p.id===projectId):null;
   const vocab=xlVocab();
-  const soHasData=(so)=>!!proj&&(
-    milestones.some(m=>m.project_id===proj.id&&m.so_tag===so)
-    ||soDetails.some(d=>d.project_id===proj.id&&d.so_tag===so)
-    ||hardwareLineItems.some(hw=>hw.project_id===proj.id&&hw.so_tag===so));
-  const existingSOs=proj?getSOList(proj).map(xlNormSO).filter(soHasData):[];
+  // An SO that is on the project's SO list is an EXISTING SO, whether or not it
+  // has any child rows yet. Membership and provisioning are different things:
+  // a legitimately-listed but unprovisioned SO must round-trip as "Existing",
+  // never as "New" (which would try to re-add it to the SO list).
+  const existingSOs=proj?getSOList(proj).map(xlNormSO):[];
   const plan={mode:proj?'existing':'new',project:proj||null,setup:parsed.setup||{},rows:[],projectIssues:[],fileName:opts?.fileName||''};
 
   // Project Setup. New project → must resolve against existing records.
@@ -1382,9 +1403,13 @@ function xlBuildPlan(parsed,opts){
     if(!plan.setup['Customer'])plan.projectIssues.push({level:'error',msg:'Project Setup: Customer is required for a new project'});
     if(!plan.setup['Project Name'])plan.projectIssues.push({level:'error',msg:'Project Setup: Project Name is required for a new project'});
     const resolveName=(val,list,label)=>{
-      if(!val)return null;
-      const hit=(list||[]).find(x=>String(x).toLowerCase()===val.toLowerCase());
-      if(!hit)plan.projectIssues.push({level:'error',msg:'Project Setup: '+label+' "'+val+'" is not an existing '+label+'. Valid: '+(list||[]).join(', ')});
+      const key=xlNameKey(val);
+      if(!key)return null;
+      // Exact match on the normalised key only. The value returned is always the
+      // canonical one from the app's list, so casing/spacing in the workbook is
+      // tolerated but never written back.
+      const hit=(list||[]).find(x=>xlNameKey(x)===key);
+      if(!hit)plan.projectIssues.push({level:'error',field:label,msg:'Project Setup: '+label+' "'+val+'" is not an existing '+label+'. Valid: '+(list||[]).join(', ')});
       return hit||null;
     };
     plan.resolved={
@@ -1393,14 +1418,15 @@ function xlBuildPlan(parsed,opts){
       sa:resolveName(plan.setup['Solution Architect'],getSAList?getSAList():[],'Solution Architect'),
     };
     const tplRaw=plan.setup['Schedule Template']||'';
-    if(tplRaw){
-      const t=TEMPLATES.find(x=>x.name.toLowerCase()===tplRaw.toLowerCase()||x.id===tplRaw.toLowerCase()
-        ||x.name.toLowerCase().startsWith(tplRaw.toLowerCase().split('(')[0].trim()));
-      if(!t)plan.projectIssues.push({level:'error',msg:'Project Setup: Schedule Template "'+tplRaw+'" not recognised. Valid: '+TEMPLATES.map(x=>x.name).join(', ')});
+    if(xlNameKey(tplRaw)){
+      const tk=xlNameKey(tplRaw), pre=xlNameKey(tk.split('(')[0]);
+      const t=TEMPLATES.find(x=>xlNameKey(x.name)===tk||xlNameKey(x.id)===tk
+        ||(pre&&xlNameKey(x.name).startsWith(pre)));
+      if(!t)plan.projectIssues.push({level:'error',field:'Schedule Template',msg:'Project Setup: Schedule Template "'+tplRaw+'" not recognised. Valid: '+TEMPLATES.map(x=>x.name).join(', ')});
       plan.resolved.template=t||null;
     } else plan.resolved={...plan.resolved,template:null};
   } else {
-    const conflict=(k,cur)=>{const v=plan.setup[k];if(v&&cur&&v.toLowerCase()!==String(cur).toLowerCase())
+    const conflict=(k,cur)=>{const v=plan.setup[k];if(v&&cur&&xlNameKey(v)!==xlNameKey(cur))
       plan.projectIssues.push({level:'warning',msg:'Project Setup: workbook says '+k+' "'+v+'" but this project has "'+cur+'". The project value is kept — Excel never changes project-level fields on an existing project.'});};
     conflict('Customer',proj.client); conflict('Project Name',proj.name);
     conflict('PM',proj.pm); conflict('Sales',proj.sales); conflict('Solution Architect',proj.solutions);
@@ -1434,20 +1460,34 @@ function xlBuildPlan(parsed,opts){
     // Hardware — one primary line per SO for V1
     const ff=xlStr(r.cells['Form Factor']);
     const qtyRaw=xlStr(r.cells['Quantity']);
-    if(qtyRaw!==''&&!/^\d+$/.test(qtyRaw))issues.push({level:'error',field:'Quantity',msg:'Quantity "'+qtyRaw+'" must be a whole number'});
-    else if(qtyRaw!==''&&Number(qtyRaw)<1)issues.push({level:'error',field:'Quantity',msg:'Quantity must be at least 1'});
-    else if(qtyRaw!==''&&!ff)issues.push({level:'error',field:'Form Factor',msg:'Quantity given with no Form Factor'});
-    if(ff)rec.hardware={model:ff,quantity:qtyRaw===''?1:Number(qtyRaw)};
+    let qtyOk=true;
+    if(qtyRaw!==''&&!/^\d+$/.test(qtyRaw)){issues.push({level:'error',field:'Quantity',msg:'Quantity "'+qtyRaw+'" must be a whole number — leave it blank for 1'});qtyOk=false;}
+    else if(qtyRaw!==''&&Number(qtyRaw)<1){issues.push({level:'error',field:'Quantity',msg:'Quantity must be at least 1'});qtyOk=false;}
+    else if(qtyRaw!==''&&!ff){issues.push({level:'error',field:'Form Factor',msg:'Quantity given with no Form Factor'});qtyOk=false;}
+    // Only ever build a hardware line from a quantity that PASSED validation.
+    // Assigning it regardless is what put Number('N/A') === NaN into the preview.
+    if(ff&&qtyOk)rec.hardware={model:ff,quantity:qtyRaw===''?1:Number(qtyRaw)};
+    // Keep the rejected line for display so the PM still sees what they typed,
+    // with the quantity shown as blank rather than a number that is not a number.
+    else if(ff)rec.hardwareRejected={model:ff,quantityRaw:qtyRaw};
     // Dates
+    rec.dateTrace=[];
     Object.entries(XL_DATE_MAP).forEach(([col,def])=>{
-      const parsedDate=xlDate(r.cells[col]);
+      const cellVal=r.cells[col];
+      const parsedDate=xlDate(cellVal);
+      // dateTrace always carries all five mapped columns, populated or not, so
+      // the expanded row can show exactly what each one resolved to.
+      rec.dateTrace.push({col,key:def.key,label:def.label,
+        cellType:cellVal==null?'blank':(cellVal instanceof Date?'excel date':typeof cellVal),
+        value:parsedDate.ok?(parsedDate.value||null):null,
+        error:parsedDate.ok?null:parsedDate.reason});
       if(!parsedDate.ok){issues.push({level:'error',field:col,msg:col+': '+parsedDate.reason});return;}
       if(parsedDate.value)rec.dates[def.key]={date:parsedDate.value,label:def.label,col};
     });
     // Helpful (non-blocking) gaps
     if(!rec.cfg.address)issues.push({level:'warning',field:'Site Address',msg:'No site address yet'});
     if(!rec.cfg.poc_name)issues.push({level:'warning',field:'POC Name',msg:'No site contact yet'});
-    if(!rec.hardware)issues.push({level:'warning',field:'Form Factor',msg:'No hardware yet'});
+    if(!ff)issues.push({level:'warning',field:'Form Factor',msg:'No hardware yet'});
     if(!rec.dates['shipping']&&!rec.dates['installation'])issues.push({level:'warning',field:'Dates',msg:'No ship or installation date yet'});
 
     if(issues.some(i=>i.level==='error'))rec.action='blocked';
@@ -1462,6 +1502,52 @@ function xlBuildPlan(parsed,opts){
 }
 // Field-level diff for an SO that already exists. Blank Excel cells are absent
 // from rec.cfg/rec.dates entirely, so they can never appear as a change.
+// The primary hardware line for an SO — the one line the importer creates and
+// updates. Returns null when the SO has no hardware of its own; never falls back
+// to project-level or sibling hardware.
+// Is this SO actually provisioned? Being listed in projects.so_number is not
+// enough — a failed import leaves SOs listed but empty. ONE definition, shared
+// by the importer (what counts as an existing SO) and the exporter (which SOs
+// have data to export), so export and import are symmetrical by construction.
+function xlSOHasData(projectId,so){
+  return milestones.some(m=>m.project_id===projectId&&m.so_tag===so)
+    ||soDetails.some(d=>d.project_id===projectId&&d.so_tag===so)
+    ||hardwareLineItems.some(h=>h.project_id===projectId&&h.so_tag===so);
+}
+function xlPrimaryHardware(projectId,so){
+  const rows=hardwareLineItems
+    .filter(h=>h.project_id===projectId&&h.so_tag===so)
+    .sort((a,b)=>(a.sort_order||0)-(b.sort_order||0));
+  if(!rows.length)return null;
+  const h=rows[0];
+  return{model:h.model||'',quantity:Number(h.quantity||1),extraLines:rows.length-1};
+}
+// Builds the 22 SO-table values for ONE SO, entirely from canonical sources.
+// This is the exact inverse of the import mapping, so export → import is
+// symmetrical and a no-edit round-trip produces zero differences.
+function xlExportRowForSO(proj,so){
+  const cell={};
+  cell['SO Number']=so;
+  // Config: so_details via the canonical resolver. On a properly split multi-SO
+  // project an unconfigured field resolves to '' and exports blank — it never
+  // borrows the project record or a sibling SO. Single-SO projects keep the
+  // legacy fallback the resolver already applies, so the sheet shows the same
+  // effective values the UI shows.
+  Object.entries(XL_SO_CONFIG_MAP).forEach(([col,field])=>{
+    cell[col]=resolveSOConfigField(proj,so,field).value||'';
+  });
+  // Hardware: SO-aware model, primary line only.
+  const hw=xlPrimaryHardware(proj.id,so);
+  cell['Form Factor']=hw?hw.model:'';
+  cell['Quantity']=hw?hw.quantity:'';
+  // Dates: canonical milestones by project_id + key + so_tag. Written as
+  // YYYY-MM-DD text so the value that comes back is byte-identical — no
+  // locale, serial or display-format round-trip risk.
+  Object.entries(XL_DATE_MAP).forEach(([col,def])=>{
+    cell[col]=resolveMsDateForSO(proj.id,def.key,so)||'';
+  });
+  return cell;
+}
 function xlDiffExistingSO(proj,so,rec){
   const out=[];
   Object.entries(rec.cfg).forEach(([field,val])=>{
@@ -1473,7 +1559,13 @@ function xlDiffExistingSO(proj,so,rec){
     if((cur||'')!==d.date)out.push({field:'date:'+key,label:d.col,current:cur?fmt(cur):'—',incoming:fmt(d.date)});
   });
   if(rec.hardware){
-    const curHw=getHardwareSummary(proj.id,so)||'';
+    // Compare against the PRIMARY hardware line — the single line the importer
+    // manages for an SO — not getHardwareSummary(), which joins every line with
+    // " · ". An SO with two lines would otherwise always read as "changed" on a
+    // no-edit round-trip, because one Form Factor cell can never equal a
+    // multi-line summary.
+    const cur=xlPrimaryHardware(proj.id,so);
+    const curHw=cur?cur.quantity+'× '+cur.model:'';
     const inHw=rec.hardware.quantity+'× '+rec.hardware.model;
     if(curHw!==inHw)out.push({field:'hardware',label:'Hardware',current:curHw||'—',incoming:inHw});
   }
@@ -1571,7 +1663,7 @@ async function xlExecutePlan(plan,decisions){
     const decision=decisions[r.so]||r.action;
     if(decision==='skip'||decision==='nochange'){res.skipped.push(r.so);continue;}
     try{
-      if(r.existing){ await xlApplyToExistingSO(proj,r); res.updated.push(r.so); }
+      if(r.existing){ await xlApplyToExistingSO(proj,r,skeleton); res.updated.push(r.so); }
       else { const c=await xlCreateSO(proj,r,skeleton); res.created.push(r.so); res.msCreated+=c.ms; res.cfgCreated+=c.cfg; res.hwCreated+=c.hw; }
     }catch(e){
       res.failed='Stopped at SO '+r.so+': '+(e.message||e);
@@ -1648,7 +1740,18 @@ async function xlCreateSO(proj,r,skeleton){
 }
 // Update an SO that already exists. Only fields the workbook actually supplied
 // are touched; a blank Excel cell never reaches here at all.
-async function xlApplyToExistingSO(proj,r){
+async function xlApplyToExistingSO(proj,r,skeleton){
+  // An existing SO with NO milestones at all (listed on the project but never
+  // provisioned, or left incomplete by a failed import) gets the project's full
+  // milestone skeleton first, so updating it produces the same complete
+  // structure a new SO would get — not just the handful of dated rows.
+  if(skeleton&&skeleton.length&&!milestones.some(m=>m.project_id===proj.id&&m.so_tag===r.so)){
+    const rows=skeleton.map(sk=>({project_id:proj.id,key:sk.key,label:sk.label,
+      date:r.dates[sk.key]?r.dates[sk.key].date:null,so_tag:r.so,changed_by:currentUserName}));
+    const{data,error}=await sb.from('milestones').insert(rows).select();
+    if(error)throw new Error('milestones — '+error.message);
+    (data||rows).forEach(m=>milestones.push(m));
+  }
   if(Object.keys(r.cfg).length){
     const row=soDetails.find(d=>d.project_id===proj.id&&d.so_tag===r.so);
     if(row){
@@ -1725,7 +1828,11 @@ function xlRenderPreview(){
   const newOnes=rows.filter(r=>!r.existing&&r.action!=='blocked');
   const existing=rows.filter(r=>r.existing&&r.action!=='blocked');
   const warn=rows.filter(r=>r.action!=='blocked'&&r.issues.some(i=>i.level==='warning'));
+  // Project-level and row-level problems are counted, displayed and acted on
+  // SEPARATELY. A bad PM/Sales/SA/Template blocks the import, but it never
+  // reclassifies an otherwise-valid SO row as an error.
   const projErrors=p.projectIssues.filter(i=>i.level==='error');
+  const projWarnings=p.projectIssues.filter(i=>i.level!=='error');
   const canRun=!projErrors.length&&rows.some(r=>r.action!=='blocked'&&xlDecisions[r.so]!=='skip'&&xlDecisions[r.so]!=='nochange');
   const stat=(n,l,c)=>`<div style="text-align:center"><div style="font-size:19px;font-weight:700;color:${c}">${n}</div><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;letter-spacing:.04em">${l}</div></div>`;
   const esc2=v=>esc(String(v==null?'':v));
@@ -1745,17 +1852,24 @@ function xlRenderPreview(){
     else{badge=`<span class="status-chip chip-active">Ready</span>`;}
     const det=[
       ...Object.entries(r.cfg).map(([f,v])=>[f.replace(/_/g,' '),v]),
-      ...Object.entries(r.dates).map(([k,d])=>[d.col+' → key "'+k+'"',fmt(d.date)]),
-      r.hardware?['hardware',r.hardware.quantity+'× '+r.hardware.model]:null,
+      r.hardware?['hardware',r.hardware.quantity+'× '+r.hardware.model]
+        :(r.hardwareRejected?['hardware',r.hardwareRejected.model+' (quantity rejected)']:null),
     ].filter(Boolean);
+    // Every mapped date column is listed whether or not it is populated, with the
+    // milestone key it will be written to and the normalised ISO value.
+    const dateRows=(r.dateTrace||Object.entries(r.dates).map(([k,d])=>({col:d.col,key:k,value:d.date,error:null})))
+      .map(d=>`<div><span style="color:var(--gray-500)">${esc2(d.col)} → key "${esc2(d.key)}":</span> `
+        +(d.error?`<strong style="color:#b91c1c">✕ ${esc2(d.error)}</strong>`
+          :d.value?`<strong>${esc2(fmt(d.value))}</strong> <span style="color:var(--gray-400)">(${esc2(d.value)})</span>`
+          :`<span style="color:var(--gray-400)">—</span>`)+`</div>`).join('');
     const changeTbl=r.changes.length?`<div style="margin-top:8px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--gray-500);margin-bottom:4px">Changes</div>
       <table style="font-size:11px;border-collapse:collapse"><tr style="color:var(--gray-400)"><td style="padding:1px 12px 1px 0">Field</td><td style="padding:1px 12px 1px 0">Current</td><td>Excel</td></tr>
       ${r.changes.map(c=>`<tr><td style="padding:1px 12px 1px 0">${esc2(c.label)}</td><td style="padding:1px 12px 1px 0;color:var(--gray-500)">${esc2(c.current)}</td><td style="color:var(--black);font-weight:600">${esc2(c.incoming)}</td></tr>`).join('')}</table></div>`:'';
     return`<tr onclick="xlToggleRow('${escJsAttr(r.so||('row'+r.excelRow))}')" style="cursor:pointer">
       <td style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--red)">${esc2(r.so||'—')}<span style="color:var(--gray-300);font-weight:400"> r${r.excelRow}</span></td>
       <td style="font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc2(r.cfg.address||'—')}</td>
-      <td style="font-size:11px">${r.hardware?esc2(r.hardware.model):'—'}</td>
-      <td style="font-size:11px;text-align:center">${r.hardware?r.hardware.quantity:'—'}</td>
+      <td style="font-size:11px">${r.hardware?esc2(r.hardware.model):(r.hardwareRejected?esc2(r.hardwareRejected.model):'—')}</td>
+      <td style="font-size:11px;text-align:center">${r.hardware&&Number.isFinite(r.hardware.quantity)?r.hardware.quantity:'—'}</td>
       <td class="date-cell">${r.dates['shipping']?fmt(r.dates['shipping'].date):'—'}</td>
       <td class="date-cell">${r.dates['delivery']?fmt(r.dates['delivery'].date):'—'}</td>
       <td class="date-cell">${r.dates['installation']?fmt(r.dates['installation'].date):'—'}</td>
@@ -1766,7 +1880,9 @@ function xlRenderPreview(){
       ${wrn.length?`<div style="font-size:11px;color:#a16207;margin-bottom:6px">${wrn.map(i=>'⚠ '+esc2(i.msg)).join('<br>')}</div>`:''}
       ${det.length?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:3px 14px;font-size:11px">
         ${det.map(([k,v])=>`<div><span style="color:var(--gray-500)">${esc2(k)}:</span> <strong>${esc2(v)}</strong></div>`).join('')}</div>`
-        :'<div style="font-size:11px;color:var(--gray-400)">No values supplied — SO will be created unconfigured.</div>'}
+        :'<div style="font-size:11px;color:var(--gray-400)">No configuration or hardware supplied.</div>'}
+      <div style="margin-top:7px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--gray-500)">Dates to be written</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:3px 14px;font-size:11px;margin-top:3px">${dateRows}</div>
       ${changeTbl}
     </td></tr>`;
   }).join('');
@@ -1778,13 +1894,18 @@ function xlRenderPreview(){
         ${stat(newOnes.length,'new SOs','var(--success)')}
         ${stat(existing.length,'existing SOs','var(--gray-600)')}
         ${stat(warn.length,'warnings','#a16207')}
-        ${stat(blocked.length,'errors','var(--red)')}
+        ${stat(blocked.length,'row errors','var(--red)')}
+        ${projErrors.length?stat(projErrors.length,'project error'+(projErrors.length===1?'':'s'),'var(--red)'):''}
         <div style="margin-left:auto;font-size:11px;color:var(--gray-500);max-width:280px;align-self:center">
           ${p.mode==='new'?'A new project will be created.':'Importing into <strong>'+esc(p.project.name)+'</strong>. Project-level fields are never changed by an import.'}
         </div>
       </div>
-      ${p.projectIssues.length?`<div style="margin:10px 0;padding:9px 12px;border-radius:var(--radius);background:${projErrors.length?'#fef2f2':'#fffbeb'};border:1px solid ${projErrors.length?'#fecaca':'#fde68a'};font-size:11.5px;line-height:1.55">
-        ${p.projectIssues.map(i=>(i.level==='error'?'✕ ':'⚠ ')+esc2(i.msg)).join('<br>')}</div>`:''}
+      ${projErrors.length?`<div style="margin:12px 0;padding:11px 13px;border-radius:var(--radius);background:#fef2f2;border:1px solid #fca5a5;border-left:4px solid var(--red);font-size:11.5px;line-height:1.6">
+        <div style="font-weight:700;color:#b91c1c;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px">Project setup — ${projErrors.length} field${projErrors.length===1?'':'s'} to correct before importing</div>
+        ${projErrors.map(i=>'✕ '+esc2(i.msg)).join('<br>')}
+        <div style="margin-top:6px;color:var(--gray-600)">This is a <strong>project-level</strong> problem, not a problem with the SO rows below. The SO rows are listed with their own real status. Fix the field${projErrors.length===1?'':'s'} above in the workbook and re-upload — the Import button stays disabled until then.</div></div>`:''}
+      ${projWarnings.length?`<div style="margin:10px 0;padding:9px 12px;border-radius:var(--radius);background:#fffbeb;border:1px solid #fde68a;font-size:11.5px;line-height:1.55">
+        ${projWarnings.map(i=>'⚠ '+esc2(i.msg)).join('<br>')}</div>`:''}
       ${existing.filter(r=>r.changes.length).length?`<div style="margin:10px 0;font-size:11px;color:var(--gray-600)">
         ${existing.filter(r=>r.changes.length).length} existing SO(s) differ from the workbook — default is <strong>Skip</strong>.
         <button onclick="xlSetAllExisting('update')" style="font-size:11px;margin-left:6px;padding:2px 9px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer;font-family:var(--font)">Update all</button>
@@ -1834,24 +1955,57 @@ async function xlRunImport(){
 // Generated to match the attached workbook exactly: one sheet, Project Setup
 // on top, then the SO table. Dropdowns come from the app's live vocabulary, so
 // the template can never offer a value the database would reject.
-async function xlDownloadTemplate(){
+// ── WORKBOOK BUILDER ──────────────────────────────────────────────
+// ONE layout, two uses: a blank template (New Project intake) and a
+// pre-populated export of an existing project. Keeping them in one function is
+// what guarantees the two workbooks can never drift apart structurally.
+// Dropdowns come from the app's live vocabulary, so the sheet can never offer a
+// value the database would reject.
+async function xlBuildWorkbook(proj){
   const wb=new ExcelJS.Workbook();
   const ws=wb.addWorksheet(XL_SHEET);
   const RED='FFC8102E';
-  ws.getCell('A1').value='Ops Hub — Multi-SO Excel Import Template';
+  const populated=!!proj;
+  // EVERY SO on the project's list is exported — the workbook represents the
+  // complete current SO list. An SO with nothing configured yet exports as a
+  // row with only its SO Number filled in, which is exactly the row a PM needs
+  // in order to fill it in and import it back.
+  const sos=populated?getSOList(proj):[];
+  ws.getCell('A1').value=populated?('Ops Hub — '+proj.name+' — SO Export / Update'):'Ops Hub — Multi-SO Excel Import Template';
   ws.getCell('A1').font={name:'DM Sans',size:14,bold:true,color:{argb:RED}};
-  ws.getCell('A3').value='PROJECT SETUP — complete only when creating a NEW project';
+  ws.getCell('A3').value=populated
+    ?'PROJECT SETUP — current values, for reference only. Editing these does NOT change the project.'
+    :'PROJECT SETUP — complete only when creating a NEW project';
   ws.getCell('A3').font={name:'DM Sans',size:10,bold:true};
+  // Schedule Template is intentionally blank on an export: the app applies a
+  // template once at intake and stores no template on the project, so there is
+  // no canonical value to export. Inventing one would create a second model.
+  const setupVals=populated?{
+    'Customer':proj.client||'','Project Name':proj.name||'','PM':proj.pm||'',
+    'Sales':proj.sales||'','Solution Architect':proj.solutions||'','Schedule Template':''
+  }:{};
   const setup=['Customer','Project Name','PM','Sales','Solution Architect','Schedule Template'];
   setup.forEach((lbl,i)=>{
     const c=ws.getCell(4,1+i*2); c.value=lbl; c.font={name:'DM Sans',size:10,bold:true};
-    ws.getCell(5,1+i*2).border={bottom:{style:'thin'}};
+    const v=ws.getCell(5,1+i*2);
+    if(populated)v.value=setupVals[lbl]||'';
+    v.font={name:'DM Sans',size:10};
+    v.border={bottom:{style:'thin'}};
   });
-  ws.getCell('A7').value='Required: SO Number. Optional: everything else — blank means "not configured yet".';
+  ws.getCell('A7').value=populated
+    ?'Edit any cell and re-import through Import Excel. A blank cell means "no change". Existing SOs default to Skip. A row with only an SO Number is an SO that is not configured yet — fill it in to set it up.'
+    :'Required: SO Number. Optional: everything else — blank means "not configured yet".';
   ws.getCell('A7').font={name:'DM Sans',size:9,italic:true,color:{argb:'FF888888'}};
-  ['• One row = one SO.','• SO Number is required. Everything else may be blank.','• Use YYYY-MM-DD for dates.',
-   '• For existing projects, existing SOs default to Skip.','• Do not add status, milestone completion or history columns.']
-    .forEach((t,i)=>{const c=ws.getCell(4+i,14);c.value=t;c.font={name:'DM Sans',size:9,color:{argb:'FF888888'}};});
+  (populated?[
+    '• One row = one SO. Add a row to create a new SO.',
+    '• Blank cell = no change to that field.',
+    '• Dates are YYYY-MM-DD.',
+    '• Existing SOs default to Skip in the import preview.',
+    '• Project Setup above is context only — it never overwrites the project.'
+  ]:[
+    '• One row = one SO.','• SO Number is required. Everything else may be blank.','• Use YYYY-MM-DD for dates.',
+    '• For existing projects, existing SOs default to Skip.','• Do not add status, milestone completion or history columns.'
+  ]).forEach((t,i)=>{const c=ws.getCell(4+i,14);c.value=t;c.font={name:'DM Sans',size:9,color:{argb:'FF888888'}};});
   const GROUPS=[['SO / HARDWARE',1],['SITE / POWER / IT',5],['SITE CONTACT',11],['DATES',14],['INSTALLATION / SHIPPING',19]];
   GROUPS.forEach(([t,col])=>{const c=ws.getCell(9,col);c.value=t;c.font={name:'DM Sans',size:9,bold:true,color:{argb:RED}};});
   XL_HEADERS.forEach((h,i)=>{
@@ -1861,27 +2015,61 @@ async function xlDownloadTemplate(){
     c.border={bottom:{style:'medium',color:{argb:RED}}};
     ws.getColumn(i+1).width=Math.max(13,Math.min(30,h.length+4));
   });
+  // Pre-populated SO rows, all canonical (see xlExportRowForSO).
+  sos.forEach((so,r)=>{
+    const row=xlExportRowForSO(proj,so);
+    XL_HEADERS.forEach((h,i)=>{
+      const c=ws.getCell(11+r,i+1);
+      const v=row[h];
+      if(v===''||v==null)return;              // leave truly blank, never "" vs null noise
+      c.value=v;
+      c.font={name:'DM Sans',size:10};
+    });
+  });
   const v=xlVocab();
   const list=arr=>({type:'list',allowBlank:true,formulae:['"'+arr.join(',')+'"']});
-  for(let r=11;r<=70;r++){
+  const lastRow=Math.max(70,10+sos.length+20);
+  for(let r=11;r<=lastRow;r++){
     ws.getCell(r,6).dataValidation=list(v.voltage);
     ws.getCell(r,7).dataValidation=list(v.plug_type);
     ws.getCell(r,9).dataValidation=list(v.primary_connectivity);
     ws.getCell(r,10).dataValidation=list(v.backup_connectivity);
-    [14,15,16,17,18].forEach(c=>{ws.getCell(r,c).numFmt='yyyy-mm-dd';});
   }
-  ws.getCell(5,11).dataValidation=list(TEMPLATES.map(t=>t.name));
+  if(!populated)ws.getCell(5,11).dataValidation=list(TEMPLATES.map(t=>t.name));
   ws.views=[{state:'frozen',ySplit:10}];
-  const buf=await wb.xlsx.writeBuffer();
-  const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
-  a.download='Ops_Hub_Multi_SO_Import_Template.xlsx'; a.click();
-  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  return wb;
+}
+function xlSaveWorkbook(wb,filename){
+  return wb.xlsx.writeBuffer().then(buf=>{
+    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download=filename; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  });
+}
+// New Project intake — unchanged behaviour: a blank workbook.
+async function xlDownloadTemplate(){
+  const wb=await xlBuildWorkbook(null);
+  await xlSaveWorkbook(wb,'Ops_Hub_Multi_SO_Import_Template.xlsx');
   showToast('Template downloaded ✓');
 }
+// Existing project — the same workbook, pre-populated with current canonical data.
+async function xlExportProject(projectId){
+  const proj=projects.find(p=>p.id===projectId);
+  if(!proj){showToast('Project not found');return;}
+  const wb=await xlBuildWorkbook(proj);
+  const safe=(proj.name||'Project').replace(/[\\/:*?"<>|]/g,'-').replace(/\s+/g,'_').replace(/_+/g,'_').slice(0,60).replace(/^_|_$/g,'');
+  await xlSaveWorkbook(wb,'Ops_Hub_'+safe+'_SO_Update.xlsx');
+  const all=getSOList(proj), blank=all.filter(so=>!xlSOHasData(proj.id,so)).length;
+  showToast('Exported '+all.length+' SO'+(all.length===1?'':'s')+' ✓'
+    +(blank?' — '+blank+' not configured yet (blank row'+(blank===1?'':'s')+', ready to fill in)':''));
+}
 function xlImportButtons(projectId){
+  const dl=projectId
+    ? `<button onclick="xlExportProject('${projectId}')" title="Download this project's current SO data as an editable workbook — edit it and re-import through Import Excel" style="font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font)">⬇ Export / Update Excel</button>`
+    : `<button onclick="xlDownloadTemplate()" style="font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font)">⬇ Download template</button>`;
   return`<button onclick="xlOpenImport(${projectId?"'"+projectId+"'":'null'})" style="font-size:11px;font-weight:600;padding:5px 14px;border-radius:var(--radius);border:1px solid var(--red);background:white;color:var(--red);cursor:pointer;font-family:var(--font)">📊 Import Excel</button>
-  <button onclick="xlDownloadTemplate()" style="font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--gray-200);background:white;color:var(--gray-600);cursor:pointer;font-family:var(--font)">⬇ Download template</button>`;
+  ${dl}`;
 }
 
 // ── LARGE MULTI-SO VIEW MODEL (shared by Project Page + Project Overview) ──
