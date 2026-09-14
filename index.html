@@ -1261,6 +1261,11 @@ function docSOGate(type){
 const XL_SHEET='Multi-SO Import';
 const XL_HEADERS=['SO Number','Kiosk ID / Naming Convention','Form Factor','Quantity','Site Address','Voltage','Plug Type','Power Requirements','Primary Connectivity','Backup Connectivity','POC Name','POC Email','POC Phone','Production Date','QA Date','Ship Date','Delivery Date','Installation Date','Installation Time','Technician Details','Carrier','Tracking Number'];
 // Excel column → canonical so_details column.
+// Build stamp. Shown in the import preview footer and exposed as
+// window.OPSHUB_BUILD so a UAT failure can never again be ambiguous between
+// "the fix is wrong" and "the browser is running the old file".
+const OPSHUB_BUILD='2026-09-14 · excel-dates-typed-v2';
+try{window.OPSHUB_BUILD=OPSHUB_BUILD;}catch(e){}
 const XL_SO_CONFIG_MAP={
   'Kiosk ID / Naming Convention':'naming_convention','Site Address':'address',
   'Voltage':'voltage','Plug Type':'plug_type','Power Requirements':'power_requirements',
@@ -1320,7 +1325,13 @@ function xlDate(v){
     const n=Number(s);
     if(n>20000&&n<80000){const d=new Date(Date.UTC(1899,11,30)+n*86400000);return{ok:true,value:isoD(new Date(d.getTime()+d.getTimezoneOffset()*60000))};}
   }
-  return{ok:false,reason:'"'+s+'" is ambiguous — use YYYY-MM-DD or a real Excel date cell'};
+  // Ambiguity is reported by CELL TYPE, not by guessing at the string. A value
+  // only reaches here as text, so say so plainly — "9/21/26" in a real date cell
+  // never gets this far (it arrives as a Date and is trusted above).
+  return{ok:false,textCell:true,
+    reason:'"'+s+'" is a TEXT cell, not an Excel date cell — Excel is storing these characters, not a date. '
+      +'Format the column as Date in Excel and re-enter the value, or type it as YYYY-MM-DD. '
+      +'It is not read as a date because "'+s+'" could be day/month or month/day and the importer will not guess.'};
 }
 function xlEmailOk(s){return!s||/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(s);}
 
@@ -1478,7 +1489,8 @@ function xlBuildPlan(parsed,opts){
       // dateTrace always carries all five mapped columns, populated or not, so
       // the expanded row can show exactly what each one resolved to.
       rec.dateTrace.push({col,key:def.key,label:def.label,
-        cellType:cellVal==null?'blank':(cellVal instanceof Date?'excel date':typeof cellVal),
+        cellType:cellVal==null||cellVal===''?'blank'
+          :(cellVal instanceof Date?'Excel date cell':(typeof cellVal==='number'?'Excel number':'text cell')),
         value:parsedDate.ok?(parsedDate.value||null):null,
         error:parsedDate.ok?null:parsedDate.reason});
       if(!parsedDate.ok){issues.push({level:'error',field:col,msg:col+': '+parsedDate.reason});return;}
@@ -1861,7 +1873,8 @@ function xlRenderPreview(){
       .map(d=>`<div><span style="color:var(--gray-500)">${esc2(d.col)} → key "${esc2(d.key)}":</span> `
         +(d.error?`<strong style="color:#b91c1c">✕ ${esc2(d.error)}</strong>`
           :d.value?`<strong>${esc2(fmt(d.value))}</strong> <span style="color:var(--gray-400)">(${esc2(d.value)})</span>`
-          :`<span style="color:var(--gray-400)">—</span>`)+`</div>`).join('');
+          :`<span style="color:var(--gray-400)">—</span>`)
+        +(d.cellType?` <span style="color:var(--gray-400)">[${esc2(d.cellType)}]</span>`:'')+`</div>`).join('');
     const changeTbl=r.changes.length?`<div style="margin-top:8px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--gray-500);margin-bottom:4px">Changes</div>
       <table style="font-size:11px;border-collapse:collapse"><tr style="color:var(--gray-400)"><td style="padding:1px 12px 1px 0">Field</td><td style="padding:1px 12px 1px 0">Current</td><td>Excel</td></tr>
       ${r.changes.map(c=>`<tr><td style="padding:1px 12px 1px 0">${esc2(c.label)}</td><td style="padding:1px 12px 1px 0;color:var(--gray-500)">${esc2(c.current)}</td><td style="color:var(--black);font-weight:600">${esc2(c.incoming)}</td></tr>`).join('')}</table></div>`:'';
@@ -1916,7 +1929,7 @@ function xlRenderPreview(){
           <th>Ship</th><th>Delivery</th><th>Install</th><th style="text-align:left">Action</th>
         </tr></thead><tbody>${body}</tbody></table>
       </div>
-      <div style="font-size:10px;color:var(--gray-400);margin-top:8px;line-height:1.5">Click any row for its full imported values. Blank cells are never written — for an existing SO a blank cell means no change.<br>${esc(xlImportAtomicityNote())}</div>
+      <div style="font-size:10px;color:var(--gray-400);margin-top:8px;line-height:1.5">Build ${esc(OPSHUB_BUILD)} — genuine Excel date cells are read from their typed value in any display format. Click any row for its full imported values. Blank cells are never written — for an existing SO a blank cell means no change.<br>${esc(xlImportAtomicityNote())}</div>
     </div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" ${canRun?'':'disabled style="opacity:.45;cursor:not-allowed"'} onclick="xlRunImport()">${p.mode==='new'?'Create project & import →':'Import →'}</button></div>
