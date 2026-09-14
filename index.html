@@ -5506,7 +5506,41 @@ function projectSearchOptions(list){return(list||pickerProjectList()).map(p=>`<o
 // the "no duplicate project-selector implementation" instruction — the only
 // addition is narrowing to not-yet-completed projects, since a To-Do tied to
 // an already-completed project isn't useful.
-function todoProjectPickerList(){return pickerProjectList().filter(p=>p.status!=='complete');}
+function todoProjectPickerList(){return pickerProjectList().filter(p=>!projectIsComplete(p));}
+
+// ── PROJECT COMPLETION — ONE DEFINITION ───────────────────────────
+// The app already has exactly one completed state: projects.status==='complete'.
+// It is what the Overview's Active/Completed tabs switch on (glanceFilter) and
+// what todoProjectPickerList() already filtered by. No new flag is introduced;
+// every caller below routes through this so the picker can never drift from
+// what the rest of the hub calls complete. 'software-active' is a live state,
+// not a completed one, so it stays in the active list.
+function projectIsComplete(p){return !!p&&p.status==='complete';}
+
+// Session-only preference — deliberately not a DB field, and it matches how
+// the other view filters in the hub behave (reset on a new browser session).
+let ppIncludeCompleted=(()=>{try{return sessionStorage.getItem('signifi_pp_include_completed')==='1';}catch(e){return false;}})();
+function setIncludeCompleted(on){
+  ppIncludeCompleted=!!on;
+  try{sessionStorage.setItem('signifi_pp_include_completed',ppIncludeCompleted?'1':'0');}catch(e){}
+  renderProjPage();
+}
+// BROWSING list — what the <select> offers. Active/non-completed only by
+// default. SEARCH is deliberately NOT narrowed: projectSearchOptions() and
+// matchProjectByPickerText() keep using the full pickerProjectList(), so
+// typing a completed project's name still finds and opens it. Browsing and
+// searching are two different questions and get two different lists.
+function pickerBrowseList(){
+  const all=pickerProjectList();
+  if(ppIncludeCompleted)return all;
+  const keep=all.filter(p=>!projectIsComplete(p));
+  // A completed project reached via search must still be selectable in its own
+  // dropdown, or the <select> would sit on a different project than the one on
+  // screen. It is added back only while it is the open project.
+  const cur=all.find(p=>p.id===ppProjId);
+  if(cur&&projectIsComplete(cur)&&!keep.includes(cur))keep.push(cur);
+  return keep.sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+}
 
 // ── MY TO-DOS ────────────────────────────────────────────────
 // A lightweight personal notepad — explicitly NOT a workflow engine. No
@@ -9999,18 +10033,24 @@ function renderProjPage(){
   // which now syncs both #pp-proj-search and #pp-proj-select on every
   // switch — one source of truth (ppProjId), two controls that both just
   // reflect it, not two independent state machines.
-  const pickerList=pickerProjectList();
+  const pickerList=pickerBrowseList();          // dropdown browsing — active by default
+  const searchList=pickerProjectList();          // typed search — every project, always
   if((pmFilter||salesFilter||saFilter)&&ppProjId&&!pickerList.find(p=>p.id===ppProjId)&&pickerList.length){ppProjId=pickerList[0].id;selectedProjId=ppProjId;}
+  const hiddenCompleted=ppIncludeCompleted?0:searchList.filter(p=>projectIsComplete(p)&&p.id!==ppProjId).length;
   el.innerHTML=`
     <div class="proj-sel-bar">
       <label>Project</label>
       <div style="flex:1;display:flex;gap:6px;min-width:0">
         <input id="pp-proj-search" list="pp-proj-list" placeholder="Type to search..." style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);width:170px;flex:0 0 auto" onchange="onProjPageSearch(this.value)">
-        <datalist id="pp-proj-list">${projectSearchOptions(pickerList)}</datalist>
+        <datalist id="pp-proj-list">${projectSearchOptions(searchList)}</datalist>
         <select id="pp-proj-select" onchange="switchProjPage(this.value)" style="font-family:var(--font);font-size:13px;padding:6px 10px;border:1px solid var(--gray-300);border-radius:var(--radius);background:var(--white);color:var(--black);flex:1;min-width:0">
           ${pickerList.map(p=>`<option value="${p.id}"${p.id===ppProjId?' selected':''}>${esc(p.name)}${p.so_number?' — '+esc(p.so_number):''}</option>`).join('')}
         </select>
       </div>
+      <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--gray-600);white-space:nowrap;cursor:pointer;font-weight:500" title="${hiddenCompleted?hiddenCompleted+' completed project'+(hiddenCompleted===1?'':'s')+' hidden. Typing a name finds them either way.':'Show completed projects in the dropdown. Typing a name finds them either way.'}">
+        <input type="checkbox" ${ppIncludeCompleted?'checked':''} onchange="setIncludeCompleted(this.checked)" style="cursor:pointer;margin:0">
+        Include completed${hiddenCompleted?' <span style="color:var(--gray-400)">('+hiddenCompleted+')</span>':''}
+      </label>
       ${pmDropdown('renderProjPage')}${salesDropdown('renderProjPage')}${saDropdown('renderProjPage')}
       <button onclick="openProjPageTodoModal()" style="font-size:12px;font-weight:600;padding:6px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;color:var(--gray-700);cursor:pointer;font-family:var(--font);white-space:nowrap" title="Add a personal to-do for this project — not a milestone">📝 + To-Do</button>
       <span id="pp-saved" class="pp-saved">Saved ✓</span>
@@ -10058,6 +10098,67 @@ function onProjPageSearch(val){
     switchProjPage(match.id);
     document.getElementById('pp-proj-search').blur();
   }
+}
+// ── PROJECT HEADER — COMPACT AT ANY SO COUNT ──────────────────────
+// A 150-SO project used to print 150 inline SO links and 150 hardware lines
+// into the header, which buried the rest of the page. Both are summarised
+// here. This is DISPLAY ONLY — no SO, hardware or project record is read
+// differently or written at all; getSOList()/getProjectHardware() remain the
+// single sources and are untouched.
+let _ppSOQuery='';
+function ppSOListFiltered(proj){
+  const q=_ppSOQuery.toLowerCase().replace(/\s+/g,' ').trim();
+  const list=getSOList(proj);
+  return q?list.filter(so=>String(so).toLowerCase().includes(q)):list;
+}
+function ppRenderSOItems(){
+  const proj=projects.find(p=>p.id===ppProjId); if(!proj)return'';
+  const list=ppSOListFiltered(proj);
+  if(!list.length)return'<div style="font-size:11.5px;color:var(--gray-500);padding:6px 2px">No SO matches that search.</div>';
+  return list.map(so=>`<button onclick="ppGoToSO('${escJsAttr(so)}')" title="Open SO ${esc(so)}"
+    style="font-family:var(--mono);font-size:11px;font-weight:600;padding:3px 9px;border-radius:10px;border:1px solid var(--gray-300);background:var(--white);color:var(--black);cursor:pointer;white-space:nowrap">${esc(so)}</button>`).join('');
+}
+function ppSOSearch(q){
+  _ppSOQuery=q||'';
+  const items=document.getElementById('pp-so-items'); if(items)items.innerHTML=ppRenderSOItems();
+  const proj=projects.find(p=>p.id===ppProjId);
+  const cnt=document.getElementById('pp-so-shown');
+  if(cnt&&proj){const n=ppSOListFiltered(proj).length,t=getSOList(proj).length;
+    cnt.textContent=(n===t?t+'':n+' of '+t)+' SO'+(t===1?'':'s');}
+}
+function ppToggleSOList(){
+  const el=document.getElementById('pp-so-panel'); if(!el)return;
+  const showing=el.style.display!=='none';
+  el.style.display=showing?'none':'block';
+  if(!showing){const i=document.getElementById('pp-so-q'); if(i){i.value=_ppSOQuery;i.focus();}}
+}
+// Navigation is the EXISTING behaviour, not a new one. A campaign child still
+// goes through switchProjPageBySO() exactly as the old inline links did; an
+// so_tag multi-SO project opens SO Detail through msoOpenSO(), the same call
+// the Project Summary table already uses for a row click.
+function ppGoToSO(so){
+  const proj=projects.find(p=>p.id===ppProjId); if(!proj)return;
+  const child=projects.find(p=>p.id!==ppProjId&&p.parent_project_id===ppProjId&&p.so_number&&getSOList(p).includes(so));
+  if(child){switchProjPageBySO(so);return;}
+  const panel=document.getElementById('pp-so-panel'); if(panel)panel.style.display='none';
+  if(isMultiSOProject(proj)&&typeof msoOpenSO==='function'){msoOpenSO(proj.id,so);return;}
+  switchProjPageBySO(so);
+}
+// Groups hardware_line_items by normalised model and SUMS quantity. Purely a
+// display aggregation — the rows themselves are never merged, rewritten or
+// deleted, and per-SO ownership stays in Hardware & Solution Configuration
+// where it belongs. Quantity follows the same 'missing means 1' rule
+// getHardwareSummary() already uses, so the roll-up total matches the lines.
+function ppHardwareRollup(projectId,soTag){
+  const by=new Map();
+  getProjectHardware(projectId,soTag).forEach(h=>{
+    const model=String(h.model||'Hardware').replace(/\s+/g,' ').trim()||'Hardware';
+    const key=model.toLowerCase();
+    const cur=by.get(key)||{model,qty:0,lines:0};
+    cur.qty+=Number(h.quantity||1)||0; cur.lines++;
+    by.set(key,cur);
+  });
+  return[...by.values()].sort((a,b)=>b.qty-a.qty||a.model.localeCompare(b.model));
 }
 function toggleAllSOView(){
   const modal=document.getElementById('modal-root');
@@ -10293,7 +10394,17 @@ async function switchProjPage(id){
   const sel=document.getElementById('pp-proj-select');
   const proj=projects.find(p=>p.id===id);
   if(inp&&proj)inp.value=proj.name+(proj.so_number?' — '+proj.so_number:'');
-  if(sel&&[...sel.options].some(o=>o.value===id))sel.value=id;
+  if(sel){
+    // The browse list hides completed projects, so one opened via search may
+    // have no option here. Add it rather than leaving the <select> pointing at
+    // whatever was open before — the two controls must always agree.
+    if(![...sel.options].some(o=>o.value===id)&&proj){
+      const o=document.createElement('option');
+      o.value=id; o.textContent=proj.name+(proj.so_number?' — '+proj.so_number:'')+(projectIsComplete(proj)?' (completed)':'');
+      sel.appendChild(o);
+    }
+    if([...sel.options].some(o=>o.value===id))sel.value=id;
+  }
   document.getElementById('pp-body').innerHTML='<div style="text-align:center;padding:3rem;color:var(--gray-500)">Loading...</div>';
   await loadProjPage(id);
   renderProjPageBody();
@@ -10582,10 +10693,29 @@ function renderProjPageBody(){
           ${isChild(proj)?`<button onclick="switchProjPage('${proj.parent_project_id}')" style="font-size:10px;padding:2px 10px;border-radius:10px;border:1px solid #e879f9;background:rgba(232,121,249,0.15);color:#e879f9;cursor:pointer;font-family:var(--font)">🏛 Back to master</button>`:''}
         </div>
         <div class="pp-meta">
-          <span>📋 SO: ${getSOList(proj).map(so=>'<strong style="cursor:pointer;text-decoration:underline;color:#93c5fd" onclick="switchProjPageBySO(\''+so+'\')" title="Go to '+so+'">'+so+'</strong>').join(', ')||'—'}</span>
+          ${(()=>{
+            // Single-SO projects are left exactly as they were — one SO, shown
+            // directly. Only multi-SO projects get the count + panel, so a
+            // simple project never becomes more complicated than it was.
+            const soList=getSOList(proj);
+            const link=so=>'<strong style="cursor:pointer;text-decoration:underline;color:#93c5fd" onclick="ppGoToSO(\''+escJsAttr(so)+'\')" title="Go to '+esc(so)+'">'+esc(so)+'</strong>';
+            if(soList.length<=1)return`<span>📋 SO: ${soList.length?link(soList[0]):'—'}</span>`;
+            return`<span>📄 <strong>${soList.length} SOs</strong>
+              <button onclick="ppToggleSOList()" style="font-size:10px;margin-left:5px;padding:2px 9px;border-radius:10px;border:1px solid #93c5fd;background:rgba(147,197,253,0.15);color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">View SOs ▾</button></span>`;
+          })()}
           <span>👤 PM: <strong>${proj.pm||'—'}</strong></span>
           <span>🏢 ${proj.client||'—'}</span>
-          ${(()=>{const hs=getHardwareSummary(proj.id);return hs?`<span>📦 ${esc(hs)}</span>`:'';})()}
+          ${(()=>{
+            // Was getHardwareSummary(proj.id), which joins EVERY hardware line
+            // with " · " — on Lowe's that printed "1× HDL 96 Compartments"
+            // ~150 times. Same rows, grouped and summed.
+            const hw=ppHardwareRollup(proj.id);
+            if(!hw.length)return'';
+            // One model → a single inline line. Several → the 📦 Hardware block
+            // below owns it, so this span would only duplicate that.
+            if(hw.length===1)return`<span>📦 ${esc(hw[0].model)} × ${hw[0].qty}</span>`;
+            return'';
+          })()}
           ${(()=>{
             // Kiosk ID / address in the Project Page summary. On a multi-SO
             // project the project-level fields describe no single location, so
@@ -10616,6 +10746,33 @@ function renderProjPageBody(){
           ${goLive?`<span>🎯 Go-live: <strong>${fmt(goLive)}</strong></span>`:''}
           ${(()=>{const b=getProjectBlocker(proj);if(!b)return'';return`<span style="color:${b.overdue?'#fca5a5':'#93c5fd'}">🔗 ${esc(b.blockedStage.label)} blocked by ${esc(b.blockingStage.label)} · ${b.estimate}</span>`;})()}
         </div>
+        ${(()=>{
+          // Contained SO browser: fixed max height with its own scroll, so the
+          // project page never grows vertically with the SO count. Hidden until
+          // asked for, and only ever built for multi-SO projects.
+          if(getSOList(proj).length<=1)return'';
+          const total=getSOList(proj).length;
+          return`<div id="pp-so-panel" style="display:none;margin-top:8px;background:var(--white);border:1px solid var(--gray-300);border-radius:var(--radius);padding:9px 11px;max-width:620px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
+              <strong style="font-size:11px;color:var(--black);text-transform:uppercase;letter-spacing:.04em">SO Numbers</strong>
+              <span id="pp-so-shown" style="font-size:11px;color:var(--gray-500)">${total} SO${total===1?'':'s'}</span>
+              <input id="pp-so-q" placeholder="Search SO…" oninput="ppSOSearch(this.value)"
+                style="margin-left:auto;font-family:var(--font);font-size:11.5px;padding:3px 9px;border:1px solid var(--gray-300);border-radius:var(--radius);width:150px">
+              <button onclick="ppToggleSOList()" style="font-size:11px;padding:2px 8px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);cursor:pointer;font-family:var(--font)">Close</button>
+            </div>
+            <div id="pp-so-items" style="display:flex;flex-wrap:wrap;gap:4px;max-height:210px;overflow-y:auto">${ppRenderSOItems()}</div>
+          </div>`;
+        })()}
+        ${(()=>{
+          // Multiple hardware models get their own compact block, one line per
+          // model — never one line per hardware record.
+          const hw=ppHardwareRollup(proj.id);
+          if(hw.length<2)return'';
+          return`<div style="margin-top:8px;font-size:11.5px;color:#cbd5e1">
+            <div style="font-weight:700;color:#e2e8f0;margin-bottom:2px">📦 Hardware</div>
+            ${hw.map(h=>`<div>${esc(h.model)} × <strong style="color:white">${h.qty}</strong></div>`).join('')}
+          </div>`;
+        })()}
         <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <select class="pp-status ${statusCls}" style="border:none;cursor:pointer;font-family:var(--font);font-size:12px;font-weight:600;padding:4px 12px;border-radius:20px" onchange="savePPSection('status',this.value);this.className='pp-status '+(this.value==='on-track'?'pp-status-green':this.value==='at-risk'?'pp-status-amber':'pp-status-red')">
             <option value="on-track"${statusVal==='on-track'?' selected':''}>🟢 On Track</option>
