@@ -1259,12 +1259,18 @@ function docSOGate(type){
 // Parsing uses the SheetJS build the app already loads; the downloadable
 // template is generated with the ExcelJS build it already loads.
 const XL_SHEET='Multi-SO Import';
-const XL_HEADERS=['SO Number','Kiosk ID / Naming Convention','Form Factor','Quantity','Site Address','Voltage','Plug Type','Power Requirements','Primary Connectivity','Backup Connectivity','POC Name','POC Email','POC Phone','Production Date','QA Date','Ship Date','Delivery Date','Installation Date','Installation Time','Technician Details','Carrier','Tracking Number'];
+const XL_HEADERS=['SO Number','Kiosk ID / Naming Convention','Form Factor','Quantity','Site Address','Voltage','Plug Type','Power Requirements','Primary Connectivity','Backup Connectivity','POC Name','POC Email','POC Phone',
+  // Dates, in the order the schedule actually runs. Column titles are just
+  // titles — identity is the canonical key in XL_DATE_MAP, never the label.
+  'MO Release Date','PO Release Date','Parts Arrival Date','Production Start Date','Production End Date',
+  'Quality Start Date','Quality End Date','Final QC Date','Vinyl / Branding Date','UAT Date',
+  'Training Date','Uninstallation Date','Ship Date','Delivery Date','Installation Date',
+  'Installation Time','Technician Details','Carrier','Tracking Number'];
 // Excel column → canonical so_details column.
 // Build stamp. Shown in the import preview footer and exposed as
 // window.OPSHUB_BUILD so a UAT failure can never again be ambiguous between
 // "the fix is wrong" and "the browser is running the old file".
-const OPSHUB_BUILD='2026-09-14 · excel-dates-typed-v2';
+const OPSHUB_BUILD='2026-09-15 · excel-full-milestones-v3';
 try{window.OPSHUB_BUILD=OPSHUB_BUILD;}catch(e){}
 const XL_SO_CONFIG_MAP={
   'Kiosk ID / Naming Convention':'naming_convention','Site Address':'address',
@@ -1279,12 +1285,44 @@ const XL_SO_CONFIG_MAP={
 // start/end pairs — they map to the START of each phase, which is the date a
 // PM is scheduling when they fill an intake sheet. The preview shows the
 // resolved key so this is never a hidden assumption.
+// Every column maps to exactly ONE canonical milestone key, and every key is
+// one the app already uses — nothing here was invented to give Excel a column.
+// Labels are only what a newly-created milestone row is named; identity is
+// always project_id + key + so_tag.
+//
+// INSTALLATION IS ONE DATE. One column, one key, no start/end pair — the same
+// single 'installation' milestone the tracker, the Installation department
+// view and Generate Docs already read.
+//
+// Deliberately absent (see the audit): 'parts-ordering-start' and
+// 'inventory-pick' exist in template offsets but are never created by intake or
+// by the importer skeleton, so no SO has them to fill; 'ui-start'/'ui-end' are
+// stored as key 'other' distinguished only by label text, and label is not
+// identity; Planogram/Kickoff/Customer-care rows are likewise key 'other'.
+// Giving any of those a column would mean inventing an identity they don't have.
 const XL_DATE_MAP={
-  'Production Date':{key:'production-start',label:'Production start'},
-  'QA Date':{key:'quality-start',label:'Quality start'},
+  'MO Release Date':{key:'mo-release',label:'MO Release'},
+  'PO Release Date':{key:'po-release',label:'PO Release'},
+  'Parts Arrival Date':{key:'arrival',label:'Parts arrival'},
+  'Production Start Date':{key:'production-start',label:'Production start'},
+  'Production End Date':{key:'production-end',label:'Production end'},
+  'Quality Start Date':{key:'quality-start',label:'Quality start'},
+  'Quality End Date':{key:'quality-end',label:'Quality end'},
+  'Final QC Date':{key:'final-qc',label:'Final QC'},
+  'Vinyl / Branding Date':{key:'vinyl',label:'Vinyl / branding'},
+  'UAT Date':{key:'uat',label:'UAT'},
+  'Training Date':{key:'training',label:'Training'},
+  'Uninstallation Date':{key:'uninstallation',label:'Uninstallation date'},
   'Ship Date':{key:'shipping',label:'Pack & ship'},
   'Delivery Date':{key:'delivery',label:'Delivery'},
   'Installation Date':{key:'installation',label:'Installation'},
+};
+// Older workbooks called the two original columns "Production Date" and
+// "QA Date". They keep working, mapped to the same canonical keys, so a
+// previously downloaded template is never rejected.
+const XL_DATE_ALIASES={
+  'Production Date':'Production Start Date',
+  'QA Date':'Quality Start Date',
 };
 // Controlled vocabularies — read from the app's existing single definition, so
 // the importer can never drift from (or be used to bypass) the DB CHECKs.
@@ -1375,18 +1413,29 @@ function xlParseWorkbook(arrayBuffer){
   }
   if(headerRow<0)return{fatal:'Could not find the SO table — no "SO Number" header found on the "'+XL_SHEET+'" sheet.'};
   const hdr=(grid[headerRow]||[]).map(xlStr);
-  const missing=XL_HEADERS.filter(h=>!hdr.includes(h));
+  // Milestone-date columns are OPTIONAL. The set grew from 5 to 15, and a
+  // workbook downloaded before that is still perfectly valid — a date column
+  // that isn't there simply supplies no date, exactly like a blank cell.
+  // Everything else stays required, so a genuinely wrong sheet is still caught.
+  const required=XL_HEADERS.filter(h=>!XL_DATE_MAP[h]);
+  const missing=required.filter(h=>!hdr.includes(h));
   if(missing.length)return{fatal:'Workbook is missing required column'+(missing.length>1?'s':'')+': '+missing.join(', ')+'. Use Download Template.'};
   const dupHdr=hdr.filter((h,i)=>h&&XL_HEADERS.includes(h)&&hdr.indexOf(h)!==i);
   if(dupHdr.length)return{fatal:'Duplicate column header'+(dupHdr.length>1?'s':'')+': '+[...new Set(dupHdr)].join(', ')};
-  const colOf={}; XL_HEADERS.forEach(h=>colOf[h]=hdr.indexOf(h));
+  const colOf={};
+  XL_HEADERS.forEach(h=>colOf[h]=hdr.indexOf(h));
+  // Legacy header names for the two original date columns.
+  Object.entries(XL_DATE_ALIASES).forEach(([oldName,newName])=>{
+    if(colOf[newName]<0&&hdr.indexOf(oldName)>=0)colOf[newName]=hdr.indexOf(oldName);
+  });
   const rows=[];
   for(let r=headerRow+1;r<grid.length;r++){
     const disp=grid[r]||[], rawRow=rawGrid[r]||[];
     const cells={}; let any=false;
     XL_HEADERS.forEach(h=>{
       // Date columns take the typed value; everything else takes the display value.
-      const v=(XL_DATE_MAP[h]?rawRow:disp)[colOf[h]];
+      // A column absent from this workbook reads as null — same as a blank cell.
+      const v=colOf[h]>=0?(XL_DATE_MAP[h]?rawRow:disp)[colOf[h]]:null;
       cells[h]=v; if(v!=null&&String(v).trim()!=='')any=true; });
     if(!any)continue;                       // entirely blank row — ignored, never an error
     rows.push({excelRow:r+1,cells});
@@ -1443,6 +1492,8 @@ function xlBuildPlan(parsed,opts){
     conflict('PM',proj.pm); conflict('Sales',proj.sales); conflict('Solution Architect',proj.solutions);
   }
 
+  const planSkeleton=xlSkeletonForProject(proj,plan);
+  const projectMsKeys=xlProjectMsKeys(proj);
   const seen={};
   parsed.rows.forEach(r=>{
     const issues=[];
@@ -1468,6 +1519,14 @@ function xlBuildPlan(parsed,opts){
       if(col==='POC Email'&&!xlEmailOk(v)){issues.push({level:'error',field:col,msg:'"'+v+'" is not a valid email address'});return;}
       rec.cfg[field]=v;
     });
+    // Which milestone keys does THIS SO actually have? An SO that already
+    // exists answers for itself; a new SO answers with the skeleton it is about
+    // to be given — the same skeleton xlExecutePlan will use.
+    const ownMs=proj?milestones.filter(m=>m.project_id===proj.id&&m.so_tag===so):[];
+    const msKeysForSO=new Set(ownMs.length?ownMs.map(m=>m.key):planSkeleton.map(sk=>sk.key));
+    // An existing project also vouches for any key another of its SOs carries —
+    // an SO that is merely incomplete still gets to catch up.
+    if(projectMsKeys)projectMsKeys.forEach(k=>msKeysForSO.add(k));
     // Hardware — one primary line per SO for V1
     const ff=xlStr(r.cells['Form Factor']);
     const qtyRaw=xlStr(r.cells['Quantity']);
@@ -1486,15 +1545,26 @@ function xlBuildPlan(parsed,opts){
     Object.entries(XL_DATE_MAP).forEach(([col,def])=>{
       const cellVal=r.cells[col];
       const parsedDate=xlDate(cellVal);
-      // dateTrace always carries all five mapped columns, populated or not, so
-      // the expanded row can show exactly what each one resolved to.
-      rec.dateTrace.push({col,key:def.key,label:def.label,
+      const tr={col,key:def.key,label:def.label,
         cellType:cellVal==null||cellVal===''?'blank'
           :(cellVal instanceof Date?'Excel date cell':(typeof cellVal==='number'?'Excel number':'text cell')),
         value:parsedDate.ok?(parsedDate.value||null):null,
-        error:parsedDate.ok?null:parsedDate.reason});
+        error:parsedDate.ok?null:parsedDate.reason, skipped:null};
+      // dateTrace always carries every mapped column, populated or not, so the
+      // expanded row can show exactly what each one resolved to.
+      rec.dateTrace.push(tr);
       if(!parsedDate.ok){issues.push({level:'error',field:col,msg:col+': '+parsedDate.reason});return;}
-      if(parsedDate.value)rec.dates[def.key]={date:parsedDate.value,label:def.label,col};
+      if(!parsedDate.value)return;                    // blank = no change, never an issue
+      // A date is only written to a milestone the SO actually has. Excel never
+      // adds a milestone to a schedule that doesn't include it — it says so and
+      // writes nothing. WARNING, not error: the rest of the row still imports.
+      if(!msKeysForSO.has(def.key)){
+        tr.skipped='not in this project\u2019s schedule';
+        issues.push({level:'warning',field:col,
+          msg:col+': this project\u2019s schedule has no "'+def.label+'" milestone, so '+fmt(parsedDate.value)+' was not applied. Nothing else on the row is affected.'});
+        return;
+      }
+      rec.dates[def.key]={date:parsedDate.value,label:def.label,col};
     });
     // Helpful (non-blocking) gaps
     if(!rec.cfg.address)issues.push({level:'warning',field:'Site Address',msg:'No site address yet'});
@@ -1691,6 +1761,30 @@ async function xlExecutePlan(plan,decisions){
   await loadAll();
   return res;
 }
+// The milestone shape a NEW SO on this project will get. Identical logic to
+// the one xlExecutePlan uses, extracted so the PREVIEW and the WRITE can never
+// disagree about which milestones an SO is going to have.
+function xlSkeletonForProject(proj,plan){
+  if(proj){
+    const templateSO=[...new Set(milestones.filter(m=>m.project_id===proj.id&&m.so_tag).map(m=>m.so_tag))][0];
+    const fromSibling=templateSO?milestones.filter(m=>m.project_id===proj.id&&m.so_tag===templateSO).map(m=>({key:m.key,label:m.label})):null;
+    if(fromSibling&&fromSibling.length)return fromSibling;
+  }
+  return xlSkeletonForTemplate(plan?.resolved?.template||null);
+}
+// Which milestone keys count as part of THIS project's schedule.
+//
+// Projects don't store the template they were built from, so the only honest
+// evidence of a project's intended schedule is the milestones its SOs actually
+// have. The UNION across every SO is used, not one sibling's set: on a project
+// where one SO was left incomplete by a failed import, a complete sibling still
+// vouches for the key. A key no SO anywhere on the project has is not part of
+// its schedule, and a date for it warns instead of quietly adding a milestone
+// the PM never planned.
+function xlProjectMsKeys(proj){
+  if(!proj)return null;
+  return new Set(milestones.filter(m=>m.project_id===proj.id).map(m=>m.key));
+}
 function xlSkeletonForTemplate(tpl){
   const BASE=[['po-release','PO Release'],['mo-release','MO Release'],['arrival','Parts arrival'],
     ['production-start','Production start'],['production-end','Production end'],
@@ -1782,6 +1876,11 @@ async function xlApplyToExistingSO(proj,r,skeleton){
   for(const[key,d]of Object.entries(r.dates)){
     const m=resolveMsForSO(proj.id,key,r.so);
     if(!m){
+      // xlBuildPlan only lets a key through when the project's schedule already
+      // contains it (this SO's own rows, a sibling's, or the new-SO skeleton),
+      // so this is an SO catching up to its project — not an invented milestone.
+      // A key no SO on the project has never reaches here.
+      if(!xlProjectMsKeys(proj).has(key))continue;
       const{data,error}=await sb.from('milestones').insert({project_id:proj.id,key,label:d.label,date:d.date,so_tag:r.so,changed_by:currentUserName}).select().single();
       if(error)throw new Error(d.col+' — '+error.message);
       if(data)milestones.push(data);
@@ -1872,6 +1971,7 @@ function xlRenderPreview(){
     const dateRows=(r.dateTrace||Object.entries(r.dates).map(([k,d])=>({col:d.col,key:k,value:d.date,error:null})))
       .map(d=>`<div><span style="color:var(--gray-500)">${esc2(d.col)} → key "${esc2(d.key)}":</span> `
         +(d.error?`<strong style="color:#b91c1c">✕ ${esc2(d.error)}</strong>`
+          :d.skipped?`<strong style="color:#a16207">⚠ ${esc2(fmt(d.value))} not applied — ${esc2(d.skipped)}</strong>`
           :d.value?`<strong>${esc2(fmt(d.value))}</strong> <span style="color:var(--gray-400)">(${esc2(d.value)})</span>`
           :`<span style="color:var(--gray-400)">—</span>`)
         +(d.cellType?` <span style="color:var(--gray-400)">[${esc2(d.cellType)}]</span>`:'')+`</div>`).join('');
@@ -2019,7 +2119,11 @@ async function xlBuildWorkbook(proj){
     '• One row = one SO.','• SO Number is required. Everything else may be blank.','• Use YYYY-MM-DD for dates.',
     '• For existing projects, existing SOs default to Skip.','• Do not add status, milestone completion or history columns.'
   ]).forEach((t,i)=>{const c=ws.getCell(4+i,14);c.value=t;c.font={name:'DM Sans',size:9,color:{argb:'FF888888'}};});
-  const GROUPS=[['SO / HARDWARE',1],['SITE / POWER / IT',5],['SITE CONTACT',11],['DATES',14],['INSTALLATION / SHIPPING',19]];
+  // Derived from XL_HEADERS so adding a date column can never leave a group
+  // banner sitting over the wrong column.
+  const GROUPS=[['SO / HARDWARE','SO Number'],['SITE / POWER / IT','Site Address'],['SITE CONTACT','POC Name'],
+    ['SCHEDULE — MILESTONE DATES','MO Release Date'],['INSTALLATION / SHIPPING','Installation Time']]
+    .map(([t,h])=>[t,XL_HEADERS.indexOf(h)+1]).filter(([,c])=>c>0);
   GROUPS.forEach(([t,col])=>{const c=ws.getCell(9,col);c.value=t;c.font={name:'DM Sans',size:9,bold:true,color:{argb:RED}};});
   XL_HEADERS.forEach((h,i)=>{
     const c=ws.getCell(10,i+1); c.value=h;
@@ -12426,6 +12530,61 @@ function matchDeliverablesForRow(rowLabel,deliverables){
 // not already covered by a canonical role), split into Signifi/Client using
 // the real project_team.side field, and any conflicts between the two
 // sources for the same role.
+// Combined-role separator. A middle dot reads as "and also" in a two-column
+// card, and leaves every individual role string intact for the regex lookups
+// buildWeeklyStatusReport runs over .role (e.g. /deployment/i still matches
+// "Software & Integrations · Deployment Lead").
+const STAKEHOLDER_ROLE_SEP=' · ';
+function stakeholderNameKey(n){return String(n==null?'':n).replace(/\u00a0/g,' ').replace(/\s+/g,' ').trim().toLowerCase();}
+function stakeholderEmailKey(e){return String(e==null?'':e).trim().toLowerCase();}
+// Groups role assignments into people, preserving first-appearance order for
+// the people AND the original order of each person's roles. Never drops a
+// role: a second role for somebody already listed is appended to that person.
+function xlGroupStakeholders(list){
+  const out=[]; const byEmail=new Map(); const byName=new Map(); const _pendingPlaceholder=[];
+  (list||[]).forEach(s=>{
+    if(!s||!s.name)return;
+    const em=stakeholderEmailKey(s.email), nm=stakeholderNameKey(s.name);
+    if(!nm)return;
+    // An emailed row matches only the same email. A row with no email matches
+    // by name — but only onto a person who is unambiguous by that name.
+    let hit=em?byEmail.get(em):null;
+    if(!hit&&!em)hit=byName.get(nm);
+    if(!hit&&em){
+      // Same person already seen without an email (e.g. the canonical PM
+      // scalar, which carries no email) — adopt that entry and key it.
+      const byNm=byName.get(nm);
+      if(byNm&&!stakeholderEmailKey(byNm.email))hit=byNm;
+    }
+    if(hit){
+      const role=String(s.role||'').trim();
+      if(role&&!hit.roles.some(r=>r.toLowerCase()===role.toLowerCase()))hit.roles.push(role);
+      if(!hit.email&&s.email)hit.email=s.email;
+      if(!hit.organization&&s.organization)hit.organization=s.organization;
+      if(!hit.side&&s.side)hit.side=s.side;
+      hit.role=hit.roles.join(STAKEHOLDER_ROLE_SEP);
+      if(em&&!byEmail.has(em))byEmail.set(em,hit);
+      return;
+    }
+    const entry={name:String(s.name).replace(/\s+/g,' ').trim(),
+      roles:String(s.role||'').trim()?[String(s.role).trim()]:[],
+      organization:s.organization||'',email:s.email||'',side:s.side||null};
+    entry.role=entry.roles.join(STAKEHOLDER_ROLE_SEP);
+    out.push(entry);
+    _pendingPlaceholder.push(entry);
+    if(em)byEmail.set(em,entry);
+    // Ambiguous names (two different people spelled identically) must not
+    // collapse into one another, so a duplicate name key is poisoned rather
+    // than pointed at the first match.
+    if(byName.has(nm)){if(byName.get(nm))byName.set(nm,null);}
+    else byName.set(nm,entry);
+  });
+  // "Team member" is a fallback for somebody with no stated role at all — it
+  // must never be appended alongside a real role (a PM who also has a blank
+  // team row is a Project Manager, not "Project Manager · Team member").
+  _pendingPlaceholder.forEach(e=>{if(!e.roles.length){e.roles=['Team member'];e.role='Team member';}});
+  return out;
+}
 function resolveProjectStakeholders(proj,team){
   const ROLE_ALIASES={'project manager':'pm','pm':'pm','sdm':'sdm','solutions':'solutions','solutions / ux':'solutions','sales':'sales','account manager':'account_manager','am':'account_manager'};
   const conflicts=[];
@@ -12440,12 +12599,31 @@ function resolveProjectStakeholders(proj,team){
     {role:'Solution Architect',name:proj.solutions&&proj.solutions!==SA_NOT_REQUIRED?proj.solutions:null,side:'Signifi'},{role:'Sales',name:proj.sales,side:'Signifi'},
     {role:'Account Manager',name:proj.account_manager,side:'Signifi'},
   ].filter(s=>s.name);
-  const canonicalNames=new Set(canonical.map(s=>s.name));
-  const extra=(team||[]).filter(t=>t.name&&!canonicalNames.has(t.name)).map(t=>({role:t.role||'Team member',name:t.name,organization:t.organization||'',email:t.email||'',side:t.side||null}));
-  const stakeholders=[...canonical,...extra];
+  // A project_team row is NO LONGER dropped just because its name matches a
+  // canonical scalar role. That filter existed to stop the same person being
+  // rendered twice, but it did so by DISCARDING the second role: a PM who is
+  // also the Deployment Lead lost "Deployment Lead" entirely. Duplication is
+  // now handled properly by grouping (below), so every legitimate role is
+  // kept and the person still renders once.
+  const extra=(team||[]).filter(t=>t.name&&t.name.trim()).map(t=>({role:(t.role||'').trim(),name:t.name,organization:t.organization||'',email:t.email||'',side:t.side||null}));
+  // ── ONE UNIQUE PERSON = ONE ROW ─────────────────────────────────
+  // Previously these lists were built per ROLE ASSIGNMENT, so somebody with
+  // two project_team rows ("Software & Integrations" and "Deployment Lead")
+  // was rendered as two separate people. The rows are now grouped by person
+  // and their responsibilities combined onto that person's single entry.
+  //
+  // There is no canonical person/user id to group on — project_team.id is a
+  // ROW id, and the five canonical roles are plain scalar name strings on the
+  // project. The safest identifier actually stored is therefore:
+  //   email when the row has one (genuinely unique per person), else the
+  //   whitespace/case-normalised name.
+  // Grouping is by EXACT normalised equality, never fuzzy: two people with
+  // similar-but-different names stay separate, and two rows carrying
+  // different emails stay separate even when the names match.
+  const stakeholders=xlGroupStakeholders([...canonical,...extra]);
   const unclassified=extra.filter(t=>!t.side).length;
-  const stakeholdersSignifi=[...canonical,...extra.filter(t=>t.side==='Signifi')];
-  const stakeholdersClient=extra.filter(t=>t.side==='Client');
+  const stakeholdersSignifi=xlGroupStakeholders([...canonical,...extra.filter(t=>t.side==='Signifi')]);
+  const stakeholdersClient=xlGroupStakeholders(extra.filter(t=>t.side==='Client'));
   // Anyone without Side set is genuinely unclassified now (no more guessing
   // from Organization text) — surfaced to the caller to flag, not silently
   // dropped from either column and not silently guessed either.
@@ -12952,6 +13130,171 @@ async function populateShippingSlides(zip,pkg){
   });
 }
 
+
+// ══════════════ KICK-OFF DECK — STAKEHOLDERS & TEAM SLIDE ══════════════
+// Slide 3 used to be filled positionally: ten fixed "{ Name }" slots (5 Signifi
+// + 5 client) dropped into a card whose ROLE labels were static template text.
+// That had three consequences — a person with two roles consumed two slots and
+// appeared twice; the role beside a name was whatever the template happened to
+// say rather than that person's actual role; and the name box was authored at
+// 898088 EMU (0.98"), so any two-word name wrapped while ~7" of the row sat
+// empty.
+//
+// The row band of each card is now GENERATED from the grouped stakeholder list,
+// reusing the template's own run properties so the Signifi styling is unchanged.
+// Everything else on the slide — the card, the logo, the section labels, the
+// footer — is left exactly as the template authored it.
+const KD = {
+  EMU_PT: 12700,
+  NAME_SZ: 1650, ROLE_SZ: 1350,          // hundredths of a point, from the template
+  // The two cards are different surfaces — the Signifi card is dark, the client
+  // card is light — and the template gives each its own text and rule colours.
+  // Both palettes are reproduced exactly; using the dark one on the light card
+  // renders white-on-white.
+  DARK:{NAME:'FFFFFF',ROLE:'9AA0A8',DIV:'2A2C33'},
+  LIGHT:{NAME:'14151A',ROLE:'797E88',DIV:'E4E5E9'},
+  FONT: 'IBM Plex Sans',
+  LINE_H: 312420,                         // one line, as authored
+  ROW_GAP: 293370,                        // template pitch (605790) minus one line
+  DIV_OFFSET: 114300,                     // divider sits this far under a row's last line
+  DIV_H: 9525,
+  CARD_TOP: 3048000,
+  FIRST_ROW_DY: 1192530,                  // first row's y, relative to card top
+  CARD_PAD_BOTTOM: 339090,
+  MIN_ROWS_H: 2,                          // a one-person card still looks like a card
+  ROLE_MIN: 1645920,                      // 1.8" — enough for "Account Executive"
+  ROLE_MAX_FRAC: 0.40,                    // the role column never takes more than this
+  COL_GAP: 182880,
+  MAX_CARD_H: 6096000,                    // keeps the card clear of the footer rule
+};
+// Rough advance-width estimate for IBM Plex Sans. Deliberately generous: an
+// over-estimate costs a little spare row height, an under-estimate would let
+// text overrun the card.
+function kdTextW(text,sz,bold){
+  const pt=sz/100, f=bold?0.62:0.58;
+  return Math.ceil(String(text==null?'':text).length*pt*f*KD.EMU_PT);
+}
+function kdLineCount(text,sz,bold,boxW){
+  const usable=Math.max(1,boxW-50800);    // less the box's own 25400 insets
+  return Math.max(1,Math.ceil(kdTextW(text,sz,bold)/usable));
+}
+function kdEsc(v){return docxEsc(v);}
+function kdRunProps(sz,bold,clr){
+  return`<a:rPr lang="en-US" sz="${sz}"${bold?' b="1"':''}><a:solidFill><a:srgbClr val="${clr}"/></a:solidFill>`
+    +`<a:latin typeface="${KD.FONT}" pitchFamily="34" charset="0"/><a:ea typeface="${KD.FONT}" pitchFamily="34" charset="-122"/>`
+    +`<a:cs typeface="${KD.FONT}" pitchFamily="34" charset="-120"/></a:rPr>`;
+}
+function kdTextBox(id,x,y,cx,cy,text,sz,bold,clr,algn){
+  return`<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="KDText ${id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>`
+    +`<p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>`
+    +`<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln/></p:spPr>`
+    +`<p:txBody><a:bodyPr wrap="square" lIns="25400" tIns="25400" rIns="25400" bIns="25400" rtlCol="0" anchor="t"><a:normAutofit/></a:bodyPr>`
+    +`<a:lstStyle/><a:p><a:pPr marL="0" indent="0" algn="${algn}"><a:buNone/></a:pPr>`
+    +`<a:r>${kdRunProps(sz,bold,clr)}<a:t>${kdEsc(text)}</a:t></a:r>`
+    +`<a:endParaRPr lang="en-US" sz="${sz}"/></a:p></p:txBody></p:sp>`;
+}
+function kdRule(id,x,y,cx,clr){
+  return`<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="KDRule ${id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>`
+    +`<p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${KD.DIV_H}"/></a:xfrm>`
+    +`<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="${clr}"/></a:solidFill><a:ln/></p:spPr></p:sp>`;
+}
+// Builds one card's rows. Returns the shape XML plus the height the card needs.
+// Row height follows the ROLE text: a long or combined role wraps, the name
+// does not — which is the whole point of widening the name column.
+function kdBuildCardRows(people,rowX,rowW,cardTop,idBase,theme){
+  const T=theme||KD.DARK;
+  // The split is driven by the ROLES actually being rendered, not a fixed
+  // fraction: the role column takes only what its longest label needs (floored
+  // so short labels still read as a column, capped so it can never crowd out
+  // the names), and every remaining EMU goes to the name. Short roles
+  // therefore hand the name column ~6" instead of the authored 0.98".
+  const roleNeed=people.reduce((mx,p)=>Math.max(mx,kdTextW(p.role||'',KD.ROLE_SZ,false)+50800),0);
+  const roleW=Math.max(KD.ROLE_MIN,Math.min(Math.round(rowW*KD.ROLE_MAX_FRAC),roleNeed));
+  const nameW=rowW-roleW-KD.COL_GAP;
+  const roleX=rowX+nameW+KD.COL_GAP;
+  let y=cardTop+KD.FIRST_ROW_DY, id=idBase, xml='';
+  people.forEach((p,i)=>{
+    const nameLines=kdLineCount(p.name,KD.NAME_SZ,true,nameW);
+    const roleLines=kdLineCount(p.role||'',KD.ROLE_SZ,false,roleW);
+    const lines=Math.max(nameLines,roleLines);
+    const rowH=lines*KD.LINE_H;
+    xml+=kdTextBox(id++,rowX,y,nameW,rowH,p.name,KD.NAME_SZ,true,T.NAME,'l');
+    if(p.role)xml+=kdTextBox(id++,roleX,y,roleW,rowH,p.role,KD.ROLE_SZ,false,T.ROLE,'r');
+    if(i<people.length-1)xml+=kdRule(id++,rowX,y+rowH+KD.DIV_OFFSET,rowW,T.DIV);
+    y+=rowH+KD.ROW_GAP;
+  });
+  const used=(y-KD.ROW_GAP)-cardTop;
+  // The card follows its content: a four-person team gets a four-person card,
+  // not the authored five-row box with a dead strip underneath. A floor of two
+  // rows stops a single stakeholder producing a stub, and the ceiling keeps the
+  // card clear of the footer rule.
+  const floorH=KD.FIRST_ROW_DY+KD.MIN_ROWS_H*KD.LINE_H+(KD.MIN_ROWS_H-1)*KD.ROW_GAP+KD.CARD_PAD_BOTTOM;
+  const height=Math.min(KD.MAX_CARD_H,Math.max(floorH,used+KD.CARD_PAD_BOTTOM));
+  return{xml,height,nextId:id,contentH:used+KD.CARD_PAD_BOTTOM};
+}
+// How many people fit in one card at the authored line height.
+function kdRowsPerCard(){
+  return Math.max(1,Math.floor((KD.MAX_CARD_H-KD.FIRST_ROW_DY-KD.CARD_PAD_BOTTOM+KD.ROW_GAP)/(KD.LINE_H+KD.ROW_GAP)));
+}
+function kdChunk(list,size){
+  if(!list.length)return[[]];
+  const out=[];for(let i=0;i<list.length;i+=size)out.push(list.slice(i,i+size));return out;
+}
+// Strips the template's authored row shapes (names, roles, dividers) out of the
+// stakeholder card band, leaving the cards, logo, labels and footer untouched.
+// Matched on the template's exact authored dimensions, so nothing else on the
+// slide can be caught by accident.
+function kdStripAuthoredRows(xml){
+  return xml.replace(/<p:sp>(?:(?!<p:sp>)[\s\S])*?<\/p:sp>/g,sp=>{
+    const ext=/<a:ext cx="(\d+)" cy="(\d+)"\/>/.exec(sp);
+    if(!ext)return sp;
+    const cx=+ext[1], cy=+ext[2];
+    if(cy===312420)return'';                        // an authored name or role box
+    if(cy===9525&&(cx===7277100||cx===7261860))return'';  // an authored row divider
+    return sp;
+  });
+}
+// Resizes a card shape (matched by its authored offset) to the given height.
+function kdSetCardHeight(xml,cardX,height){
+  const re=new RegExp('(<a:off x="'+cardX+'" y="'+KD.CARD_TOP+'"/><a:ext cx="8039100" cy=")\\d+(")');
+  return xml.replace(re,'$1'+height+'$2');
+}
+// Renders one stakeholder slide for the given page of people.
+function kdRenderStakeholderSlide(pristineXml,sigPeople,cliPeople,clientName,TBC){
+  let xml=kdStripAuthoredRows(pristineXml);
+  const sig=kdBuildCardRows(sigPeople.length?sigPeople:[{name:TBC,role:''}],1295400,7277100,KD.CARD_TOP,900,KD.DARK);
+  const cli=kdBuildCardRows(cliPeople.length?cliPeople:[{name:TBC,role:''}],9723120,7261860,KD.CARD_TOP,960,KD.LIGHT);
+  const cardH=Math.max(sig.height,cli.height);      // both cards stay the same height
+  xml=kdSetCardHeight(xml,'914400',cardH);
+  xml=kdSetCardHeight(xml,'9334500',cardH);
+  xml=xml.replace('</p:spTree>',sig.xml+cli.xml+'</p:spTree>');
+  xml=replaceAllRuns(xml,'{ Company Name }',clientName||TBC);
+  return xml;
+}
+// Fills slide 3, continuing onto duplicated slides when a team is too large to
+// sit on one card at a readable size — the same pristine-copy + duplicateSlideAfter
+// pattern populateShippingSlides already uses, rather than a second mechanism.
+async function populateStakeholderSlides(zip,pkg,TBC){
+  const per=kdRowsPerCard();
+  const sigPages=kdChunk(pkg.stakeholdersSignifi,per);
+  const cliPages=kdChunk(pkg.stakeholdersClient,per);
+  const pages=Math.max(sigPages.length,cliPages.length,1);
+  const pristine=await zip.file('ppt/slides/slide3.xml').async('string');
+  const destNames=['slide3.xml'];
+  if(pages>1){
+    const presRels=await zip.file('ppt/_rels/presentation.xml.rels').async('string');
+    let afterRid=findSlideRid(presRels,'slide3.xml');
+    for(let i=1;i<pages;i++){
+      const{destName,rid}=await duplicateSlideAfter(zip,3,afterRid);
+      destNames.push(destName); afterRid=rid;
+    }
+  }
+  for(let i=0;i<pages;i++){
+    const xml=kdRenderStakeholderSlide(pristine,sigPages[i]||[],cliPages[i]||[],pkg.title.client,TBC);
+    zip.file('ppt/slides/'+destNames[i],xml);
+  }
+  return destNames.length;
+}
 async function generateKickoffDeckFromTemplate(projId,soTag=''){
   const pkg=await buildProjectDocPackage(projId,soTag);
   if(!pkg){showToast('⚠ Project not found');return;}
@@ -12981,14 +13324,11 @@ async function generateKickoffDeckFromTemplate(projId,soTag=''){
     xml=replaceAllRuns(xml,'Month DD, YYYY',pkg.title.date);
     setSlide(1,xml);
 
-    // Slide 3 — Stakeholders (positional: { Name } repeats 10x, 5 Signifi + 5 client)
-    xml=await getSlide(3);
-    let nameCursor=0;
-    const slot=st=>{const r=replaceNextRun(xml,nameCursor,'{ Name }',st?.name||TBC);xml=r.xml;nameCursor=r.cursor;};
-    for(let i=0;i<5;i++)slot(pkg.stakeholdersSignifi[i]);
-    for(let i=0;i<5;i++)slot(pkg.stakeholdersClient[i]);
-    xml=replaceAllRuns(xml,'{ Company Name }',pkg.title.client||TBC);
-    setSlide(3,xml);
+    // Slide 3 — Stakeholders & Team, generated from the grouped people.
+    // One unique person = one row, their responsibilities combined; the row
+    // band is laid out from the real list rather than dropped into ten fixed
+    // slots, so the card follows the number of PEOPLE, not role assignments.
+    await populateStakeholderSlides(zip,pkg,TBC);
 
     // Slide 4 — Scope of work (every field is a unique string, safe to global-replace)
     xml=await getSlide(4);
