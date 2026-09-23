@@ -10253,6 +10253,370 @@ function ppGoToSO(so){
 // deleted, and per-SO ownership stays in Hardware & Solution Configuration
 // where it belongs. Quantity follows the same 'missing means 1' rule
 // getHardwareSummary() already uses, so the roll-up total matches the lines.
+
+// ══════════════ DEPLOYMENT PROFILE ══════════════
+// A one-page physical-identity sheet per SALES ORDER, for Deployment and
+// technicians: what is being installed, and where. Five sections, nothing
+// else — no PM, dates, milestones, POC, power, connectivity or tracking.
+//
+// 100% READ-ONLY. Every value comes from the canonical resolvers already in
+// use everywhere else; this file adds no data model, no fields and no writes.
+
+// ── STRICT SO-SCOPED HARDWARE ─────────────────────────────────────
+// getProjectHardware() deliberately matches `!h.so_tag || h.so_tag===soTag`,
+// so an UNTAGGED hardware row is returned for every SO you ask about. That is
+// correct for the pages that rely on it and it is NOT changed here — but for
+// this document it would print project-level hardware onto all 150 SOs, which
+// is precisely the borrowing this document must never do.
+//
+// So the Deployment Profile has its own read path:
+//   multi-SO  → project_id + EXACT so_tag. No untagged rows, no siblings.
+//   single-SO → the existing getProjectHardware(), which keeps the legacy
+//               product_type/quantity synthesis those projects still rely on.
+function dpHardwareRowsForSO(proj,soTag){
+  if(!proj)return[];
+  if(isMultiSOProject(proj)){
+    if(!soTag)return[];
+    return hardwareLineItems.filter(h=>h.project_id===proj.id&&h.so_tag===soTag);
+  }
+  return getProjectHardware(proj.id,effectiveSOFor(proj,soTag));
+}
+// Groups by normalised model (trim, collapse whitespace, case-insensitive)
+// and SUMS quantity, so 150 identical rows read "HDL 96 Compartments × 150"
+// and two different models never merge.
+function dpFormFactorForSO(proj,soTag){
+  const by=new Map();
+  // Rows in the order they are stored for this SO, so the sheet reads the way
+  // the hardware lines were entered.
+  const rows=[...dpHardwareRowsForSO(proj,soTag)].sort((a,b)=>(a.sort_order||0)-(b.sort_order||0));
+  rows.forEach(h=>{
+    const model=String(h.model||'').replace(/\s+/g,' ').trim();
+    if(!model)return;
+    const key=model.toLowerCase();
+    const cur=by.get(key)||{model,qty:0};
+    cur.qty+=Number(h.quantity||1)||0;
+    by.set(key,cur);
+  });
+  return[...by.values()];   // first appearance wins; identical models already merged
+}
+// Peripherals come from hardware_line_items.peripherals — free text, comma
+// separated, edited under Hardware & Solution Configuration. Collected from
+// EVERY hardware row on this exact SO and de-duplicated case-insensitively,
+// the same rule buildProjectDocPackage already uses. Never first-row-wins.
+function dpPeripheralsForSO(proj,soTag){
+  const out=[]; const seen=new Set();
+  dpHardwareRowsForSO(proj,soTag).forEach(h=>{
+    String(h.peripherals||'').split(',').map(x=>x.trim()).filter(Boolean).forEach(pv=>{
+      const k=pv.toLowerCase();
+      if(!seen.has(k)){seen.add(k);out.push(pv);}
+    });
+  });
+  return out;
+}
+// The five values for one SO. soConfigText() already refuses to borrow from
+// the project record or a sibling on a multi-SO project, so kiosk ID and
+// address self-report as NOT_CONFIGURED_SO without any extra logic here.
+function dpProfileData(proj,soTag){
+  const multi=isMultiSOProject(proj);
+  const txt=f=>{
+    const v=soConfigText(proj,soTag,f);
+    return v||(multi?NOT_CONFIGURED_SO:'Not configured');
+  };
+  return{
+    so:soTag||effectiveSOFor(proj,'')||'',
+    kioskId:txt('naming_convention'),
+    address:txt('address'),
+    hardware:dpFormFactorForSO(proj,soTag),
+    peripherals:dpPeripheralsForSO(proj,soTag),
+    projectName:proj?proj.name||'':'',
+  };
+}
+function dpSanitize(v){return String(v==null?'':v).replace(/[^\w.-]+/g,'_').replace(/^_+|_+$/g,'').slice(0,80)||'Project';}
+
+// ── ARTWORK ───────────────────────────────────────────────────────
+// Redrawn as inline SVG so the generated file is completely self-contained —
+// nothing is extracted from, or depends on, the reference Word document.
+// Restrained product-document line art: a vending machine and a locker bank.
+function dpArtworkSVG(){
+  return`<svg viewBox="0 0 300 150" width="300" height="150" role="img" aria-label="Vending machine and locker bank" fill="none"
+    stroke="#2B2D33" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="18" y="14" width="88" height="112" rx="6"/>
+    <rect x="28" y="24" width="44" height="76" rx="3"/>
+    <path d="M28 44h44M28 62h44M28 80h44"/>
+    <path d="M33 38c3-4 6-4 9 0s6 4 9 0 6-4 9 0M33 56c3-4 6-4 9 0s6 4 9 0 6-4 9 0M33 74c3-4 6-4 9 0s6 4 9 0 6-4 9 0" stroke-width="1.4" opacity=".55"/>
+    <rect x="80" y="24" width="16" height="20" rx="3"/>
+    <g fill="#2B2D33" stroke="none" opacity=".6">
+      <circle cx="83" cy="54" r="1.6"/><circle cx="88" cy="54" r="1.6"/><circle cx="93" cy="54" r="1.6"/>
+      <circle cx="83" cy="60" r="1.6"/><circle cx="88" cy="60" r="1.6"/><circle cx="93" cy="60" r="1.6"/>
+      <circle cx="83" cy="66" r="1.6"/><circle cx="88" cy="66" r="1.6"/><circle cx="93" cy="66" r="1.6"/>
+    </g>
+    <rect x="80" y="74" width="16" height="6" rx="3"/>
+    <rect x="28" y="108" width="34" height="10" rx="3"/>
+    <path d="M30 126v10M94 126v10"/>
+    <rect x="128" y="26" width="154" height="100" rx="6"/>
+    <path d="M179 26v100M231 26v100M128 59h154M128 92h154"/>
+    <rect x="136" y="34" width="35" height="17" rx="3" stroke-width="1.4" opacity=".75"/>
+    <rect x="188" y="34" width="35" height="17" rx="3" stroke-width="1.4" opacity=".75"/>
+    <rect x="240" y="34" width="35" height="17" rx="3" stroke-width="1.4" opacity=".75"/>
+    <rect x="136" y="67" width="35" height="17" rx="3" stroke-width="1.4" opacity=".75"/>
+    <rect x="188" y="67" width="35" height="17" rx="3" stroke-width="1.4" opacity=".75"/>
+    <rect x="240" y="67" width="35" height="17" rx="3" stroke-width="1.4" opacity=".75"/>
+    <rect x="136" y="100" width="35" height="17" rx="3" stroke-width="1.4" opacity=".75"/>
+    <rect x="188" y="100" width="35" height="17" rx="3" stroke-width="1.4" opacity=".75"/>
+    <rect x="240" y="100" width="35" height="17" rx="3" stroke-width="1.4" opacity=".75"/>
+    <path d="M166 40v5M218 40v5M270 40v5M166 73v5M218 73v5M270 73v5M166 106v5M218 106v5M270 106v5" stroke-width="1.6" opacity=".8"/>
+    <path d="M132 126v10M278 126v10"/>
+  </svg>`;
+}
+
+// ── ONE PAGE ──────────────────────────────────────────────────────
+function dpRenderPage(d,isLast){
+  const e=v=>esc(String(v==null?'':v));
+  const missing=v=>v===NOT_CONFIGURED_SO||v==='Not configured';
+  const na=v=>`<span class="dp-missing">${e(v)}</span>`;
+  const kiosk=missing(d.kioskId)?na(d.kioskId):`<span class="dp-kiosk">${e(d.kioskId)}</span>`;
+  const addr=missing(d.address)?na(d.address):e(d.address);
+  const hw=d.hardware.length
+    ? d.hardware.map(h=>`<div class="dp-line"><span class="dp-model">${e(h.model)}</span><span class="dp-qty">× ${e(h.qty)}</span></div>`).join('')
+    : na('Not configured');
+  const per=d.peripherals.length
+    ? d.peripherals.map(pv=>`<div class="dp-line">${e(pv)}</div>`).join('')
+    : na('Not configured');
+  return`<section class="dp-page${isLast?' dp-last':''}">
+    <header class="dp-head">
+      <div>
+        <div class="dp-brand"><span class="dp-dot"></span>SIGNIFI</div>
+        <h1 class="dp-title"><strong>Deployment</strong><br><span>Profile</span></h1>
+      </div>
+      <div class="dp-art">${dpArtworkSVG()}</div>
+    </header>
+    <div class="dp-row dp-row-2">
+      <div class="dp-card dp-c1">
+        <div class="dp-lbl"><span class="dp-num">01</span>SALES ORDER</div>
+        <div class="dp-sub">the paperwork</div>
+        <div class="dp-val dp-so">${e(d.so)}</div>
+      </div>
+      <div class="dp-card dp-c2">
+        <div class="dp-lbl"><span class="dp-num">02</span>KIOSK ID</div>
+        <div class="dp-sub">the machine&rsquo;s name</div>
+        <div class="dp-val dp-accent">${kiosk}</div>
+      </div>
+    </div>
+    <div class="dp-row">
+      <div class="dp-card dp-c3">
+        <div class="dp-addr">
+          <div class="dp-addr-lbl">
+            <div class="dp-pin">${dpPinSVG()}</div>
+            <div>
+              <div class="dp-num dp-num-light">03</div>
+              <div class="dp-lbl dp-lbl-dark">DEPLOYMENT<br>ADDRESS</div>
+              <div class="dp-sub">where it lives</div>
+            </div>
+          </div>
+          <div class="dp-addr-val">${addr}</div>
+        </div>
+      </div>
+    </div>
+    <div class="dp-row dp-row-2">
+      <div class="dp-card dp-c4">
+        <div class="dp-lbl dp-lbl-dark"><span class="dp-num dp-num-light">04</span>FORM FACTOR</div>
+        <div class="dp-sub">what it is</div>
+        <div class="dp-list">${hw}</div>
+      </div>
+      <div class="dp-card dp-c5">
+        <div class="dp-lbl dp-lbl-dark"><span class="dp-num dp-num-light">05</span>PERIPHERALS / ADD-ONS</div>
+        <div class="dp-sub">what it&rsquo;s packing</div>
+        <div class="dp-list">${per}</div>
+      </div>
+    </div>
+    <footer class="dp-foot">signifi.com</footer>
+  </section>`;
+}
+function dpPinSVG(){
+  return`<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#5A5C63" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.6"/></svg>`;
+}
+const DP_CSS=`
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#f4f4f5;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{font-family:"Helvetica Neue",Helvetica,Arial,system-ui,-apple-system,"Segoe UI",sans-serif;color:#1A1A1A}
+.dp-page{width:8.5in;min-height:11in;margin:0 auto 22px;padding:0.62in 0.66in;background:#fff;display:flex;flex-direction:column;
+  break-after:page;page-break-after:always;box-shadow:0 2px 14px rgba(0,0,0,.09)}
+.dp-page.dp-last{break-after:auto;page-break-after:auto;margin-bottom:0}
+.dp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:26px}
+.dp-brand{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:700;letter-spacing:.22em;color:#1A1A1A;margin-bottom:12px}
+.dp-dot{width:8px;height:8px;border-radius:50%;background:#E22F4A;flex:0 0 auto}
+.dp-title{margin:0;font-size:44px;line-height:1.02;letter-spacing:-.022em;font-weight:800}
+.dp-title strong{color:#111}
+.dp-title span{color:#8A8C93;font-weight:700}
+.dp-art{flex:0 0 auto;background:#F2F2F3;border-radius:14px;padding:14px 16px;display:flex;align-items:center}
+.dp-art svg{display:block;width:250px;height:125px}
+.dp-row{display:flex;gap:16px;margin-bottom:16px}
+.dp-row-2>.dp-card{flex:1 1 0;min-width:0}
+.dp-row-2>.dp-c1{flex:0 0 36%}
+.dp-row-2>.dp-c4{flex:0 0 36%}
+.dp-card{border-radius:14px;padding:18px 20px;min-width:0;break-inside:avoid;page-break-inside:avoid;
+  display:flex;flex-direction:column}
+.dp-c1,.dp-c2{min-height:2.05in}
+.dp-c3{min-height:1.1in;justify-content:center}
+.dp-c4,.dp-c5{min-height:2.25in}
+.dp-c1{background:#5A5C63;color:#fff}
+.dp-c2{background:#17181D;color:#fff;position:relative}
+.dp-c3{background:#F2F2F3;flex:1 1 100%;padding:20px 22px}
+.dp-c4{background:#F2F2F3}
+.dp-c5{background:#fff;border:1px solid #E4E5E9;flex:1 1 0}
+.dp-lbl{font-size:11px;font-weight:700;letter-spacing:.14em;color:#fff;display:flex;align-items:center;gap:9px;line-height:1.35}
+.dp-lbl-dark{color:#1A1A1A}
+.dp-num{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:18px;padding:0 6px;border-radius:9px;
+  background:rgba(255,255,255,.22);font-size:10px;font-weight:700;letter-spacing:.06em;flex:0 0 auto}
+.dp-num-light{background:#E4E5E9;color:#5A5C63}
+.dp-sub{font-size:11.5px;color:#9A9CA3;margin:5px 0 0 35px}
+.dp-c3 .dp-sub,.dp-c4 .dp-sub,.dp-c5 .dp-sub{color:#8A8C93}
+.dp-val{margin-top:20px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  font-size:27px;font-weight:600;letter-spacing:-.01em;word-break:break-word;overflow-wrap:anywhere;line-height:1.2}
+.dp-so{font-size:30px}
+.dp-accent{padding-left:15px;border-left:3px solid #E22F4A}
+.dp-kiosk{display:inline-block}
+.dp-addr{display:flex;gap:26px;align-items:flex-start}
+.dp-addr-lbl{display:flex;gap:12px;flex:0 0 31%;border-right:1px dashed #C9CBD0;padding-right:20px;min-height:74px}
+.dp-pin{flex:0 0 auto;width:38px;height:38px;border-radius:50%;background:#E4E5E9;display:flex;align-items:center;justify-content:center}
+.dp-addr-lbl .dp-num{margin-bottom:7px}
+.dp-addr-lbl .dp-sub{margin-left:0}
+.dp-addr-val{flex:1 1 auto;font-size:17px;line-height:1.5;color:#1A1A1A;padding-top:3px;word-break:break-word;overflow-wrap:anywhere}
+.dp-list{margin-top:16px;font-size:15.5px;line-height:1.55;color:#1A1A1A}
+.dp-line{display:flex;justify-content:space-between;gap:14px;padding:4px 0;border-bottom:1px solid rgba(0,0,0,.07)}
+.dp-line:last-child{border-bottom:none}
+.dp-model{min-width:0;overflow-wrap:anywhere}
+.dp-qty{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;color:#5A5C63;flex:0 0 auto}
+.dp-c5 .dp-line{justify-content:flex-start}
+.dp-missing{color:#B9291F;font-size:15px;font-weight:600;font-family:inherit;letter-spacing:0}
+.dp-val .dp-missing{font-size:17px}
+.dp-foot{margin-top:auto;padding-top:22px;text-align:right;font-size:11px;letter-spacing:.06em;color:#9A9CA3;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dp-bar{position:sticky;top:0;z-index:5;background:#17181D;color:#fff;padding:11px 18px;display:flex;align-items:center;gap:12px;
+  font-size:13px;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif}
+.dp-bar button{font:inherit;font-weight:600;padding:7px 15px;border-radius:7px;border:none;background:#E22F4A;color:#fff;cursor:pointer}
+.dp-bar .dp-hint{color:#9A9CA3;font-size:12px}
+@page{size:Letter;margin:0}
+@media print{
+  html,body{background:#fff}
+  .dp-bar{display:none!important}
+  .dp-page{margin:0;box-shadow:none;width:auto;min-height:100vh}
+}`;
+// Builds the COMPLETE document as a string. Nothing is rendered into the Ops
+// Hub page and no SO Detail panel is constructed — at 150 SOs this is 150
+// string concatenations, not 150 UI mutations.
+function dpBuildDocument(proj,soList,docTitle){
+  const pages=soList.map((so,i)=>dpRenderPage(dpProfileData(proj,so),i===soList.length-1)).join('');
+  return`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(docTitle)}</title><style>${DP_CSS}</style></head><body>
+<div class="dp-bar no-print"><button onclick="window.print()">Print / Save as PDF</button>
+<span class="dp-hint">${soList.length} deployment profile${soList.length===1?'':'s'} &middot; one Sales Order per page</span></div>
+${pages}
+</body></html>`;
+}
+function dpOpenDocument(proj,soList,docTitle){
+  if(!soList.length){showToast('⚠ No SO to generate');return 0;}
+  const html=dpBuildDocument(proj,soList,docTitle);
+  const w=window.open('','_blank');
+  if(!w){showToast('⚠ Allow pop-ups to open the Deployment Profile');return 0;}
+  w.document.open();w.document.write(html);w.document.close();
+  try{w.document.title=docTitle;}catch(e){}
+  return soList.length;
+}
+
+// ── ENTRY POINT ───────────────────────────────────────────────────
+// Single SO, or an SO Detail already open → generate that SO immediately.
+// Project Summary with nothing selected → ask, never guess.
+function dpGenerate(){
+  const proj=projects.find(p=>p.id===ppProjId);
+  if(!proj){showToast('⚠ Open a project first');return;}
+  const list=getSOList(proj);
+  if(list.length<=1){
+    const so=list[0]||'';
+    dpOpenDocument(proj,[so],'Deployment_Profile_'+dpSanitize(so||proj.name));
+    return;
+  }
+  const sel=msoSelectedSO(proj);
+  if(sel&&!msoIsSummary(proj)){
+    dpOpenDocument(proj,[sel],'Deployment_Profile_'+dpSanitize(sel));
+    return;
+  }
+  dpOpenModal();
+}
+let _dpQuery='',_dpPick='';
+function dpModalSOs(proj){
+  const q=_dpQuery.toLowerCase().replace(/\s+/g,' ').trim();
+  const list=getSOList(proj);
+  if(!q)return list;
+  // Search matches the SO, its kiosk ID and its address — the three things a
+  // PM would recognise a site by.
+  return list.filter(so=>{
+    const d=[so,soConfigText(proj,so,'naming_convention'),soConfigText(proj,so,'address')].join(' ').toLowerCase();
+    return d.includes(q);
+  });
+}
+function dpRenderSOItems(){
+  const proj=projects.find(p=>p.id===ppProjId); if(!proj)return'';
+  const list=dpModalSOs(proj);
+  if(!list.length)return'<div style="font-size:12px;color:var(--gray-500);padding:10px 2px">No SO matches that search.</div>';
+  return list.map(so=>{
+    const k=soConfigText(proj,so,'naming_convention');
+    const on=_dpPick===so;
+    return`<button onclick="dpPick('${escJsAttr(so)}')" style="display:flex;justify-content:space-between;gap:10px;width:100%;text-align:left;
+      font-family:var(--font);font-size:12px;padding:7px 11px;border-radius:var(--radius);cursor:pointer;
+      border:1px solid ${on?'var(--red)':'var(--gray-200)'};background:${on?'var(--red-light)':'var(--white)'};margin-bottom:4px">
+      <span style="font-family:var(--mono);font-weight:700;color:${on?'var(--red)':'var(--black)'}">${esc(so)}</span>
+      <span style="color:var(--gray-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(k||'')}</span></button>`;
+  }).join('');
+}
+function dpPick(so){_dpPick=so;dpRefreshModal();}
+function dpSearch(q){_dpQuery=q||'';dpRefreshModal(true);}
+function dpRefreshModal(keepFocus){
+  const items=document.getElementById('dp-items'); if(items)items.innerHTML=dpRenderSOItems();
+  const btn=document.getElementById('dp-gen-one');
+  if(btn){btn.disabled=!_dpPick;btn.style.opacity=_dpPick?'1':'.45';btn.style.cursor=_dpPick?'pointer':'not-allowed';
+    btn.textContent=_dpPick?('Generate '+_dpPick+' →'):'Generate Selected SO →';}
+  if(keepFocus){const i=document.getElementById('dp-q');if(i)i.focus();}
+}
+function dpOpenModal(){
+  const proj=projects.find(p=>p.id===ppProjId); if(!proj)return;
+  _dpQuery='';_dpPick='';
+  const total=getSOList(proj).length;
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:min(520px,95vw)" onclick="event.stopPropagation()">
+    <div class="modal-head"><span class="modal-title">📄 Deployment Profile</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="font-size:11.5px;color:var(--gray-600);margin-bottom:10px;line-height:1.5">
+        A Deployment Profile always belongs to one Sales Order. Pick the SO to generate, or produce one page per SO for all ${total}.</div>
+      <input id="dp-q" placeholder="Search SO, kiosk ID or address…" oninput="dpSearch(this.value)"
+        style="width:100%;font-family:var(--font);font-size:12.5px;padding:7px 11px;border:1px solid var(--gray-300);border-radius:var(--radius);margin-bottom:9px">
+      <div id="dp-items" style="max-height:290px;overflow-y:auto">${dpRenderSOItems()}</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="dpGenerateAll()">Generate All ${total} SOs →</button>
+      <button class="btn btn-primary" id="dp-gen-one" disabled style="opacity:.45;cursor:not-allowed" onclick="dpGenerateSelected()">Generate Selected SO →</button>
+    </div>
+  </div></div>`;
+  setTimeout(()=>{const i=document.getElementById('dp-q');if(i)i.focus();},40);
+}
+function dpGenerateSelected(){
+  const proj=projects.find(p=>p.id===ppProjId);
+  if(!proj||!_dpPick)return;
+  closeModal();
+  dpOpenDocument(proj,[_dpPick],'Deployment_Profile_'+dpSanitize(_dpPick));
+}
+// One document, one page per SO, in the project's canonical getSOList order —
+// never re-sorted, never combined.
+function dpGenerateAll(){
+  const proj=projects.find(p=>p.id===ppProjId); if(!proj)return;
+  const list=getSOList(proj);
+  closeModal();
+  const t0=Date.now();
+  const n=dpOpenDocument(proj,list,'Deployment_Profiles_'+dpSanitize(proj.name));
+  if(n)showToast('Generated '+n+' deployment profile'+(n===1?'':'s')+' · '+(Date.now()-t0)+' ms');
+}
 function ppHardwareRollup(projectId,soTag){
   const by=new Map();
   getProjectHardware(projectId,soTag).forEach(h=>{
@@ -10896,6 +11260,7 @@ function renderProjPageBody(){
           <button onclick="ppGoToKickoffDeck()" style="font-size:11px;padding:6px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);color:var(--gray-700);cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">🎬 Generate Kick-Off Deck</button>
           <button onclick="ppGoToDocTab('install')" style="font-size:11px;padding:6px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);color:var(--gray-700);cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">🔧 Installation Ticket</button>
           <button onclick="ppGoToDocTab('uat')" style="font-size:11px;padding:6px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);color:var(--gray-700);cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">📋 UAT Package</button>
+          <button onclick="dpGenerate()" style="font-size:11px;padding:6px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:var(--white);color:var(--gray-700);cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap" title="One-page deployment identity sheet per Sales Order">📄 Deployment Profile</button>
         </div>
         <button onclick="openLinksPopout()" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #3b82f6;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">🔗 Quick links</button>
         ${(ppHasSoTags||isMaster(proj)||(proj.so_number||"").split(",").filter(s=>s.trim()).length>1)?`<button onclick="toggleAllSOView()" id="btn-show-all-so" style="font-size:11px;padding:6px 14px;border-radius:var(--radius);border:1px solid #16a34a;background:#14532d;color:#86efac;cursor:pointer;font-family:var(--font);font-weight:500;white-space:nowrap">📊 All SO milestones</button>`:''}
