@@ -1270,7 +1270,7 @@ const XL_HEADERS=['SO Number','Kiosk ID / Naming Convention','Form Factor','Quan
 // Build stamp. Shown in the import preview footer and exposed as
 // window.OPSHUB_BUILD so a UAT failure can never again be ambiguous between
 // "the fix is wrong" and "the browser is running the old file".
-const OPSHUB_BUILD='2026-09-15 · excel-full-milestones-v3';
+const OPSHUB_BUILD='2026-09-29 · vinyl-print-planning-v1';
 try{window.OPSHUB_BUILD=OPSHUB_BUILD;}catch(e){}
 const XL_SO_CONFIG_MAP={
   'Kiosk ID / Naming Convention':'naming_convention','Site Address':'address',
@@ -7084,7 +7084,7 @@ function renderDeptView(dept){
     production:{title:'Production schedule',startKey:'production-start',endKey:'production-end',color:'#7c3aed',cols:['Project','SO','Client','PM','Prod start','Prod end','Duration','Status']},
     quality:{title:'Quality / QA schedule',startKey:'quality-start',endKey:'quality-end',color:'#d97706',cols:['Project','SO','Client','PM','QA start','QA end','Duration','Vinyl','UAT','Status']},
     shipping:{title:'Shipping schedule',startKey:'shipping',endKey:'shipping',color:'#059669',cols:['Project','SO','Client','PM','Pack & ship','Delivery','Status','COI','Install Ticket','Notes','']},
-    installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO','Client','PM','Training','Installation','Confirmed','Install Ticket','Status','Notes','']},
+    installation:{title:'Installation schedule',startKey:'installation',endKey:'installation',color:'#db2777',cols:['Project','SO','Client','PM','Training','Installation','Install Ticket','Status','Notes','']},
   };
   const c=cfg[dept];
   let ganttHtml='';
@@ -7118,10 +7118,11 @@ function renderDeptView(dept){
       const instMs=milestones.find(m=>m.project_id===p.id&&m.key==='installation');
       const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)" title="Click to change date">`:`<button onclick="openAddMsForProj('${p.id}')" style="font-size:10px;color:var(--blue);background:none;border:1px dashed var(--blue);border-radius:4px;padding:1px 6px;cursor:pointer">+ Add</button>`;
       const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)" title="Click to change date">`:`<button onclick="openAddMsForProj('${p.id}')" style="font-size:10px;color:var(--blue);background:none;border:1px dashed var(--blue);border-radius:4px;padding:1px 6px;cursor:pointer">+ Add</button>`;
-      const confirmed=p.install_date_confirmed?`<span style="font-size:11px;color:var(--success);font-weight:600">✓ ${fmt(p.install_date_confirmed)}</span>`:`<span style="font-size:10px;color:var(--gray-400)">Pending</span>`;
+      // CLEANUP B: the project-level "Confirmed" install date column is gone.
+      // The Installation column beside it is the canonical per-SO milestone.
       const ticketUrl=p.install_ticket_url||'';
       const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>`:`<input type="text" value="" placeholder="Paste URL..." data-proj="${p.id}" style="font-size:10px;padding:2px 6px;border:1px solid var(--gray-200);border-radius:4px;width:110px;font-family:var(--font)" onchange="saveInstallTicketUrl('${p.id}',this.value)">`;
-      extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';
+      extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+ticketCell+'</td>';
       extraAfterStatus=deptNotesCell(p.id,'notes_install');
     }
     const statusCell=dept==='shipping'?'<td>'+shipStatusDropdown(p.id,null,getShippingStatus(p,null))+'</td>':'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>';
@@ -7144,7 +7145,7 @@ function renderDeptView(dept){
       const linkedProj=r.project_id?projects.find(p=>p.id===r.project_id):null;
       const adTicket=r.install_ticket_url||linkedProj?.install_ticket_url||'';
       const adTicketCell=adTicket?'<a href="'+adTicket+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none;font-weight:500">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';
-      extra='<td class="date-cell">'+fmt(r.trainingDate||r.training_date)+'</td><td class="date-cell">'+fmt(r.installDate||r.install_date)+'</td><td class="date-cell"><span style="font-size:10px;color:var(--gray-400)">—</span></td><td class="date-cell">'+adTicketCell+'</td>';
+      extra='<td class="date-cell">'+fmt(r.trainingDate||r.training_date)+'</td><td class="date-cell">'+fmt(r.installDate||r.install_date)+'</td><td class="date-cell">'+adTicketCell+'</td>';
       extraAfterStatus=deptNotesCell(r.project_id||'','notes_install');
     }
     else{extra='<td class="date-cell">'+fmt(r.trainingDate||r.training_date)+'</td><td class="date-cell">'+fmt(r.installDate||r.install_date)+'</td>';}
@@ -7178,7 +7179,7 @@ function renderDeptView(dept){
       if(dept==='production'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td>';}
       else if(dept==='quality'){const dur=sd&&ed?Math.round((new Date(ed+'T00:00:00')-new Date(sd+'T00:00:00'))/86400000)+' days':'—';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(ed)+'</td><td class="date-cell">'+dur+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'vinyl'))+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'uat'))+'</td>';}
       else if(dept==='shipping'){const sTicketUrl=getSOConfigSummary(p,so).install_ticket_url||'';const sTicketCell=sTicketUrl?'<a href="'+sTicketUrl+'" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>':'<span style="font-size:10px;color:var(--gray-400)">—</span>';extra='<td class="date-cell">'+fmt(sd)+'</td><td class="date-cell">'+fmt(getMsDateForSO(p.id,'delivery'))+'</td>';extraAfterStatus=coiCell(p,so)+'<td class="date-cell">'+sTicketCell+'</td>';}
-      else if(dept==='installation'){const trainMs=soMs.find(m=>m.key==='training');const instMs=soMs.find(m=>m.key==='installation');const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)">`:'—';const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)">`:'—';const confirmed=p.install_date_confirmed?`<span style="font-size:11px;color:var(--success);font-weight:600">✓ ${fmt(p.install_date_confirmed)}</span>`:'<span style="font-size:10px;color:var(--gray-400)">Pending</span>';const ticketUrl=getSOConfigSummary(p,so).install_ticket_url||'';const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>`:'-';extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+confirmed+'</td><td class="date-cell">'+ticketCell+'</td>';}
+      else if(dept==='installation'){const trainMs=soMs.find(m=>m.key==='training');const instMs=soMs.find(m=>m.key==='installation');const trainEdit=trainMs?`<input type="date" value="${trainMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${trainMs.id}',this.value)">`:'—';const instEdit=instMs?`<input type="date" value="${instMs.date||''}" style="font-family:var(--font);font-size:11px;border:none;background:transparent;color:inherit;cursor:pointer;width:90px" onchange="quickUpdateMs('${instMs.id}',this.value)">`:'—';const ticketUrl=getSOConfigSummary(p,so).install_ticket_url||'';const ticketCell=ticketUrl?`<a href="${ticketUrl}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">Open ↗</a>`:'-';extra='<td class="date-cell">'+trainEdit+'</td><td class="date-cell">'+instEdit+'</td><td class="date-cell">'+ticketCell+'</td>';}
       const soStatusCell=dept==='shipping'?'<td>'+shipStatusDropdown(p.id,so,getShippingStatus(p,so))+'</td>':'<td><span class="status-chip '+st.chip+'">'+st.label+'</span></td>';
       const html='<tr><td style="font-weight:500">'+p.name+(dept==='shipping'?' '+coiWarning(p,so):'')+' <span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:700">'+so+'</span><button onclick="goToProjPage(this.dataset.pid)" data-pid="'+p.id+'" style="margin-left:6px;font-size:10px;padding:1px 6px;border:1px solid var(--gray-200);border-radius:4px;background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font)">↗</button></td><td style="font-family:var(--mono);font-size:11px;color:var(--red);font-weight:600">'+so+'</td><td>'+(p.client||'—')+'</td><td style="font-size:11px;color:var(--gray-500)">'+(p.pm||'—')+'</td>'+extra+soStatusCell+extraAfterStatus+'</tr>';
       return{_d:sd||'',html};
@@ -7340,7 +7341,10 @@ function attachScheduleFilterEvents(dept,rerenderFn){
   bind('sf-from-'+dept,'dateFrom','onchange');
   bind('sf-to-'+dept,'dateTo','onchange');
 }
-let vinylShowPrintDays=true;
+// Print Planning is the default view on the Vinyl tab — it is the thing a PM
+// opens the page to do. Collapsible, per-session only; collapsing writes
+// nothing.
+let vinylShowPrintPlanning=true;
 function renderVinyl(){
   const el=document.getElementById('tab-vinyl');
   const vinylBase=hideCompleted['vinyl']?vinylSchedule.filter(v=>v.status!=='Complete'):vinylSchedule;
@@ -7390,9 +7394,9 @@ function renderVinyl(){
     countLabel:filtered.length+' of '+source.length+' rows'
   });
   el.innerHTML=`<div class="section">
-    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Print days — what Savin prints, by day</div>
-      <button onclick="vinylShowPrintDays=!vinylShowPrintDays;renderVinyl()" style="font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer;font-family:var(--font);font-weight:600">${vinylShowPrintDays?'Hide':'Show'} print days</button></div>
-    ${vinylShowPrintDays?renderVinylPrintDays():''}
+    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl print planning</div>
+      <button onclick="vinylShowPrintPlanning=!vinylShowPrintPlanning;renderVinyl()" style="font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer;font-family:var(--font);font-weight:600">${vinylShowPrintPlanning?'Hide':'Show'} print planning</button></div>
+    ${vinylShowPrintPlanning?renderVinylPrintPlanning():''}
     <div class="section-head" style="margin-top:18px"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderVinyl')}${salesDropdown('renderVinyl')}${hideCompletedBtn('vinyl')}${hideNoVinylDateBtn()}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
     ${filterBar}
     <div style="overflow-x:auto"><table class="sched-table"><thead><tr>
@@ -7695,10 +7699,159 @@ async function pgDrop(e,targetKey){
   renderPlanogram();
 }
 
-// ── VINYL — SAVIN'S PRINT DAY VIEW ────────────────────────────────
-// Presentation only. Reads the existing vinyl_schedule rows and the canonical
-// vinyl milestone dates; writes nothing and adds no schema. PROJECT-level by
-// design: Savin needs to know which projects to print on a day, not which SOs.
+// ── VINYL — PRINT PLANNING (EXPLICIT, PROJECT-LEVEL) ──────────────
+// Savin's print day is now ASSIGNED, never inferred.
+//
+// Canonical store: projects.vinyl_print_day (date, NULL = Unassigned).
+// One project has ONE print day however many SOs it has. Nothing is copied
+// down to vinyl_schedule, and no milestone is read to decide it. The vinyl /
+// ship dates shown beside each project are INFORMATIONAL only — they help the
+// PM choose, they never assign.
+//
+// The old inference (vinylPrintDays + vinylRowDate) is no longer the source of
+// Print Day. Both functions are retained unchanged further below because they
+// are legitimate vinyl-schedule helpers and removing them would be a global
+// change; they simply have no caller in the Print Day feature any more.
+
+// APPLICABILITY — deliberately NOT a new definition. A project has vinyl work
+// exactly when the Vinyl page already thinks it does: it owns at least one
+// project-linked (non-standalone) row in vinylSchedule. vinylSchedule is built
+// in loadAll() from the saved vinyl_schedule rows PLUS a virtual row per
+// project/SO, so this is the same set the Vinyl schedule table lists — just
+// collapsed to one entry per project.
+function vinylProjectRows(p){
+  if(!p)return[];
+  return vinylSchedule.filter(v=>v.project_id===p.id&&!v.is_standalone);
+}
+function vinylProjectApplicable(p){
+  if(!p)return false;
+  if(p.status==='software-active')return false;          // same exclusion renderVinyl uses
+  if(p.status==='complete')return false;
+  const rows=vinylProjectRows(p);
+  if(!rows.length)return false;
+  // Nothing left to print once every one of its vinyl rows is Complete.
+  return rows.some(v=>String(v.status||'')!=='Complete');
+}
+// ONE entry per project — never one per SO and never one per vinyl row.
+// The dates are the canonical per-SO resolvers reduced to the soonest across
+// the project's own SOs, so a 150-SO project still occupies a single line.
+function vinylPrintProjects(){
+  const out=[];
+  projects.forEach(p=>{
+    if(!vinylProjectApplicable(p))return;
+    if(isMaster(p)&&getChildren(p.id).length)return;      // children represent the work
+    const rows=vinylProjectRows(p);
+    const sos=[...new Set(rows.map(v=>v.so).filter(Boolean))];
+    const soKeys=sos.length?sos:[''];
+    const min=arr=>{const a=arr.filter(Boolean).sort();return a.length?a[0]:null;};
+    out.push({
+      project_id:p.id,
+      name:p.name||'(unnamed project)',
+      client:p.client||'',
+      pm:p.pm||'',
+      sos,
+      soCount:sos.length||1,
+      rows:rows.length,
+      formFactor:(typeof getHardwareSummary==='function'?getHardwareSummary(p.id):'')||p.form_factor||'',
+      // Canonical resolvers — project_id + milestone key + so_tag.
+      vinylDate:min(soKeys.map(so=>resolveMsDateForSO(p.id,'vinyl',so))),
+      shipDate:min(soKeys.map(so=>resolveMsDateForSO(p.id,'shipping',so))),
+      printDay:p.vinyl_print_day||null,
+    });
+  });
+  return out;
+}
+// Buckets. UNASSIGNED is ordered by soonest canonical Ship Date so the team
+// sees what needs planning first — an ORDER, not an assignment: this writes
+// nothing and sets no vinyl_print_day.
+function vinylPrintPlanning(){
+  const all=vinylPrintProjects();
+  const byShip=(a,b)=>String(a.shipDate||'9999-12-31').localeCompare(String(b.shipDate||'9999-12-31'))
+    ||String(a.vinylDate||'9999-12-31').localeCompare(String(b.vinylDate||'9999-12-31'))
+    ||String(a.name).localeCompare(String(b.name));
+  const unassigned=all.filter(x=>!x.printDay).sort(byShip);
+  const map=new Map();
+  all.filter(x=>x.printDay).forEach(x=>{
+    const b=map.get(x.printDay)||{date:x.printDay,projects:[]};
+    b.projects.push(x); map.set(x.printDay,b);
+  });
+  const days=[...map.values()]
+    .map(b=>({date:b.date,projects:b.projects.sort(byShip)}))
+    .sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  return{unassigned,days,total:all.length};
+}
+// The ONLY writer. Exactly one projects row, exactly one column.
+async function vinylSetPrintDay(projectId,value){
+  const day=value?String(value):null;
+  const p=projects.find(x=>x.id===projectId);
+  if(p&&(p.vinyl_print_day||null)===day){renderVinyl();return;}
+  const{error}=await sb.from('projects').update({vinyl_print_day:day}).eq('id',projectId);
+  if(error){showToast('⚠ Could not save print day: '+error.message);return;}
+  if(p)p.vinyl_print_day=day;                 // no milestone, no vinyl_schedule row touched
+  showToast(day?('Print day set to '+fmt(day)+' ✓'):'Print day cleared — back to Unassigned ✓');
+  renderVinyl();
+}
+function vinylClearPrintDay(projectId){return vinylSetPrintDay(projectId,null);}
+
+function vinylPrintRow(pr,assigned){
+  const ctx=[pr.client,pr.formFactor].filter(Boolean).map(t=>esc(t)).join('  ·  ');
+  const soNote=pr.soCount>1?`<span title="${esc(pr.sos.join(', '))}" style="font-size:10px;color:var(--gray-400);margin-left:6px">${pr.soCount} SOs</span>`:'';
+  return`<tr data-printproj="${pr.project_id}">
+    <td style="padding:5px 8px;font-size:12.5px;font-weight:500;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(pr.name)}${soNote}</td>
+    <td style="padding:5px 8px;font-size:11.5px;color:var(--gray-600);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${ctx.replace(/"/g,'&quot;')}">${ctx||'—'}</td>
+    <td style="padding:5px 8px;font-size:11.5px;color:var(--gray-600);white-space:nowrap">${esc(pr.pm||'—')}</td>
+    <td class="date-cell" style="padding:5px 8px;font-size:11.5px;white-space:nowrap" title="Canonical vinyl milestone (soonest across this project&#39;s SOs) — informational only">${pr.vinylDate?fmt(pr.vinylDate):'—'}</td>
+    <td class="date-cell" style="padding:5px 8px;font-size:11.5px;white-space:nowrap" title="Canonical shipping milestone (soonest across this project&#39;s SOs) — informational only">${pr.shipDate?fmt(pr.shipDate):'—'}</td>
+    <td style="padding:4px 8px;white-space:nowrap">
+      <input type="date" class="sched-input" style="width:132px" value="${pr.printDay||''}"
+        data-printday="${pr.project_id}"
+        onchange="vinylSetPrintDay('${pr.project_id}',this.value)"
+        title="${assigned?'Change the assigned print day — moves this project to another day':'Assign a print day'}">
+      ${assigned?`<button onclick="vinylClearPrintDay('${pr.project_id}')" title="Clear the print day — returns to Unassigned" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:15px;margin-left:2px">✕</button>`:''}
+    </td>
+  </tr>`;
+}
+function vinylPrintBucket(title,sub,list,accent,assigned){
+  return`<div style="margin:0 14px 12px;border:1px solid ${accent.border};border-radius:var(--radius);overflow:hidden">
+    <div style="display:flex;align-items:baseline;gap:10px;padding:8px 13px;background:${accent.bg};border-bottom:1px solid var(--gray-200)">
+      <span style="font-size:10px;font-weight:700;letter-spacing:.1em;color:${accent.fg}">${title}</span>
+      ${sub?`<span style="font-size:11px;color:${accent.fg};font-weight:600">${sub}</span>`:''}
+      <span style="margin-left:auto;font-size:11px;color:var(--gray-500)">${list.length} project${list.length===1?'':'s'}</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse"><tbody>
+      ${list.map(pr=>vinylPrintRow(pr,assigned)).join('')}
+    </tbody></table>
+  </div>`;
+}
+function renderVinylPrintPlanning(){
+  const{unassigned,days,total}=vinylPrintPlanning();
+  if(!total)return'<div style="padding:14px 16px;font-size:12px;color:var(--gray-500)">No project currently has vinyl work.</div>';
+  const t0=isoD(today());
+  const head=`<div style="padding:2px 16px 8px;font-size:11px;color:var(--gray-500)">
+    ${total} project${total===1?'':'s'} with vinyl work · one line per project, however many SOs it has ·
+    print day is assigned by a PM — never inferred from a milestone</div>`;
+  const un=unassigned.length
+    ? vinylPrintBucket('UNASSIGNED','ordered by soonest ship date',unassigned,
+        {border:'#f0c36d',bg:'#fffaf0',fg:'#92600a'},false)
+    : `<div style="margin:0 14px 12px;padding:10px 13px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;color:var(--gray-500)">Every project with vinyl work has a print day ✓</div>`;
+  const assigned=days.map(d=>{
+    const isToday=d.date===t0, dd=daysDiff(d.date);
+    const when=isToday?'TODAY':(dd===1?'Tomorrow':(dd<0?Math.abs(dd)+'d ago':'in '+dd+' days'));
+    return vinylPrintBucket('PRINT DAY · '+(fmtFull?fmtFull(d.date):fmt(d.date)),when,d.projects,
+      isToday?{border:'var(--red)',bg:'var(--red-light)',fg:'var(--red)'}
+             :{border:'var(--gray-200)',bg:'var(--gray-50)',fg:'var(--gray-500)'},true);
+  }).join('');
+  return`<div style="padding:4px 0 10px">${head}${un}${assigned}</div>`;
+}
+
+// ── RETAINED VINYL HELPERS (no longer the Print Day source) ───────
+// vinylPrintDays()/vinylRowDate() grouped vinyl rows by their canonical vinyl
+// milestone date. That inference has been REMOVED from the Print Day feature:
+// Print Planning above reads projects.vinyl_print_day and nothing else.
+// The two functions themselves are left exactly as they were rather than
+// deleted, because vinylRowDate() is ordinary vinyl-schedule date resolution
+// and removing either would be a global change beyond this task. Neither has
+// any remaining caller inside the app.
 function vinylPrintDays(opts){
   const days=new Map();
   const horizon=opts?.horizonDays||60;
@@ -7734,99 +7887,32 @@ function vinylRowDate(v){
   const canon=v.project_id?resolveMsDateForSO(v.project_id,'vinyl',so):null;
   return canon||v.date||null;
 }
-function renderVinylPrintDays(){
-  const days=vinylPrintDays();
-  if(!days.length)return'<div style="padding:14px 16px;font-size:12px;color:var(--gray-500)">No upcoming print days scheduled.</div>';
-  const t0=isoD(today());
-  return`<div style="padding:4px 0 10px">
-    ${days.map(d=>{
-      const isToday=d.date===t0, dd=daysDiff(d.date);
-      const when=isToday?'TODAY':(dd===1?'Tomorrow':(dd<0?Math.abs(dd)+'d ago':'in '+dd+' days'));
-      return`<div style="margin:0 14px 12px;border:1px solid ${isToday?'var(--red)':'var(--gray-200)'};border-radius:var(--radius);overflow:hidden">
-        <div style="display:flex;align-items:baseline;gap:10px;padding:9px 13px;background:${isToday?'var(--red-light)':'var(--gray-50)'};border-bottom:1px solid var(--gray-200)">
-          <span style="font-size:10px;font-weight:700;letter-spacing:.1em;color:${isToday?'var(--red)':'var(--gray-500)'}">PRINT DAY</span>
-          <strong style="font-size:14px">${fmtFull?fmtFull(d.date):fmt(d.date)}</strong>
-          <span style="font-size:11px;color:${isToday?'var(--red)':'var(--gray-500)'};font-weight:600">${when}</span>
-          <span style="margin-left:auto;font-size:11px;color:var(--gray-500)">${d.projects.length} project${d.projects.length===1?'':'s'}</span>
-        </div>
-        <div style="padding:4px 0">
-          ${d.projects.map(pr=>`<div style="display:flex;align-items:baseline;gap:10px;padding:6px 14px;border-bottom:1px solid var(--gray-50)">
-            <strong style="font-size:12.5px;min-width:0">${esc(pr.name)}</strong>
-            ${pr.client?`<span style="font-size:11px;color:var(--gray-500)">${esc(pr.client)}</span>`:''}
-            ${pr.rows>1?`<span title="${esc(pr.sos.join(', '))}" style="font-size:10px;color:var(--gray-400)">${pr.rows} vinyl rows</span>`:''}
-            <span style="margin-left:auto;font-size:11px;color:var(--gray-500)">${esc(pr.pm||'')}</span>
-          </div>`).join('')}
-        </div></div>`;}).join('')}
-  </div>`;
-}
 function renderPlanogram(){
+  // CLEANUP A — the legacy "Planogram schedule" table that used to render
+  // below the queue has been removed. It was a SECOND editor over the same
+  // work: planogram_schedule rows on the left, canonical planogram-* milestones
+  // on the right, with two different orderings and two different "done"
+  // notions. The canonical surface is pgRenderQueue(), which is keyed on
+  // project_id + milestone key + so_tag like every other SO-level view.
+  //
+  // The planogram_schedule TABLE and its rows are untouched — notes, priority
+  // and revision_status are still read (here, via pgRenderQueue, and by the
+  // Planogram check-in workspace) and still written by the queue's own
+  // controls. Only the duplicate editing UI is gone.
+  //
+  // Rendering this tab performs ZERO database writes: pgRenderQueue() reads
+  // the already-loaded projects/milestones/planogramSchedule arrays and
+  // returns a string.
   const el=document.getElementById('tab-planogram');
-  const planBase=hideCompleted['planogram']?planogramSchedule.filter(v=>v.status!=='Complete'):planogramSchedule;
-  const source=planBase.filter(v=>{
-    const p=projects.find(x=>x.id===v.project_id);
-    if(!p)return!pmFilter&&!salesFilter;
-    if(p.status==='software-active')return false;
-    if(pmFilter&&p.pm!==pmFilter)return false;
-    if(salesFilter&&p.sales!==salesFilter)return false;
-    if(isMaster(p)){const kids=getChildren(p.id);if(kids.length)return planogramSchedule.some(vv=>kids.some(c=>c.id===vv.project_id))===false||false;}
-    return true;
-  });
-  const filtered=applyScheduleFilters(source,'planogram');
-  const rows=filtered.map((item,i)=>{
-    const origIdx=planogramSchedule.indexOf(item);
-    const readStyle='font-size:12px;color:var(--gray-700);padding:4px 2px;';
-    const soFull=(item.so||'').replace(/"/g,'&quot;');
-    return`<tr draggable="true" data-idx="${origIdx}" data-type="planogram" style="${item.status==='Vacation'?'background:#fefce8;color:#854d0e;font-weight:600;':''}" ondragstart="dragStart(event,${origIdx},'planogram')" ondragover="dragOver(event)" ondrop="dragDrop(event,${origIdx},'planogram')" ondragleave="dragLeave(event)">
-      <td><span class="drag-handle">⠿</span></td><td><span class="priority-num">${item.priority||i+1}</span></td>
-      <td style="${readStyle}max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${soFull}">${item.so?truncateSO(item.so,3):'—'}</td>
-      <td style="${readStyle}max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(item.client||'').replace(/"/g,'&quot;')}">${item.client||'—'}</td>
-      <td style="${readStyle}max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(item.name||'').replace(/"/g,'&quot;')}">${item.name||'—'}</td>
-      ${(()=>{const lp=planLinkedProj(item);const hwText=lp?getHardwareSummary(lp.id):(item.form_factor||'');const safe=esc(hwText||'—');return lp?`<td style="${readStyle}max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;text-decoration:underline;text-decoration-style:dotted" title="${hwText?safe.replace(/"/g,'&quot;'):'Click to add hardware'}" onclick="openHardwareEditor('${lp.id}')">${safe}</td>`:`<td style="${readStyle}max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${safe.replace(/"/g,'&quot;')}">${safe}</td>`;})()}
-      <td><input type="date" class="sched-input" style="width:120px" value="${pgDateForSO(item.project_id,item.so,PG_START)||item.planStart||''}" onchange="pgSetDate('${item.project_id}','${escJsAttr(item.so||'')}',PG_START,this.value)" title="Planogram start — writes the canonical milestone"></td>
-      <td><input type="date" class="sched-input" style="width:120px" value="${pgDateForSO(item.project_id,item.so,PG_END)||item.planEnd||''}" onchange="pgSetDate('${item.project_id}','${escJsAttr(item.so||'')}',PG_END,this.value)" title="Planogram end — writes the canonical milestone"></td>
-      <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${origIdx},'date',this.value,'planogram')"></td>
-      <td>
-        <select class="sched-select" onchange="ps2('${item.id}','status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select>
-        <select class="sched-select" style="margin-top:3px" onchange="ps2('${item.id}','revision_status',this.value)" title="Revision status">
-          ${['','In Progress','Approved','Revision Requested','Re-approved'].map(s=>`<option value="${s}"${(item.revision_status||'')===(s)?' selected':''}>${s||'— revision —'}</option>`).join('')}
-        </select>
-      </td>
-      <td><input class="sched-input" value="${(item.notes||'').replace(/"/g,'&quot;')}" placeholder="Notes / revision details..." style="min-width:180px" onchange="ps2('${item.id}','notes',this.value)" title="${item.notes||''}"></td>
-      <td style="white-space:nowrap">
-        ${item.project_id?`<button onclick="syncPlanToProject(${origIdx})" style="font-size:10px;padding:2px 8px;border-radius:8px;border:1px solid var(--blue);color:var(--blue);background:transparent;cursor:pointer;font-family:var(--font)" title="Push dates to Project Overview milestones">↑ Sync</button> `:''}
-        <button onclick="removeSchedRow('planogram',${origIdx})" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:16px">✕</button>
-      </td>
-    </tr>`;
-  }).join('');
-  const filterBar=renderScheduleFilterBar('planogram',{
-    statusOptions:STATUS_OPTS,
-    searchPlaceholder:'🔍 Search name, SO, client, machine...',
-    rerenderCall:'renderPlanogram()',
-    countLabel:filtered.length+' of '+source.length+' rows'
-  });
   el.innerHTML=`<div class="section">
     <div class="section-head"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram queue — by SO</div>
       <div style="font-size:11px;color:var(--gray-500)">Only SOs that have Planogram milestones appear here</div></div>
     ${pgRenderQueue()}
-    <div class="section-head" style="margin-top:18px"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderPlanogram')}${salesDropdown('renderPlanogram')}${hideCompletedBtn('planogram')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
-    ${filterBar}
-    <div style="overflow-x:auto"><table class="sched-table"><thead><tr>
-      <th style="width:28px"></th><th style="width:32px">#</th>
-      <th onclick="sortPlan('so')" style="cursor:pointer">SO ↕</th>
-      <th onclick="sortPlan('client')" style="cursor:pointer">Customer ↕</th>
-      <th onclick="sortPlan('name')" style="cursor:pointer">Project ↕</th>
-      <th>Form Factor</th>
-      <th onclick="sortPlan('planStart')" style="cursor:pointer">Plan Start ↕</th>
-      <th onclick="sortPlan('planEnd')" style="cursor:pointer">Plan End ↕</th>
-      <th onclick="sortPlan('date')" style="cursor:pointer">Sign-off Date ↕</th>
-      <th onclick="sortPlan('status')" style="cursor:pointer">Status ↕</th>
-      <th>Notes</th>
-      <th style="width:28px"></th>
-    </tr></thead><tbody>${rows||'<tr><td colspan="12" style="text-align:center;padding:2rem;color:var(--gray-500)">No rows match the current filters.</td></tr>'}</tbody></table></div>
-    <div class="actions-row"><button class="btn-add" onclick="addSchedRow('planogram')">+ Add planogram</button><span style="font-size:11px;color:var(--gray-500);margin-left:auto">Drag ⠿ to reprioritize</span></div>
   </div>`;
-  attachScheduleFilterEvents('planogram',renderPlanogram);
 }
+// sortPlan() is retained but no longer reachable from the UI: its only caller
+// was the removed legacy table's sortable headers. Left in place rather than
+// deleted so nothing that may still reference it by name breaks.
 function sortPlan(key){
   planogramSchedule.sort((a,b)=>{const av=a[key]||'';const bv=b[key]||'';return av.localeCompare(bv);});
   renderPlanogram();showToast('Sorted by '+key);
@@ -11968,19 +12054,15 @@ function renderProjPageBody(){
             })()}</tbody>
           </table>
         </div>`}
-        <div style="padding:12px 16px;border-top:1px solid var(--gray-100);background:var(--gray-50)">
-          <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Installation dates</div>
-          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;align-items:end">
-            <div><div style="font-size:10px;color:var(--gray-500);margin-bottom:3px">Option 1</div>
-              <input type="date" id="pp-inst-opt1" value="${proj.install_date_opt1||''}" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%;background:var(--white)" onchange="saveProjInstDates('${proj.id}')"></div>
-            <div><div style="font-size:10px;color:var(--gray-500);margin-bottom:3px">Option 2</div>
-              <input type="date" id="pp-inst-opt2" value="${proj.install_date_opt2||''}" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%;background:var(--white)" onchange="saveProjInstDates('${proj.id}')"></div>
-            <div><div style="font-size:10px;color:var(--gray-500);margin-bottom:3px">Option 3</div>
-              <input type="date" id="pp-inst-opt3" value="${proj.install_date_opt3||''}" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:1px solid var(--gray-300);border-radius:var(--radius);width:100%;background:var(--white)" onchange="saveProjInstDates('${proj.id}')"></div>
-            <div><div style="font-size:10px;color:var(--success);font-weight:600;margin-bottom:3px">✓ Confirmed</div>
-              <input type="date" id="pp-inst-confirmed" value="${proj.install_date_confirmed||''}" style="font-family:var(--font);font-size:12px;padding:5px 8px;border:2px solid var(--success);border-radius:var(--radius);width:100%;background:#f0fdf4" onchange="saveProjInstDates('${proj.id}')"></div>
-          </div>
-        </div>
+        <!-- CLEANUP B — the project-level "Installation dates" block (Option 1 /
+             Option 2 / Option 3 / ✓ Confirmed) has been removed. It was a second,
+             project-scoped store for a date the schedule already owns per SO.
+             The canonical installation date is
+             resolveMsDateForSO(project_id,'installation',so_tag) — one date, one
+             milestone key, per Sales Order — edited in the milestone tracker above.
+             The projects.install_date_opt1/opt2/opt3/install_date_confirmed
+             COLUMNS and every stored value are deliberately left in place; this
+             change removes UI only and writes nothing. -->
       </div>
     </div>
 
@@ -17891,19 +17973,11 @@ function applyTemplateToIntake(){
 
 // ── EXPORT PROJECT PAGE ────────────────────────────────────
 // ── LINKS POPOUT ───────────────────────────────────────────
-async function saveProjInstDates(projId){
-  const updates={
-    install_date_opt1:document.getElementById('pp-inst-opt1')?.value||null,
-    install_date_opt2:document.getElementById('pp-inst-opt2')?.value||null,
-    install_date_opt3:document.getElementById('pp-inst-opt3')?.value||null,
-    install_date_confirmed:document.getElementById('pp-inst-confirmed')?.value||null,
-  };
-  await sb.from('projects').update(updates).eq('id',projId);
-  // Update local projects array
-  const p=projects.find(x=>x.id===projId);
-  if(p)Object.assign(p,updates);
-  showToast('Installation dates saved ✓');
-}
+// saveProjInstDates() removed with CLEANUP B. It was the only writer to
+// projects.install_date_opt1/opt2/opt3/install_date_confirmed, and its only
+// caller was the removed Installation dates block. Dropping it guarantees the
+// retired fields can no longer be written from the app while their historical
+// values stay exactly as they are.
 async function saveCustomLink(key,newName,newUrl){
   // key = 'custom_1'..'custom_5' — stable slot identifier stored in category field
   let row=ppData.links.find(l=>l.category===key);
