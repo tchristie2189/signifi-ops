@@ -1672,41 +1672,47 @@ async function pgLoad(){
   pgMsDone={};(md.data||[]).forEach(d=>{pgMsDone[d.milestone_id]=d;});
   planogramSchedule=(ps.data||[]);
 }
+// CLEANUP D — the queue is a worklist, not a history. Completed SOs are
+// hidden by default behind an explicit "Show completed (n)" toggle, and each
+// outstanding SO is one compact line so ~10-15 fit on a laptop screen without
+// scrolling. Ordering, completion and the sparse-priority model are unchanged:
+// pgQueueRows() still returns the full ordered list and this only chooses
+// which of those rows to paint. Toggling is pure DOM — zero database writes.
+let pgShowDone=false;
+function pgToggleDone(){pgShowDone=!pgShowDone;pgRender();}
 function pgRender(){
   const rows=pgQueueRows();
   const open=rows.filter(r=>!r.done);
+  const done=rows.filter(r=>r.done);
   const el=document.getElementById('ci-content');
   if(!rows.length){el.innerHTML='<div style="padding:40px;text-align:center;color:#888">No SO currently has planogram work.</div>';return;}
   const fmtD=d=>d?new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}):'—';
-  el.innerHTML=`
-    <div style="display:flex;gap:16px;align-items:baseline;padding:4px 2px 14px;flex-wrap:wrap">
-      <div style="font-size:15px;font-weight:600">Planogram queue</div>
-      <div style="font-size:12px;color:#888">${open.length} outstanding · ${rows.length-open.length} done · soonest ship date first</div>
-    </div>
-    ${rows.map(r=>`
-      <div style="background:${r.done?'#12131a':'#181a21'};border:1px solid ${r.manual?'#a16207':'#2a2c33'};border-radius:10px;padding:13px 15px;margin-bottom:9px;${r.done?'opacity:.6;':''}">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
-          <div style="min-width:0">
-            <div style="font-size:14px;font-weight:600;color:#fff">${pgEsc(r.project)}</div>
-            <div style="display:flex;gap:10px;align-items:center;margin-top:3px;flex-wrap:wrap">
-              <span style="font-family:ui-monospace,Menlo,monospace;font-size:12px;font-weight:700;color:#e22f4a">${pgEsc(r.so)}</span>
-              <span style="font-size:11px;color:#888">PM ${pgEsc(r.pm||'—')}</span>
-              ${r.manual?'<span style="font-size:9.5px;font-weight:700;color:#fbbf24;background:#422006;border-radius:9px;padding:1px 8px">MANUALLY PRIORITISED</span>':''}
-            </div>
-          </div>
-          <button onclick="pgDone('${r.pid}','${String(r.so).replace(/'/g,"\\'")}')" ${r.done?'disabled':''}
-            style="font-size:12px;font-weight:600;padding:8px 18px;border-radius:8px;border:none;cursor:${r.done?'default':'pointer'};
+  const q=v=>String(v).replace(/'/g,"\\'");
+  // Compact row. The Mark Done control, the notes field and the MANUALLY
+  // PRIORITISED chip all survive — they are just laid out on one line.
+  const card=r=>`
+      <div style="background:${r.done?'#101118':'#181a21'};border:1px solid ${r.manual?'#a16207':'#23252c'};border-left:3px solid ${r.done?'#1f3d2b':'#0891b2'};border-radius:6px;padding:5px 10px;margin-bottom:4px;${r.done?'opacity:.55;':''}">
+        <div style="display:flex;align-items:center;gap:9px;flex-wrap:nowrap;overflow:hidden">
+          <span style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;color:#e22f4a;white-space:nowrap;flex:0 0 auto">${pgEsc(r.so)}</span>
+          <span style="font-size:13px;font-weight:600;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:2 1 110px;min-width:0" title="${pgEsc(r.project)} · PM ${pgEsc(r.pm||'—')}">${pgEsc(r.project)}</span>
+          ${r.manual?'<span title="Manually prioritised by the PM" style="font-size:9px;font-weight:700;color:#fbbf24;background:#422006;border-radius:8px;padding:1px 6px;white-space:nowrap;flex:0 0 auto">PINNED</span>':''}
+          <span style="font-size:11px;color:#8b9099;white-space:nowrap;flex:0 0 auto;overflow:hidden" title="Planogram start / end / sign-off">${fmtD(r.start)} → ${fmtD(r.end)} · ${fmtD(r.signoff)}</span>
+          <span style="font-size:11px;color:#c9ced6;white-space:nowrap;flex:0 0 auto" title="Ship date — the queue is ordered by this">Ship <strong style="color:#fff">${fmtD(r.ship)}</strong></span>
+          <input value="${pgEsc(r.notes)}" placeholder="Notes…" onchange="pgNote('${q(r.pid)}','${q(r.so)}',this.value)"
+            style="flex:1 1 80px;min-width:60px;font-family:inherit;font-size:11px;padding:3px 7px;border-radius:5px;border:1px solid #2a2c33;background:#0e0f14;color:#ddd">
+          <button onclick="pgDone('${q(r.pid)}','${q(r.so)}')" ${r.done?'disabled':''}
+            style="flex:0 0 auto;font-size:11px;font-weight:600;padding:4px 11px;border-radius:5px;border:none;cursor:${r.done?'default':'pointer'};
             background:${r.done?'#1f3d2b':'#0891b2'};color:${r.done?'#4ade80':'#fff'};white-space:nowrap">${r.done?'✓ Done':'Mark Done'}</button>
         </div>
-        <div style="display:flex;gap:18px;margin-top:10px;font-size:11.5px;color:#9aa0a8;flex-wrap:wrap">
-          <span>Start <strong style="color:#ddd">${fmtD(r.start)}</strong></span>
-          <span>End <strong style="color:#ddd">${fmtD(r.end)}</strong></span>
-          <span>Sign-off <strong style="color:#ddd">${fmtD(r.signoff)}</strong></span>
-          <span>Ship <strong style="color:#fff">${fmtD(r.ship)}</strong></span>
-        </div>
-        <input value="${pgEsc(r.notes)}" placeholder="Notes…" onchange="pgNote('${r.pid}','${String(r.so).replace(/'/g,"\\'")}',this.value)"
-          style="margin-top:9px;width:100%;font-family:inherit;font-size:12px;padding:6px 9px;border-radius:6px;border:1px solid #2a2c33;background:#0e0f14;color:#ddd">
-      </div>`).join('')}`;
+      </div>`;
+  el.innerHTML=`
+    <div style="display:flex;gap:12px;align-items:baseline;padding:2px 2px 10px;flex-wrap:wrap">
+      <div style="font-size:15px;font-weight:600">Planogram queue</div>
+      <div style="font-size:12px;color:#888">${open.length} outstanding${done.length?' · '+done.length+' done':''} · soonest ship date first</div>
+      ${done.length?`<button onclick="pgToggleDone()" style="margin-left:auto;font-size:11.5px;font-weight:600;padding:5px 12px;border-radius:6px;border:1px solid #2a2c33;background:${pgShowDone?'#1b1d24':'#0e0f14'};color:#9aa0a8;cursor:pointer;font-family:inherit">${pgShowDone?'Hide':'Show'} completed (${done.length})</button>`:''}
+    </div>
+    ${open.length?open.map(card).join(''):'<div style="padding:26px;text-align:center;color:#4ade80;font-size:13px">All planogram work is complete ✓</div>'}
+    ${pgShowDone&&done.length?`<div style="font-size:10.5px;font-weight:700;letter-spacing:.09em;color:#5c6169;margin:16px 0 7px">COMPLETED</div>`+done.map(card).join(''):''}`;
 }
 // ONE control. Completes END and SIGN-OFF. Planogram START is never
 // auto-completed — if it is still open the operator is told, not overruled.
