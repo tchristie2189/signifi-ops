@@ -3056,7 +3056,13 @@ async function loadAll(){
     const pm2=p?milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram sign')):null;
     const pmStart=p?milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram start')):null;
     const pmEnd=p?milestones.find(m=>m.project_id===p.id&&(m.label||'').toLowerCase().includes('planogram end')):null;
-    return{...v,machineType:v.machine_type||'',date:pm2?.date||v.date||'',planStart:pmStart?.date||v.plan_start||'',planEnd:pmEnd?.date||v.plan_end||'',name:p?.name||v.name,so:p?.so_number||v.so,client:p?.client||v.client};
+    // `so` is the row's OWN Sales Order and must not be clobbered by the
+    // project's full SO list. Overwriting it made every saved row come back
+    // holding "S1, S2, S3…", which broke per-SO lookup after a reload and is
+    // the same mechanism that put comma-separated lists into the stored
+    // column. Same fix as the vinyl_schedule so_tag defect. The project list
+    // is only a fallback for a row that has no SO of its own.
+    return{...v,machineType:v.machine_type||'',date:pm2?.date||v.date||'',planStart:pmStart?.date||v.plan_start||'',planEnd:pmEnd?.date||v.plan_end||'',name:p?.name||v.name,so:v.so||p?.so_number||'',client:p?.client||v.client};
   }).concat(newPlanRows)
   // Sort: rows with dates first (by date asc), missing dates at bottom
   .sort((a,b)=>{
@@ -4234,6 +4240,39 @@ async function pbHubLoad(){
 function isProjectFullySplit(projMs){
   return projMs.length>0&&projMs.every(m=>m.so_tag);
 }
+// ── SPLIT STATE — ONE DEFINITION FOR EVERY SURFACE ────────────────
+// The banner asked `every(m=>m.so_tag)` while the Split guard asked
+// `some(m=>m.so_tag)`. Those are opposite quantifiers over the same set, so a
+// project with tagged sets PLUS a couple of untagged additions answered YES to
+// both: the banner offered "Split by SO" and the button refused as "already
+// split". Neither was wrong alone; there was simply no third state. There is
+// now, and banner, guard, All SO Milestones, Project Page and Overview all
+// read it.
+const SPLIT_SINGLE='SINGLE', SPLIT_UNSPLIT='UNSPLIT', SPLIT_FULL='FULLY_SPLIT', SPLIT_UNASSIGNED='SPLIT_WITH_UNASSIGNED';
+function projectSplitState(proj,projMs){
+  if(!proj)return SPLIT_SINGLE;
+  if(!isMultiSOProject(proj))return SPLIT_SINGLE;
+  const ms=projMs||milestones.filter(m=>m.project_id===proj.id);
+  if(!ms.length)return SPLIT_UNSPLIT;
+  const tagged=ms.filter(m=>m.so_tag&&String(m.so_tag).trim());
+  if(!tagged.length)return SPLIT_UNSPLIT;
+  return tagged.length===ms.length?SPLIT_FULL:SPLIT_UNASSIGNED;
+}
+// The milestones on a split project that carry no so_tag. These are ordinary
+// rows a PM added through a path that had no SO selector — real work, not
+// corruption, so they are surfaced for assignment rather than deleted, and
+// they must never trigger a re-split.
+function projectUnassignedMs(projId){
+  const proj=projects.find(p=>p.id===projId);
+  if(!proj||!isMultiSOProject(proj))return[];
+  const ms=milestones.filter(m=>m.project_id===projId);
+  if(projectSplitState(proj,ms)!==SPLIT_UNASSIGNED)return[];
+  return ms.filter(m=>!m.so_tag||!String(m.so_tag).trim());
+}
+// "Split by SO" is offered for exactly one state. SPLIT_WITH_UNASSIGNED is
+// repaired by assigning the stray rows, never by re-splitting — re-splitting a
+// 44-tagged project would insert a second full set per SO.
+function canOfferSplit(proj,projMs){return projectSplitState(proj,projMs)===SPLIT_UNSPLIT;}
 function pbHasProductionMs(pid){
   return milestones.some(m=>m.project_id===pid&&(m.key==='production-start'||m.key==='production-end'));
 }
@@ -6531,7 +6570,7 @@ function renderOverview(){
   // Check if milestones are already split by SO
   const soList=getSOList(proj);
   const hasSoTags=isProjectFullySplit(projMs);
-  const canSplit=soList.length>1&&!hasSoTags;
+  const canSplit=canOfferSplit(proj,projMs);
 
   const buildMsHtml=(ms,soLabel='')=>{
     const filtered=hideCompleted['overview']?ms.filter(m=>!isMilestoneEffectivelyDone(m)):ms;
@@ -6561,6 +6600,18 @@ function renderOverview(){
     }).join('');
   };
   // SO grouping: use so_tag if split, otherwise show split button
+  // A split project carrying stray untagged rows gets a targeted assignment
+  // prompt here — never the Split banner, which would invite a re-split.
+  const unassignedMs=projectSplitState(proj,projMs)===SPLIT_UNASSIGNED?projectUnassignedMs(proj.id):[];
+  const unassignedHtml=unassignedMs.length?`<div style="grid-column:1/-1;margin:4px 0 12px">
+    <div style="background:#fffbeb;border:1px solid #d97706;border-radius:8px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div>
+        <div style="font-size:12px;font-weight:600;color:#92400e">${unassignedMs.length} milestone${unassignedMs.length===1?" isn't":"s aren't"} assigned to an SO</div>
+        <div style="font-size:11px;color:#a16207;margin-top:2px">${esc(unassignedMs.map(m=>m.label||m.key).join(', '))} — this project is already split, so assign ${unassignedMs.length===1?'it':'them'} rather than splitting again.</div>
+      </div>
+      <button onclick="openAssignUnassignedModal('${proj.id}')" style="font-size:12px;padding:7px 16px;border-radius:var(--radius);border:none;background:#d97706;color:white;cursor:pointer;font-family:var(--font);font-weight:600;white-space:nowrap">Assign to SO</button>
+    </div>
+  </div>`:'';
   const splitBtnHtml=canSplit?`<div style="grid-column:1/-1;margin:4px 0 12px">
     <div style="background:#fffbeb;border:1px solid #d97706;border-radius:8px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px">
       <div>
@@ -6598,7 +6649,7 @@ function renderOverview(){
       return soHeader+buildMsHtml(soMs,so);
     }).join('');
   } else {
-    msHtml=splitBtnHtml+buildMsHtml(projMs,'');
+    msHtml=unassignedHtml+splitBtnHtml+buildMsHtml(projMs,'');
   }
   const overviewProjects=filterBySA(filterBySales(filterByPM(activeProjects('overview'))));
   const pillsHtml=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem;padding:10px 12px;background:var(--white);border:1px solid var(--gray-100);border-radius:var(--radius-lg);flex-wrap:wrap">
@@ -6805,11 +6856,7 @@ function openAddMsForProj(projId){
   const hasSoTags=projMs.length>0&&projMs.every(m=>m.so_tag);
   const soList=getSOList(proj);
   // For SO-split projects show a dropdown so the milestone lands in the right group
-  const soField=hasSoTags&&soList.length>1
-    ?`<div class="field"><label>SO</label><select id="em-so">${soList.map(so=>`<option value="${so}">${so}</option>`).join('')}</select></div>`
-    :hasSoTags&&soList.length===1
-      ?`<input type="hidden" id="em-so" value="${soList[0]}">`
-      :'';
+  const soField=msScopeFieldHtml(proj,'em');
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
     <div class="modal-head"><span class="modal-title">Add milestone — ${proj?.name||''}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body"><div class="form-grid">
@@ -6827,12 +6874,17 @@ async function saveEvForProj(projId){
   const isNA=document.getElementById('em-na')?.checked||false;
   const date=isNA?null:(document.getElementById('em-date').value||null);
   if(!label){alert('Please fill in a label.');return;}
-  const soTag=document.getElementById('em-so')?.value||null;
-  const{data,error}=await sb.from('milestones').insert({project_id:projId,key:document.getElementById('em-type').value,label,date,original_date:date,not_applicable:isNA,changed_by:currentUserName,so_tag:soTag||null}).select();
-  if(error){alert('Error: '+error.message);return;}
-  if(!data||!data.length){alert('The milestone was not saved — the server returned no confirmation. Please try again, and let us know if this keeps happening.');return;}
+  const proj=projects.find(p=>p.id===projId);
+  const soTags=msScopeSelected('em');
+  if(msScopeNeeded(proj)&&!soTags.length){alert('This project is split by SO — choose at least one Sales Order for this milestone.');return;}
+  let res;
+  try{ res=await msInsertMilestone(projId,{key:document.getElementById('em-type').value,label,date,notApplicable:isNA,soTags}); }
+  catch(err){alert('Error: '+err.message);return;}
+  if(!res.inserted.length){alert('Nothing added — that milestone already exists on '+(res.skipped.join(', ')||'this project')+'.');return;}
   await logActivity('added milestone',label,label,projId,null,date);
-  closeModal();showToast('Milestone added ✓');await loadAll();
+  closeModal();
+  showToast('Milestone added ✓'+(res.inserted.length>1?' ('+res.inserted.length+' SOs)':'')+(res.skipped.length?' · '+res.skipped.length+' already existed':''));
+  await loadAll();
 }
 function goToProjPage(id){
   selectedProjId=id;
@@ -7288,6 +7340,7 @@ function attachScheduleFilterEvents(dept,rerenderFn){
   bind('sf-from-'+dept,'dateFrom','onchange');
   bind('sf-to-'+dept,'dateTo','onchange');
 }
+let vinylShowPrintDays=true;
 function renderVinyl(){
   const el=document.getElementById('tab-vinyl');
   const vinylBase=hideCompleted['vinyl']?vinylSchedule.filter(v=>v.status!=='Complete'):vinylSchedule;
@@ -7337,7 +7390,10 @@ function renderVinyl(){
     countLabel:filtered.length+' of '+source.length+' rows'
   });
   el.innerHTML=`<div class="section">
-    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderVinyl')}${salesDropdown('renderVinyl')}${hideCompletedBtn('vinyl')}${hideNoVinylDateBtn()}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
+    <div class="section-head"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Print days — what Savin prints, by day</div>
+      <button onclick="vinylShowPrintDays=!vinylShowPrintDays;renderVinyl()" style="font-size:11px;padding:5px 12px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer;font-family:var(--font);font-weight:600">${vinylShowPrintDays?'Hide':'Show'} print days</button></div>
+    ${vinylShowPrintDays?renderVinylPrintDays():''}
+    <div class="section-head" style="margin-top:18px"><div class="section-title" style="border-left:3px solid var(--blue);padding-left:8px">Vinyl schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderVinyl')}${salesDropdown('renderVinyl')}${hideCompletedBtn('vinyl')}${hideNoVinylDateBtn()}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
     ${filterBar}
     <div style="overflow-x:auto"><table class="sched-table"><thead><tr>
       <th style="width:28px"></th><th style="width:32px">#</th>
@@ -7358,6 +7414,350 @@ function renderVinyl(){
 function sortVinyl(key){
   vinylSchedule.sort((a,b)=>{const av=a[key]||'';const bv=b[key]||'';return av.localeCompare(bv);});
   renderVinyl();showToast('Sorted by '+key);
+}
+
+// ══════════════ PLANOGRAM — CANONICAL MODEL ══════════════
+// Planogram had no canonical key: every row was key='other' identified by
+// LABEL TEXT, which is the one thing this app never treats as identity. These
+// are the canonical keys. Historical rows are NOT migrated — pgRoleOf() reads
+// both shapes, so nothing has to move before the feature works.
+const PG_START='planogram-start', PG_END='planogram-end', PG_SIGNOFF='planogram-signoff';
+const PG_KEYS=[PG_START,PG_END,PG_SIGNOFF];
+const PG_ROLE_LABEL={[PG_START]:'Planogram start',[PG_END]:'Planogram end',[PG_SIGNOFF]:'Planogram sign-off'};
+// EXACT legacy labels only, and only on key='other'. Production also contains
+// Planogram-ish labels filed under 'arrival', 'quality-start' and 'training',
+// plus free-text 'other' rows like "Planogram - Final Share to Client". Those
+// are somebody's custom milestones, not the canonical start/end/sign-off, and
+// are deliberately NOT claimed here — a substring match would swallow them.
+const PG_LEGACY_LABELS={
+  'planogram start':PG_START, 'planogram start - tbc':PG_START,
+  'planogram end':PG_END,     'planogram end - tbc':PG_END,
+  'planogram sign-off':PG_SIGNOFF, 'planogram signoff':PG_SIGNOFF, 'planogram sign off':PG_SIGNOFF,
+  'planogram sign-off - tbc':PG_SIGNOFF,
+};
+function pgNormLabel(v){return String(v==null?'':v).replace(/\s+/g,' ').trim().toLowerCase();}
+// Which canonical Planogram role a milestone plays, or null. Never guesses.
+function pgRoleOf(m){
+  if(!m)return null;
+  if(PG_KEYS.includes(m.key))return m.key;
+  if((m.key||'other')!=='other')return null;
+  return PG_LEGACY_LABELS[pgNormLabel(m.label)]||null;
+}
+// Every legacy variant actually encountered, for the migration report.
+function pgLegacyVariantsSeen(){
+  const seen=new Map();
+  milestones.forEach(m=>{
+    if(PG_KEYS.includes(m.key))return;
+    const role=pgRoleOf(m);
+    if(!role)return;
+    const k=(m.key||'other')+' | '+(m.label||'');
+    const cur=seen.get(k)||{key:m.key||'other',label:m.label||'',role,count:0};
+    cur.count++; seen.set(k,cur);
+  });
+  return[...seen.values()].sort((a,b)=>b.count-a.count);
+}
+// Planogram-ish rows this resolver deliberately does NOT claim — surfaced so
+// the ambiguity is visible rather than silently swallowed or silently dropped.
+function pgUnclaimedPlanogramish(){
+  return milestones.filter(m=>/planogram/i.test(m.label||'')&&!pgRoleOf(m))
+    .map(m=>({project_id:m.project_id,key:m.key||'other',label:m.label||'',so_tag:m.so_tag||null}));
+}
+// One Planogram milestone for project+SO+role. project_id + key + so_tag, the
+// same identity rule every other resolver uses.
+function pgMsForSO(pid,so,role){
+  const proj=projects.find(p=>p.id===pid);
+  const rows=milestones.filter(m=>m.project_id===pid&&pgRoleOf(m)===role);
+  if(!rows.length)return null;
+  if(proj&&isMultiSOProject(proj)){
+    if(!so)return null;
+    return rows.find(m=>m.so_tag===so)||null;
+  }
+  const eff=effectiveSOFor(proj,so);
+  return rows.find(m=>!m.so_tag||m.so_tag===eff)||rows[0]||null;
+}
+function pgDateForSO(pid,so,role){return pgMsForSO(pid,so,role)?.date||null;}
+// APPLICABILITY, with no new column: an SO needs a planogram exactly when it
+// HAS planogram milestones. No milestones, no planogram work, not in the queue.
+function pgSOHasPlanogram(pid,so){return PG_KEYS.some(r=>!!pgMsForSO(pid,so,r));}
+function pgIsDone(pid,so){
+  const end=pgMsForSO(pid,so,PG_END), sgn=pgMsForSO(pid,so,PG_SIGNOFF);
+  const d=m=>!!(m&&milestoneDone[m.id]);
+  if(!end&&!sgn)return false;
+  return(!end||d(end))&&(!sgn||d(sgn));
+}
+// The schedule row that carries the OPERATIONAL fields (priority, notes,
+// status) for one project+SO. Reused from planogram_schedule — no new table.
+// Rows whose `so` holds a comma-separated list are legacy and are matched only
+// as a project-level fallback, never treated as belonging to one SO.
+function pgScheduleRow(pid,so){
+  return planogramSchedule.find(r=>r.project_id===pid&&pgNormLabel(r.so)===pgNormLabel(so))||null;
+}
+function pgLegacyListRows(){
+  return planogramSchedule.filter(r=>String(r.so||'').includes(','));
+}
+// THE QUEUE — one entry per SO that actually has planogram work.
+// Default order is soonest canonical SHIP date first. A row a PM has dragged
+// carries an explicit priority (>0) and is pinned to that position, and is
+// flagged when that differs from where the ship date alone would put it.
+function pgQueue(opts){
+  const out=[];
+  projects.forEach(p=>{
+    if(p.status==='complete'&&!opts?.includeComplete)return;
+    getSOList(p).forEach(so=>{
+      if(!pgSOHasPlanogram(p.id,so))return;
+      const row=pgScheduleRow(p.id,so);
+      out.push({project_id:p.id,project:p.name,client:p.client||'',pm:p.pm||'',so,
+        start:pgDateForSO(p.id,so,PG_START), end:pgDateForSO(p.id,so,PG_END),
+        signoff:pgDateForSO(p.id,so,PG_SIGNOFF),
+        ship:resolveMsDateForSO(p.id,'shipping',so),
+        done:pgIsDone(p.id,so),
+        notes:row?.notes||'', status:row?.status||'', rowId:row?.id||null,
+        priority:Number(row?.priority||0)});
+    });
+  });
+  const auto=[...out].sort(pgByShip);
+  const autoPos={}; auto.forEach((x,i)=>{autoPos[x.project_id+'|'+x.so]=i;});
+  const ordered=pgApplyOrder(out);
+  ordered.forEach((x,i)=>{
+    x.autoIndex=autoPos[x.project_id+'|'+x.so];
+    // Flagged only when a manual priority actually moved it.
+    x.manual=x.priority>0&&x.autoIndex!==i;
+  });
+  return ordered;
+}
+// SPARSE MANUAL PRIORITY.
+// `priority` is the ABSOLUTE 1-based position a PM dragged that SO to — not a
+// dense rank over the whole queue. Ordering is therefore: take every row with
+// no manual priority in canonical ship-date order, then insert each pinned row
+// at its own target position, lowest first.
+//
+// That matters for writes: a drag persists ONE row. The previous version
+// renumbered the entire queue, so one drag on Lowe's 150 wrote 150 rows and
+// materialised a planogram_schedule row for 149 SOs nobody had touched.
+//
+// It also keeps the two systems independent: rows without a manual priority
+// continue to re-sort purely by canonical ship date, so changing a ship date
+// reorders the automatic rows while pinned rows hold their intended slot. A
+// future "reset to calculated order" is just priority = 0 on that row.
+const pgByShip=(a,b)=>String(a.ship||'9999-12-31').localeCompare(String(b.ship||'9999-12-31'))
+  ||String(a.so).localeCompare(String(b.so));
+function pgApplyOrder(items){
+  const pinned=items.filter(x=>x.priority>0).sort((a,b)=>a.priority-b.priority||pgByShip(a,b));
+  const autos=items.filter(x=>!(x.priority>0)).sort(pgByShip);
+  const out=autos.slice();
+  pinned.forEach(pn=>out.splice(Math.max(0,Math.min(pn.priority-1,out.length)),0,pn));
+  return out;
+}
+// ── CANONICAL DATE WRITE (the Vinyl pattern) ──────────────────────
+// Vinyl already learned this lesson: writing vinyl_schedule.date AND the
+// milestone left two editable stores that drifted (80/200 vinyl and 55/200
+// ship dates disagreed). Planogram had the same shape — ps2() wrote
+// plan_start/plan_end to planogram_schedule and never touched the milestone.
+// A schedule date edit now writes the CANONICAL milestone only; the schedule
+// reads it back. Legacy plan_start/plan_end values are left untouched for audit.
+async function pgSetDate(pid,so,role,val){
+  const ms=pgMsForSO(pid,so,role);
+  if(!ms){showToast('⚠ No '+(PG_ROLE_LABEL[role]||role)+' milestone for '+(so||'this project'));return false;}
+  const old=ms.date||null;
+  if((old||'')===(val||''))return true;
+  const patch={date:val||null,changed_by:currentUserName,changed_at:new Date().toISOString()};
+  if(!ms.original_date&&old)patch.original_date=old;
+  const{error}=await sb.from('milestones').update(patch).eq('id',ms.id);
+  if(error){showToast('⚠ Save failed: '+error.message);return false;}
+  Object.assign(ms,patch);
+  await sb.from('milestone_history').insert({milestone_id:ms.id,project_id:pid,old_date:old,new_date:val||null,changed_by:currentUserName,reason:'Planogram schedule'});
+  showToast('Saved ✓');
+  return true;
+}
+// Operational-only fields still live on planogram_schedule, created lazily for
+// project+SO the first time someone sets one — the same virtual-row pattern
+// the schedule pages already use, so no migration and no pre-created rows.
+async function pgSetOps(pid,so,field,val){
+  const col={notes:'notes',status:'status',priority:'priority',revisionStatus:'revision_status'}[field]||field;
+  let row=pgScheduleRow(pid,so);
+  if(row&&row.id){
+    const{error}=await sb.from('planogram_schedule').update({[col]:val,updated_at:new Date().toISOString()}).eq('id',row.id);
+    if(error){showToast('⚠ Save failed: '+error.message);return;}
+    row[col==='revision_status'?'revisionStatus':field]=val; row[col]=val;
+  } else {
+    const proj=projects.find(p=>p.id===pid);
+    const{data,error}=await sb.from('planogram_schedule').insert({project_id:pid,so,name:proj?.name||'',
+      client:proj?.client||'',status:field==='status'?val:'Scheduled',priority:field==='priority'?val:0,
+      notes:field==='notes'?val:null,updated_at:new Date().toISOString()}).select().single();
+    if(error){showToast('⚠ Save failed: '+error.message);return;}
+    if(data){
+      // If this project+SO was represented by an auto-generated VIRTUAL row
+      // (id === null, created by loadAll for display), replace it rather than
+      // pushing a second entry — two rows for one SO would make pgScheduleRow
+      // return whichever Array.find hit first, which is exactly the kind of
+      // first-row-wins ambiguity this codebase keeps removing.
+      const vi=planogramSchedule.findIndex(r=>!r.id&&r.project_id===pid&&pgNormLabel(r.so)===pgNormLabel(so));
+      if(vi>=0)planogramSchedule.splice(vi,1,data); else planogramSchedule.push(data);
+    }
+  }
+  showToast('Saved ✓');
+}
+// Reprioritise = ORDER ONLY, and ONE row. No milestone is read or written
+// here, and no untouched SO gets a schedule row just because a neighbour moved.
+async function pgMoveTo(pid,so,targetIndex){
+  await pgSetOps(pid,so,'priority',Math.max(1,targetIndex+1));
+}
+// Kept as a thin wrapper so any existing caller still works, but it now writes
+// ONLY the rows whose stored priority genuinely differs from what the new
+// arrangement requires — never the whole queue.
+async function pgReorder(orderedKeys){
+  const cur=pgQueue();
+  const byKey={}; cur.forEach(x=>{byKey[x.project_id+'|'+x.so]=x;});
+  let writes=0;
+  for(let i=0;i<orderedKeys.length;i++){
+    const row=byKey[orderedKeys[i]];
+    if(!row)continue;
+    // A row already sitting where the calculated order puts it needs no
+    // persisted priority at all.
+    const needsPin=row.autoIndex!==i;
+    const want=needsPin?i+1:0;
+    if(Number(row.priority||0)===want)continue;
+    if(want===0&&!row.rowId)continue;            // nothing stored, nothing to clear
+    const[pid,so]=orderedKeys[i].split('|');
+    await pgSetOps(pid,so,'priority',want);
+    writes++;
+  }
+  return writes;
+}
+// The single Done control. Completes END and SIGN-OFF only. Start is never
+// fabricated — if it is still open that is reported, not quietly closed.
+async function pgMarkDone(pid,so,markedBy){
+  const end=pgMsForSO(pid,so,PG_END), sgn=pgMsForSO(pid,so,PG_SIGNOFF), start=pgMsForSO(pid,so,PG_START);
+  const targets=[end,sgn].filter(Boolean);
+  if(!targets.length)return{ok:false,reason:'no planogram end or sign-off milestone'};
+  const rows=targets.filter(m=>!milestoneDone[m.id])
+    .map(m=>({milestone_id:m.id,project_id:pid,marked_by:markedBy||currentUserName}));
+  if(rows.length){
+    const{data,error}=await sb.from('milestone_done').insert(rows).select();
+    if(error)return{ok:false,reason:error.message};
+    (data||rows).forEach(r=>{milestoneDone[r.milestone_id]=r;});
+  }
+  const startOpen=!!start&&!milestoneDone[start.id];
+  return{ok:true,completed:targets.map(m=>pgRoleOf(m)),startOpen,
+    warning:startOpen?'Planogram start is still open for '+so+' — it was NOT auto-completed':null};
+}
+
+// ── PLANOGRAM QUEUE — BY SO, FOR PMs ──────────────────────────────
+// Rendered above the legacy project-level schedule table so a PM can see which
+// SO is outstanding without opening each project.
+function pgRenderQueue(){
+  const q=pgQueue();
+  if(!q.length)return'<div style="padding:14px 16px;font-size:12px;color:var(--gray-500)">No SO currently has Planogram milestones. An SO enters this queue as soon as it has a Planogram start, end or sign-off.</div>';
+  const outstanding=q.filter(x=>!x.done).length;
+  const manual=q.filter(x=>x.manual).length;
+  const d=v=>v?fmt(v):'<span style="color:var(--gray-300)">—</span>';
+  const rows=q.map((x,i)=>{
+    const key=x.project_id+'|'+x.so;
+    return`<tr draggable="true" data-pgkey="${escJsAttr(key)}" ondragstart="pgDragStart(event,'${escJsAttr(key)}')" ondragover="event.preventDefault()" ondrop="pgDrop(event,'${escJsAttr(key)}')"
+      style="${x.done?'opacity:.55;':''}${x.manual?'background:#fffbeb;':''}">
+      <td style="text-align:center;color:var(--gray-400);font-family:var(--mono);font-size:11px">⠿ ${i+1}</td>
+      <td style="font-size:11.5px">${esc(x.project)}${x.manual?'<span title="Manually prioritised — moved away from its ship-date position" style="margin-left:6px;font-size:9.5px;font-weight:700;color:#92400e;background:#fde68a;border-radius:9px;padding:1px 7px">MANUAL</span>':''}</td>
+      <td style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--red)">${esc(x.so)}</td>
+      <td style="font-size:11px">${esc(x.pm||'—')}</td>
+      <td class="date-cell">${d(x.start)}</td>
+      <td class="date-cell">${d(x.end)}</td>
+      <td class="date-cell">${d(x.signoff)}</td>
+      <td class="date-cell" style="font-weight:600">${d(x.ship)}</td>
+      <td style="text-align:center">${x.done?'<span class="status-chip chip-done">Done</span>':'<span class="status-chip chip-atrisk">Outstanding</span>'}</td>
+      <td><input value="${esc(x.notes)}" placeholder="notes" style="width:150px;font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;font-family:var(--font)"
+        onchange="pgSetOps('${x.project_id}','${escJsAttr(x.so)}','notes',this.value)"></td>
+    </tr>`;}).join('');
+  return`<div style="padding:0 0 6px">
+    <div style="display:flex;gap:18px;align-items:center;padding:8px 14px;font-size:11.5px;color:var(--gray-600);flex-wrap:wrap">
+      <span><strong>${q.length}</strong> SO${q.length===1?'':'s'} need a planogram</span>
+      <span><strong style="color:var(--red)">${outstanding}</strong> outstanding</span>
+      <span><strong style="color:var(--success)">${q.length-outstanding}</strong> complete</span>
+      ${manual?`<span style="color:#92400e"><strong>${manual}</strong> manually prioritised</span>`:''}
+      <span style="margin-left:auto;color:var(--gray-400)">Default order: soonest ship date first · drag ⠿ to reprioritise (order only — never changes dates)</span>
+    </div>
+    <div style="overflow:auto;max-height:52vh">
+    <table class="pp-table" style="min-width:980px"><thead><tr>
+      <th>#</th><th style="text-align:left">Project</th><th style="text-align:left">SO</th><th style="text-align:left">PM</th>
+      <th>Start</th><th>End</th><th>Sign-off</th><th>Ship</th><th>Status</th><th style="text-align:left">Notes</th>
+    </tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+let _pgDragKey=null;
+function pgDragStart(e,key){_pgDragKey=key;try{e.dataTransfer.effectAllowed='move';}catch(_){}}
+async function pgDrop(e,targetKey){
+  e.preventDefault();
+  if(!_pgDragKey||_pgDragKey===targetKey)return;
+  const keys=pgQueue().map(x=>x.project_id+'|'+x.so);
+  const from=keys.indexOf(_pgDragKey), to=keys.indexOf(targetKey);
+  if(from<0||to<0)return;
+  const[pid,so]=_pgDragKey.split('|');
+  _pgDragKey=null;
+  await pgMoveTo(pid,so,to);      // ONE row written, whatever the queue size
+  renderPlanogram();
+}
+
+// ── VINYL — SAVIN'S PRINT DAY VIEW ────────────────────────────────
+// Presentation only. Reads the existing vinyl_schedule rows and the canonical
+// vinyl milestone dates; writes nothing and adds no schema. PROJECT-level by
+// design: Savin needs to know which projects to print on a day, not which SOs.
+function vinylPrintDays(opts){
+  const days=new Map();
+  const horizon=opts?.horizonDays||60;
+  const t0=isoD(today());
+  vinylSchedule.forEach(v=>{
+    if(!v.project_id)return;                      // standalone markers are days, not work
+    if(String(v.status||'')==='Complete'&&!opts?.includeComplete)return;
+    const date=vinylRowDate(v);
+    if(!date)return;
+    if(date<t0&&!opts?.includePast)return;
+    if(daysDiff(date)>horizon)return;
+    const bucket=days.get(date)||{date,projects:new Map()};
+    // DISPLAY dedupe by project_id — several SO-level vinyl rows on the same
+    // day must not list the same project three times. Underlying rows are
+    // never merged or modified.
+    const proj=projects.find(p=>p.id===v.project_id);
+    const cur=bucket.projects.get(v.project_id)||{project_id:v.project_id,
+      name:proj?.name||v.name||'(unknown project)',client:proj?.client||v.client||'',
+      pm:proj?.pm||v.pm||'',rows:0,sos:[]};
+    cur.rows++;
+    if(v.so&&!cur.sos.includes(v.so))cur.sos.push(v.so);
+    bucket.projects.set(v.project_id,cur);
+    days.set(date,bucket);
+  });
+  return[...days.values()].map(b=>({date:b.date,projects:[...b.projects.values()]
+    .sort((a,c)=>a.name.localeCompare(c.name))}))
+    .sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+}
+// Canonical vinyl date for a schedule row: the milestone is the source of
+// truth (vsDate already writes it); the stored column is a legacy fallback.
+function vinylRowDate(v){
+  const so=vinylRowSO?vinylRowSO(v):(v.so||null);
+  const canon=v.project_id?resolveMsDateForSO(v.project_id,'vinyl',so):null;
+  return canon||v.date||null;
+}
+function renderVinylPrintDays(){
+  const days=vinylPrintDays();
+  if(!days.length)return'<div style="padding:14px 16px;font-size:12px;color:var(--gray-500)">No upcoming print days scheduled.</div>';
+  const t0=isoD(today());
+  return`<div style="padding:4px 0 10px">
+    ${days.map(d=>{
+      const isToday=d.date===t0, dd=daysDiff(d.date);
+      const when=isToday?'TODAY':(dd===1?'Tomorrow':(dd<0?Math.abs(dd)+'d ago':'in '+dd+' days'));
+      return`<div style="margin:0 14px 12px;border:1px solid ${isToday?'var(--red)':'var(--gray-200)'};border-radius:var(--radius);overflow:hidden">
+        <div style="display:flex;align-items:baseline;gap:10px;padding:9px 13px;background:${isToday?'var(--red-light)':'var(--gray-50)'};border-bottom:1px solid var(--gray-200)">
+          <span style="font-size:10px;font-weight:700;letter-spacing:.1em;color:${isToday?'var(--red)':'var(--gray-500)'}">PRINT DAY</span>
+          <strong style="font-size:14px">${fmtFull?fmtFull(d.date):fmt(d.date)}</strong>
+          <span style="font-size:11px;color:${isToday?'var(--red)':'var(--gray-500)'};font-weight:600">${when}</span>
+          <span style="margin-left:auto;font-size:11px;color:var(--gray-500)">${d.projects.length} project${d.projects.length===1?'':'s'}</span>
+        </div>
+        <div style="padding:4px 0">
+          ${d.projects.map(pr=>`<div style="display:flex;align-items:baseline;gap:10px;padding:6px 14px;border-bottom:1px solid var(--gray-50)">
+            <strong style="font-size:12.5px;min-width:0">${esc(pr.name)}</strong>
+            ${pr.client?`<span style="font-size:11px;color:var(--gray-500)">${esc(pr.client)}</span>`:''}
+            ${pr.rows>1?`<span title="${esc(pr.sos.join(', '))}" style="font-size:10px;color:var(--gray-400)">${pr.rows} vinyl rows</span>`:''}
+            <span style="margin-left:auto;font-size:11px;color:var(--gray-500)">${esc(pr.pm||'')}</span>
+          </div>`).join('')}
+        </div></div>`;}).join('')}
+  </div>`;
 }
 function renderPlanogram(){
   const el=document.getElementById('tab-planogram');
@@ -7382,8 +7782,8 @@ function renderPlanogram(){
       <td style="${readStyle}max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(item.client||'').replace(/"/g,'&quot;')}">${item.client||'—'}</td>
       <td style="${readStyle}max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(item.name||'').replace(/"/g,'&quot;')}">${item.name||'—'}</td>
       ${(()=>{const lp=planLinkedProj(item);const hwText=lp?getHardwareSummary(lp.id):(item.form_factor||'');const safe=esc(hwText||'—');return lp?`<td style="${readStyle}max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;text-decoration:underline;text-decoration-style:dotted" title="${hwText?safe.replace(/"/g,'&quot;'):'Click to add hardware'}" onclick="openHardwareEditor('${lp.id}')">${safe}</td>`:`<td style="${readStyle}max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${safe.replace(/"/g,'&quot;')}">${safe}</td>`;})()}
-      <td><input type="date" class="sched-input" style="width:120px" value="${item.planStart||''}" onchange="ps2('${item.id}','planStart',this.value)" title="Planogram start"></td>
-      <td><input type="date" class="sched-input" style="width:120px" value="${item.planEnd||''}" onchange="ps2('${item.id}','planEnd',this.value)" title="Planogram end"></td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${pgDateForSO(item.project_id,item.so,PG_START)||item.planStart||''}" onchange="pgSetDate('${item.project_id}','${escJsAttr(item.so||'')}',PG_START,this.value)" title="Planogram start — writes the canonical milestone"></td>
+      <td><input type="date" class="sched-input" style="width:120px" value="${pgDateForSO(item.project_id,item.so,PG_END)||item.planEnd||''}" onchange="pgSetDate('${item.project_id}','${escJsAttr(item.so||'')}',PG_END,this.value)" title="Planogram end — writes the canonical milestone"></td>
       <td><input type="date" class="sched-input" style="width:120px" value="${item.date||''}" onchange="vsDate(${origIdx},'date',this.value,'planogram')"></td>
       <td>
         <select class="sched-select" onchange="ps2('${item.id}','status',this.value)">${STATUS_OPTS.map(s=>`<option${s===item.status?' selected':''}>${s}</option>`).join('')}</select>
@@ -7405,7 +7805,10 @@ function renderPlanogram(){
     countLabel:filtered.length+' of '+source.length+' rows'
   });
   el.innerHTML=`<div class="section">
-    <div class="section-head"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderPlanogram')}${salesDropdown('renderPlanogram')}${hideCompletedBtn('planogram')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
+    <div class="section-head"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram queue — by SO</div>
+      <div style="font-size:11px;color:var(--gray-500)">Only SOs that have Planogram milestones appear here</div></div>
+    ${pgRenderQueue()}
+    <div class="section-head" style="margin-top:18px"><div class="section-title" style="border-left:3px solid #0891b2;padding-left:8px">Planogram schedule</div><div style="display:flex;gap:7px;align-items:center">${pmDropdown('renderPlanogram')}${salesDropdown('renderPlanogram')}${hideCompletedBtn('planogram')}<button class="btn-export" onclick="exportToExcel()">⬇ Excel</button></div></div>
     ${filterBar}
     <div style="overflow-x:auto"><table class="sched-table"><thead><tr>
       <th style="width:28px"></th><th style="width:32px">#</th>
@@ -9265,16 +9668,126 @@ async function removeSOFromProject(projId,soTag){
 // the original SO's tag — same milestone ids, so completion, history and
 // check-in state stay attached exactly where they were — and only the
 // ADDITIONAL SOs get newly inserted rows.
+
+// ── SO SCOPE PICKER, SHARED BY EVERY ADD-MILESTONE PATH ───────────
+// On a split multi-SO project a milestone MUST name the SOs it belongs to.
+// One row per selected SO — never one row whose so_tag holds a list.
+function msScopeNeeded(proj){
+  const st=projectSplitState(proj);
+  return st===SPLIT_FULL||st===SPLIT_UNASSIGNED;
+}
+function msScopeFieldHtml(proj,idPrefix){
+  if(!proj||!msScopeNeeded(proj))return'';
+  const list=getSOList(proj), pre=idPrefix||'em';
+  return`<div class="field full" id="${pre}-scope-wrap"><label>Sales Orders <span style="font-weight:400;font-size:10px;color:var(--red)">required — this project is split by SO</span></label>
+    <div style="display:flex;gap:6px;margin-bottom:6px">
+      <button type="button" onclick="msScopeAll('${pre}',true)" style="font-size:11px;padding:3px 10px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer;font-family:var(--font)">All ${list.length} SOs</button>
+      <button type="button" onclick="msScopeAll('${pre}',false)" style="font-size:11px;padding:3px 10px;border-radius:var(--radius);border:1px solid var(--gray-300);background:white;cursor:pointer;font-family:var(--font)">None</button>
+    </div>
+    <div id="${pre}-scope" style="max-height:132px;overflow-y:auto;border:1px solid var(--gray-200);border-radius:var(--radius);padding:6px 8px">
+      ${list.map(so=>`<label style="display:flex;align-items:center;gap:7px;font-size:12px;padding:2px 0;cursor:pointer;font-weight:400">
+        <input type="checkbox" class="${pre}-so" value="${escJsAttr(so)}"> <span style="font-family:var(--mono)">${esc(so)}</span></label>`).join('')}
+    </div></div>`;
+}
+function msScopeAll(pre,on){document.querySelectorAll('.'+pre+'-so').forEach(c=>{c.checked=!!on;});}
+function msScopeSelected(pre){return[...document.querySelectorAll('.'+(pre||'em')+'-so:checked')].map(c=>c.value);}
+// ONE insert implementation for every Add-milestone entry point. Returns the
+// rows written so the caller can report honestly.
+async function msInsertMilestone(projId,{key,label,date,notApplicable,soTags}){
+  const proj=projects.find(p=>p.id===projId);
+  const scope=msScopeNeeded(proj)?(soTags||[]):[null];
+  if(msScopeNeeded(proj)&&!scope.length)throw new Error('Pick at least one SO');
+  // Duplicate guard on project_id + so_tag + canonical identity (key+label).
+  const dup=[],rows=[];
+  scope.forEach(so=>{
+    const exists=milestones.some(m=>m.project_id===projId&&(m.so_tag||null)===(so||null)
+      &&m.key===key&&String(m.label||'').trim().toLowerCase()===String(label).trim().toLowerCase());
+    if(exists){dup.push(so||'project');return;}
+    rows.push({project_id:projId,key,label,date:date||null,original_date:date||null,
+      not_applicable:!!notApplicable,changed_by:currentUserName,so_tag:so||null});
+  });
+  if(!rows.length)return{inserted:[],skipped:dup};
+  const{data,error}=await sb.from('milestones').insert(rows).select();
+  if(error)throw new Error(error.message);
+  (data||rows).forEach(m=>milestones.push(m));
+  return{inserted:data||rows,skipped:dup};
+}
+
+// ── ASSIGNING STRAY UNTAGGED MILESTONES ───────────────────────────
+// One SO  → UPDATE that row's so_tag (keeps its id, completion and history).
+// Several → reuse the row for the FIRST selected SO and insert tagged copies
+//           for the rest, so nothing is orphaned and no id is destroyed.
+function openAssignUnassignedModal(projId){
+  const proj=projects.find(p=>p.id===projId); if(!proj)return;
+  const rows=projectUnassignedMs(projId);
+  if(!rows.length){showToast('Nothing to assign');return;}
+  const list=getSOList(proj);
+  document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" style="width:min(620px,95vw)" onclick="event.stopPropagation()">
+    <div class="modal-head"><span class="modal-title">⚠ Assign milestones to an SO</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" style="max-height:62vh;overflow:auto">
+      <div style="font-size:11.5px;color:var(--gray-600);line-height:1.55;margin-bottom:12px">
+        This project is <strong>already split by SO</strong>. ${rows.length} milestone${rows.length===1?' was':'s were'} added without an SO, so ${rows.length===1?'it belongs':'they belong'} to the project rather than to a location.
+        Assign each one. <strong>Splitting is not the fix</strong> and is not offered — the SO milestone sets are already correct.</div>
+      ${rows.map(m=>`<div style="border:1px solid var(--gray-200);border-radius:var(--radius);padding:11px 13px;margin-bottom:9px">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;margin-bottom:7px">
+          <div><strong style="font-size:13px">${esc(m.label||'(no label)')}</strong>
+            <span style="font-size:10.5px;color:var(--gray-500);font-family:var(--mono);margin-left:7px">key: ${esc(m.key||'other')}</span></div>
+          <span style="font-size:11px;color:var(--gray-500)">${m.date?fmt(m.date):'no date'}</span></div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">
+          ${list.map(so=>`<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;border:1px solid var(--gray-300);border-radius:20px;padding:3px 10px;cursor:pointer">
+            <input type="checkbox" class="ua-${m.id}" value="${escJsAttr(so)}"><span style="font-family:var(--mono)">${esc(so)}</span></label>`).join('')}
+          <button type="button" onclick="document.querySelectorAll('.ua-${m.id}').forEach(c=>c.checked=true)" style="font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid var(--gray-300);background:var(--gray-50);cursor:pointer;font-family:var(--font)">All SOs</button>
+        </div></div>`).join('')}
+    </div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="applyAssignUnassigned('${projId}')">Assign →</button></div>
+  </div></div>`;
+}
+async function applyAssignUnassigned(projId){
+  const rows=projectUnassignedMs(projId);
+  const plan=rows.map(m=>({m,sos:[...document.querySelectorAll('.ua-'+m.id+':checked')].map(c=>c.value)}))
+                 .filter(x=>x.sos.length);
+  if(!plan.length){showToast('Pick at least one SO for a milestone');return;}
+  let updated=0,created=0,skipped=0;
+  try{
+    for(const{m,sos}of plan){
+      const[first,...rest]=sos;
+      // Reuse the existing row for the first SO — its id, completion and
+      // history survive.
+      const{error}=await sb.from('milestones').update({so_tag:first,changed_by:currentUserName}).eq('id',m.id);
+      if(error)throw new Error(error.message);
+      m.so_tag=first; updated++;
+      for(const so of rest){
+        const exists=milestones.some(x=>x.project_id===projId&&x.so_tag===so&&x.key===m.key
+          &&String(x.label||'').trim().toLowerCase()===String(m.label||'').trim().toLowerCase());
+        if(exists){skipped++;continue;}
+        const{data,error:e2}=await sb.from('milestones').insert({project_id:projId,key:m.key,label:m.label,
+          date:m.date||null,original_date:m.original_date||null,not_applicable:!!m.not_applicable,
+          so_tag:so,changed_by:currentUserName}).select().single();
+        if(e2)throw new Error(e2.message);
+        if(data){milestones.push(data);created++;}
+      }
+    }
+  }catch(err){showToast('⚠ Assign failed: '+err.message);return;}
+  closeModal();
+  showToast('Assigned ✓ '+updated+' updated'+(created?', '+created+' copied':'')+(skipped?', '+skipped+' already existed':''));
+  await loadAll();
+}
 async function splitMilestonesBySO(projId){
   const proj=projects.find(p=>p.id===projId);
   if(!proj)return;
   const soList=getSOList(proj);
   if(soList.length<2){showToast('Project needs multiple SOs to split');return;}
-  // IDEMPOTENCY GUARD: a project that already has ANY so_tag'd milestone is
-  // already split and must never be re-split. Use "+ Add milestones for these
-  // SOs" (addMissingSOMilestones) for a newly-added SO instead.
-  const alreadySplit=milestones.some(m=>m.project_id===projId&&m.so_tag);
-  if(alreadySplit){
+  // IDEMPOTENCY GUARD, stated as the single split-state model so this can no
+  // longer disagree with the banner that offered the button.
+  const st=projectSplitState(proj);
+  if(st===SPLIT_UNASSIGNED){
+    const n=projectUnassignedMs(projId).length;
+    showToast(n+' milestone'+(n===1?'':'s')+" aren't assigned to an SO — assign them instead of re-splitting");
+    openAssignUnassignedModal(projId);
+    return;
+  }
+  if(st!==SPLIT_UNSPLIT){
     showToast('Already split by SO — use "All SO Milestones" → "+ Add milestones for these SOs" to add a newly-added SO instead');
     return;
   }
@@ -9964,23 +10477,50 @@ async function deleteProj(id){if(!confirm('Delete this project? Cannot be undone
   if(error){alert('Delete failed: '+error.message);return;}
   await logActivity('deleted project',proj?.name||'',proj?.so_number||'',null,null,null);selectedProjId=null;closeModal();showToast('Deleted');await loadAll();}
 
+// This modal used to be a SECOND add-milestone implementation with no SO
+// selector at all, so on a split multi-SO project it could only ever insert
+// so_tag = null. That is exactly how NTT Data / Neurocrine ended up with 44
+// tagged milestones plus 2 untagged ones. It now renders the shared SO scope
+// picker and writes through the same msInsertMilestone() as every other path.
 function openAddEvModal(){
-  const projOpts=projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  const projOpts=projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
   const typeOpts=Object.entries(TYPE_LBL).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
+  const first=projects[0];
   document.getElementById('modal-root').innerHTML=`<div class="modal-backdrop" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()">
     <div class="modal-head"><span class="modal-title">Add milestone</span><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div class="modal-body"><div class="form-grid"><div class="field"><label>Project</label><select id="em-proj">${projOpts}</select></div><div class="field"><label>Type</label><select id="em-type">${typeOpts}</select></div><div class="field full"><label>Label</label><input id="em-label" placeholder="e.g. Parts arrive — batch 3"></div><div class="field"><label>Date</label><input id="em-date" type="date" value="${isoD(today())}"></div></div></div>
+    <div class="modal-body"><div class="form-grid">
+      <div class="field"><label>Project</label><select id="em-proj" onchange="msRefreshScope()">${projOpts}</select></div>
+      <div class="field"><label>Type</label><select id="em-type">${typeOpts}</select></div>
+      <div class="field full"><label>Label</label><input id="em-label" placeholder="e.g. Parts arrive — batch 3"></div>
+      <div class="field"><label>Date</label><input id="em-date" type="date" value="${isoD(today())}"></div>
+      <div id="em-scope-slot" class="field full" style="padding:0">${msScopeFieldHtml(first,'em')}</div>
+    </div></div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEv()">Add</button></div>
   </div></div>`;
 }
+// The SO list belongs to the chosen project, so the picker is rebuilt whenever
+// that choice changes.
+function msRefreshScope(){
+  const slot=document.getElementById('em-scope-slot'); if(!slot)return;
+  const proj=projects.find(p=>p.id===document.getElementById('em-proj').value);
+  slot.innerHTML=msScopeFieldHtml(proj,'em');
+}
 async function saveEv(){
-  const label=document.getElementById('em-label').value.trim();const date=document.getElementById('em-date').value;const proj_id=document.getElementById('em-proj').value;
+  const label=document.getElementById('em-label').value.trim();
+  const date=document.getElementById('em-date').value;
+  const proj_id=document.getElementById('em-proj').value;
   if(!label||!date){alert('Fill in all fields.');return;}
-  const{error}=await sb.from('milestones').insert({project_id:proj_id,key:document.getElementById('em-type').value,label,date,changed_by:currentUserName});
-  if(error){alert('Error: '+error.message);return;}
   const proj=projects.find(p=>p.id===proj_id);
+  const soTags=msScopeSelected('em');
+  if(msScopeNeeded(proj)&&!soTags.length){alert('This project is split by SO — choose at least one Sales Order for this milestone.');return;}
+  let res;
+  try{ res=await msInsertMilestone(proj_id,{key:document.getElementById('em-type').value,label,date,notApplicable:false,soTags}); }
+  catch(err){alert('Error: '+err.message);return;}
+  if(!res.inserted.length){alert('Nothing added — that milestone already exists on '+(res.skipped.join(', ')||'this project')+'.');return;}
   await logActivity('added milestone',label,label,proj_id,null,date);
-  closeModal();showToast('Added ✓');await loadAll();
+  closeModal();
+  showToast('Added ✓'+(res.inserted.length>1?' ('+res.inserted.length+' SOs)':''));
+  await loadAll();
 }
 
 // ── EXCEL EXPORT ───────────────────────────────────────────
