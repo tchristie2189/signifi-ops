@@ -1270,7 +1270,7 @@ const XL_HEADERS=['SO Number','Kiosk ID / Naming Convention','Form Factor','Quan
 // Build stamp. Shown in the import preview footer and exposed as
 // window.OPSHUB_BUILD so a UAT failure can never again be ambiguous between
 // "the fix is wrong" and "the browser is running the old file".
-const OPSHUB_BUILD='2026-09-29 · vinyl-print-planning-v1';
+const OPSHUB_BUILD='2026-09-29 · planogram-queue-cleanup-v1';
 try{window.OPSHUB_BUILD=OPSHUB_BUILD;}catch(e){}
 const XL_SO_CONFIG_MAP={
   'Kiosk ID / Naming Convention':'naming_convention','Site Address':'address',
@@ -7649,41 +7649,89 @@ async function pgMarkDone(pid,so,markedBy){
 // ── PLANOGRAM QUEUE — BY SO, FOR PMs ──────────────────────────────
 // Rendered above the legacy project-level schedule table so a PM can see which
 // SO is outstanding without opening each project.
+// ── PLANOGRAM QUEUE — PRESENTATION ONLY ───────────────────────────
+// Completed SOs are hidden by default so the queue reads as a worklist
+// rather than a history. This is a DISPLAY filter and nothing else: pgQueue()
+// still returns every SO, membership, ordering, the sparse-priority algorithm,
+// milestone_done and planogram_schedule are all untouched, and toggling writes
+// nothing. Per-session only — it is not persisted anywhere.
+let pgShowDone=false;
+function pgToggleDone(){pgShowDone=!pgShowDone;renderPlanogram();}
+// Notes editor. The cell renders as a compact control; clicking it swaps in the
+// real input. Saving still goes through pgSetOps(...,'notes',...) to the same
+// planogram_schedule.notes field — no new store, no new write path. pgSetOps
+// always writes, so an unchanged value is never sent.
+function pgEditNote(btn,pid,so,cur){
+  const td=btn.closest&&btn.closest('td'); if(!td)return;
+  const orig=String(cur==null?'':cur);
+  td.innerHTML='<input value="'+esc(orig)+'" placeholder="Note…" style="width:100%;min-width:130px;font-size:11px;padding:3px 6px;border:1px solid var(--blue);border-radius:4px;font-family:var(--font)">';
+  const inp=td.querySelector('input'); if(!inp)return;
+  inp.focus(); inp.select();
+  let settled=false;
+  const finish=async(save)=>{
+    if(settled)return; settled=true;
+    const v=inp.value;
+    if(save&&v!==orig)await pgSetOps(pid,so,'notes',v);
+    renderPlanogram();
+  };
+  inp.onkeydown=e=>{
+    if(e.key==='Enter'){e.preventDefault();finish(true);}
+    else if(e.key==='Escape'){e.preventDefault();finish(false);}
+  };
+  inp.onblur=()=>finish(true);
+}
 function pgRenderQueue(){
   const q=pgQueue();
   if(!q.length)return'<div style="padding:14px 16px;font-size:12px;color:var(--gray-500)">No SO currently has Planogram milestones. An SO enters this queue as soon as it has a Planogram start, end or sign-off.</div>';
   const outstanding=q.filter(x=>!x.done).length;
-  const manual=q.filter(x=>x.manual).length;
+  const doneCount=q.length-outstanding;
+  // Any SO carrying a PERSISTED manual priority is flagged, whether or not the
+  // pin happens to move it off its ship-date position. x.manual (the "actually
+  // moved" flag) is left exactly as pgQueue() computes it and is not used here.
+  const isPinned=x=>Number(x.priority||0)>0;
+  const pinnedCount=q.filter(isPinned).length;
+  // Displayed position is the row's index in the FULL queue, so the number
+  // keeps meaning while completed rows are hidden — and it matches pgDrop(),
+  // which resolves drag targets against the full pgQueue() order.
+  const pos={}; q.forEach((x,i)=>{pos[x.project_id+'|'+x.so]=i+1;});
+  const visible=pgShowDone?q:q.filter(x=>!x.done);
   const d=v=>v?fmt(v):'<span style="color:var(--gray-300)">—</span>';
-  const rows=q.map((x,i)=>{
+  const noteCell=x=>{
+    const n=String(x.notes||'');
+    const args="this,'"+x.project_id+"','"+escJsAttr(x.so)+"','"+escJsAttr(n)+"'";
+    if(!n)return'<button onclick="pgEditNote('+args+')" title="Add a note" style="font-size:10.5px;color:var(--gray-400);background:none;border:1px dashed var(--gray-200);border-radius:4px;padding:2px 7px;cursor:pointer;font-family:var(--font)">+ Note</button>';
+    const preview=n.length>18?n.slice(0,18)+'…':n;
+    return'<button onclick="pgEditNote('+args+')" title="'+esc(n)+'" style="font-size:10.5px;color:var(--gray-700);background:#f8fafc;border:1px solid var(--gray-200);border-radius:4px;padding:2px 7px;cursor:pointer;font-family:var(--font);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">✎ '+esc(preview)+'</button>';
+  };
+  const rows=visible.map(x=>{
     const key=x.project_id+'|'+x.so;
+    const pinned=isPinned(x);
     return`<tr draggable="true" data-pgkey="${escJsAttr(key)}" ondragstart="pgDragStart(event,'${escJsAttr(key)}')" ondragover="event.preventDefault()" ondrop="pgDrop(event,'${escJsAttr(key)}')"
-      style="${x.done?'opacity:.55;':''}${x.manual?'background:#fffbeb;':''}">
-      <td style="text-align:center;color:var(--gray-400);font-family:var(--mono);font-size:11px">⠿ ${i+1}</td>
-      <td style="font-size:11.5px">${esc(x.project)}${x.manual?'<span title="Manually prioritised — moved away from its ship-date position" style="margin-left:6px;font-size:9.5px;font-weight:700;color:#92400e;background:#fde68a;border-radius:9px;padding:1px 7px">MANUAL</span>':''}</td>
+      style="${x.done?'opacity:.55;':''}${pinned?'background:#fffbeb;':''}">
+      <td style="text-align:center;color:var(--gray-400);font-family:var(--mono);font-size:11px">⠿ ${pos[key]}</td>
+      <td style="font-size:11.5px">${esc(x.project)}${pinned?'<span title="Manually prioritised — this SO holds a pinned queue position" style="margin-left:6px;font-size:9.5px;font-weight:700;color:#92400e;background:#fde68a;border-radius:9px;padding:1px 7px">MANUAL</span>':''}</td>
       <td style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--red)">${esc(x.so)}</td>
       <td style="font-size:11px">${esc(x.pm||'—')}</td>
       <td class="date-cell">${d(x.start)}</td>
       <td class="date-cell">${d(x.end)}</td>
       <td class="date-cell">${d(x.signoff)}</td>
-      <td class="date-cell" style="font-weight:600">${d(x.ship)}</td>
+      <td class="date-cell" style="font-weight:700">${d(x.ship)}</td>
       <td style="text-align:center">${x.done?'<span class="status-chip chip-done">Done</span>':'<span class="status-chip chip-atrisk">Outstanding</span>'}</td>
-      <td><input value="${esc(x.notes)}" placeholder="notes" style="width:150px;font-size:11px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:4px;font-family:var(--font)"
-        onchange="pgSetOps('${x.project_id}','${escJsAttr(x.so)}','notes',this.value)"></td>
+      <td style="text-align:left">${noteCell(x)}</td>
     </tr>`;}).join('');
+  const empty=`<tr><td colspan="10" style="text-align:center;padding:26px;font-size:12.5px;color:var(--success)">All planogram work is complete ✓</td></tr>`;
   return`<div style="padding:0 0 6px">
-    <div style="display:flex;gap:18px;align-items:center;padding:8px 14px;font-size:11.5px;color:var(--gray-600);flex-wrap:wrap">
-      <span><strong>${q.length}</strong> SO${q.length===1?'':'s'} need a planogram</span>
-      <span><strong style="color:var(--red)">${outstanding}</strong> outstanding</span>
-      <span><strong style="color:var(--success)">${q.length-outstanding}</strong> complete</span>
-      ${manual?`<span style="color:#92400e"><strong>${manual}</strong> manually prioritised</span>`:''}
-      <span style="margin-left:auto;color:var(--gray-400)">Default order: soonest ship date first · drag ⠿ to reprioritise (order only — never changes dates)</span>
+    <div style="display:flex;gap:16px;align-items:baseline;padding:8px 14px;font-size:12px;color:var(--gray-600);flex-wrap:wrap">
+      <span style="font-size:13px"><strong style="color:var(--red);font-size:16px">${outstanding}</strong> Outstanding</span>
+      ${pinnedCount?`<span style="color:#92400e"><strong>${pinnedCount}</strong> manually prioritised</span>`:''}
+      ${doneCount?`<button onclick="pgToggleDone()" title="Show or hide SOs whose Planogram work is complete — display only, nothing is written or deleted" style="font-size:11px;font-weight:600;padding:4px 11px;border-radius:var(--radius);border:1px solid var(--gray-300);background:${pgShowDone?'var(--gray-100)':'var(--white)'};color:var(--gray-600);cursor:pointer;font-family:var(--font)">${pgShowDone?'Hide':'Show'} completed (${doneCount})</button>`:''}
+      <span style="margin-left:auto;font-size:10.5px;color:var(--gray-400)">${q.length} SO${q.length===1?'':'s'} in the queue · soonest ship date first · drag ⠿ to reprioritise (order only — never changes dates)</span>
     </div>
-    <div style="overflow:auto;max-height:52vh">
+    <div style="overflow:auto;max-height:calc(100vh - 250px);min-height:280px">
     <table class="pp-table" style="min-width:980px"><thead><tr>
       <th>#</th><th style="text-align:left">Project</th><th style="text-align:left">SO</th><th style="text-align:left">PM</th>
       <th>Start</th><th>End</th><th>Sign-off</th><th>Ship</th><th>Status</th><th style="text-align:left">Notes</th>
-    </tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    </tr></thead><tbody>${rows||empty}</tbody></table></div></div>`;
 }
 let _pgDragKey=null;
 function pgDragStart(e,key){_pgDragKey=key;try{e.dataTransfer.effectAllowed='move';}catch(_){}}
