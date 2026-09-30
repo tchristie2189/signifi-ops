@@ -1270,7 +1270,7 @@ const XL_HEADERS=['SO Number','Kiosk ID / Naming Convention','Form Factor','Quan
 // Build stamp. Shown in the import preview footer and exposed as
 // window.OPSHUB_BUILD so a UAT failure can never again be ambiguous between
 // "the fix is wrong" and "the browser is running the old file".
-const OPSHUB_BUILD='2026-09-29 · planogram-queue-cleanup-v1';
+const OPSHUB_BUILD='2026-09-30 · operational-status-na-v1';
 try{window.OPSHUB_BUILD=OPSHUB_BUILD;}catch(e){}
 const XL_SO_CONFIG_MAP={
   'Kiosk ID / Naming Convention':'naming_convention','Site Address':'address',
@@ -7516,6 +7516,12 @@ function pgQueue(opts){
         ship:resolveMsDateForSO(p.id,'shipping',so),
         done:pgIsDone(p.id,so),
         notes:row?.notes||'', status:row?.status||'', rowId:row?.id||null,
+        // OPERATIONAL OVERLAY, not a completion source. planogram_schedule
+        // .status carries only 'In Progress' or 'N/A'; a legacy 'Complete'
+        // (7 such rows exist in production, none agreeing with milestone_done)
+        // is deliberately read as no overlay at all. Completion stays derived
+        // from milestone_done via pgIsDone() and nothing else.
+        overlay:pgOverlayOf(row?.status),
         priority:Number(row?.priority||0)});
     });
   });
@@ -7545,6 +7551,60 @@ function pgQueue(opts){
 // future "reset to calculated order" is just priority = 0 on that row.
 const pgByShip=(a,b)=>String(a.ship||'9999-12-31').localeCompare(String(b.ship||'9999-12-31'))
   ||String(a.so).localeCompare(String(b.so));
+// ── PLANOGRAM OPERATIONAL STATUS ──────────────────────────────────
+// FOUR states, ONE source each:
+//   Complete    ← milestone_done via pgIsDone()   (canonical, never stored here)
+//   N/A         ← planogram_schedule.status = 'N/A'
+//   In Progress ← planogram_schedule.status = 'In Progress'
+//   Outstanding ← everything else
+// Complete always wins: an SO that is already done is never re-labelled, and
+// N/A is refused on it. Nothing here deletes or dates anything.
+const PG_OVERLAY_NA='N/A', PG_OVERLAY_WIP='In Progress';
+function pgOverlayOf(raw){
+  const v=String(raw==null?'':raw).trim();
+  if(v===PG_OVERLAY_NA)return PG_OVERLAY_NA;
+  if(v.toLowerCase()===PG_OVERLAY_WIP.toLowerCase())return PG_OVERLAY_WIP;
+  return '';                       // legacy 'Complete'/'Scheduled' => no overlay
+}
+function pgEffectiveStatus(x){
+  if(!x)return'Outstanding';
+  if(x.done)return'Complete';
+  if(x.overlay===PG_OVERLAY_NA)return PG_OVERLAY_NA;
+  if(x.overlay===PG_OVERLAY_WIP)return PG_OVERLAY_WIP;
+  return'Outstanding';
+}
+const PG_STATUS_OPTS=['Outstanding',PG_OVERLAY_WIP,'Complete',PG_OVERLAY_NA];
+// ONE deliberate user action per change. Complete routes to the canonical
+// pgMarkDone(); the other three write only planogram_schedule.status.
+async function pgSetStatus(pid,so,next){
+  const row=pgQueue().find(x=>x.project_id===pid&&pgNormLabel(x.so)===pgNormLabel(so));
+  if(!row){showToast('⚠ That SO is no longer in the Planogram queue');return;}
+  const cur=pgEffectiveStatus(row);
+  if(next===cur){renderPlanogram();return;}
+  if(row.done){
+    // Completion is not reopened in this release: no milestone_done row is
+    // ever deleted here, so no transition out of Complete is offered.
+    showToast('⚠ '+so+' Planogram is already completed — its status can’t be changed');
+    renderPlanogram();return;
+  }
+  if(next==='Complete'){
+    if(!confirm('Mark '+so+' Planogram as Complete?\n\nThis completes the canonical Planogram End and Sign-off milestones. Planogram Start is never auto-completed.'))return;
+    const r=await pgMarkDone(pid,so);
+    if(!r.ok){showToast('⚠ '+(r.reason||'Could not complete'));return;}
+    showToast(r.warning?('Complete ✓ — note: '+r.warning):('Planogram complete for '+so+' ✓'));
+    renderPlanogram();return;
+  }
+  if(next===PG_OVERLAY_NA){
+    if(!confirm('Mark '+so+' Planogram as N/A?\n\nThis means no planogram is required for this SO. It leaves the active queue but nothing is deleted — its milestones, dates, notes and manual priority are kept, and you can restore it from “Show N/A”.'))return;
+    await pgSetOps(pid,so,'status',PG_OVERLAY_NA);
+    showToast(so+' marked N/A — removed from the active queue ✓');
+    renderPlanogram();return;
+  }
+  // Outstanding clears the overlay; In Progress sets it. Milestones untouched.
+  await pgSetOps(pid,so,'status',next===PG_OVERLAY_WIP?PG_OVERLAY_WIP:'');
+  showToast(next===PG_OVERLAY_WIP?(so+' set to In Progress ✓'):(so+' restored to Outstanding ✓'));
+  renderPlanogram();
+}
 function pgApplyOrder(items){
   const pinned=items.filter(x=>x.priority>0).sort((a,b)=>a.priority-b.priority||pgByShip(a,b));
   const autos=items.filter(x=>!(x.priority>0)).sort(pgByShip);
@@ -7655,8 +7715,11 @@ async function pgMarkDone(pid,so,markedBy){
 // still returns every SO, membership, ordering, the sparse-priority algorithm,
 // milestone_done and planogram_schedule are all untouched, and toggling writes
 // nothing. Per-session only — it is not persisted anywhere.
-let pgShowDone=false;
+let pgShowDone=false, pgShowNA=false;
 function pgToggleDone(){pgShowDone=!pgShowDone;renderPlanogram();}
+// Independent of pgShowDone: Complete (work was required and finished) and
+// N/A (work is not required) are different concepts and never share a control.
+function pgToggleNA(){pgShowNA=!pgShowNA;renderPlanogram();}
 // Notes editor. The cell renders as a compact control; clicking it swaps in the
 // real input. Saving still goes through pgSetOps(...,'notes',...) to the same
 // planogram_schedule.notes field — no new store, no new write path. pgSetOps
@@ -7683,8 +7746,12 @@ function pgEditNote(btn,pid,so,cur){
 function pgRenderQueue(){
   const q=pgQueue();
   if(!q.length)return'<div style="padding:14px 16px;font-size:12px;color:var(--gray-500)">No SO currently has Planogram milestones. An SO enters this queue as soon as it has a Planogram start, end or sign-off.</div>';
-  const outstanding=q.filter(x=>!x.done).length;
-  const doneCount=q.length-outstanding;
+  const eff=x=>pgEffectiveStatus(x);
+  const doneCount=q.filter(x=>eff(x)==='Complete').length;
+  const naCount=q.filter(x=>eff(x)===PG_OVERLAY_NA).length;
+  const wipCount=q.filter(x=>eff(x)===PG_OVERLAY_WIP).length;
+  // N/A counts as neither Outstanding nor Complete.
+  const outstanding=q.filter(x=>eff(x)==='Outstanding').length;
   // Any SO carrying a PERSISTED manual priority is flagged, whether or not the
   // pin happens to move it off its ship-date position. x.manual (the "actually
   // moved" flag) is left exactly as pgQueue() computes it and is not used here.
@@ -7694,7 +7761,14 @@ function pgRenderQueue(){
   // keeps meaning while completed rows are hidden — and it matches pgDrop(),
   // which resolves drag targets against the full pgQueue() order.
   const pos={}; q.forEach((x,i)=>{pos[x.project_id+'|'+x.so]=i+1;});
-  const visible=pgShowDone?q:q.filter(x=>!x.done);
+  // Default working view = Outstanding + In Progress. Complete and N/A are
+  // each revealed by their own toggle; neither implies the other.
+  const visible=q.filter(x=>{
+    const e=eff(x);
+    if(e==='Complete')return pgShowDone;
+    if(e===PG_OVERLAY_NA)return pgShowNA;
+    return true;                                  // Outstanding + In Progress
+  });
   const d=v=>v?fmt(v):'<span style="color:var(--gray-300)">—</span>';
   const noteCell=x=>{
     const n=String(x.notes||'');
@@ -7703,11 +7777,21 @@ function pgRenderQueue(){
     const preview=n.length>18?n.slice(0,18)+'…':n;
     return'<button onclick="pgEditNote('+args+')" title="'+esc(n)+'" style="font-size:10.5px;color:var(--gray-700);background:#f8fafc;border:1px solid var(--gray-200);border-radius:4px;padding:2px 7px;cursor:pointer;font-family:var(--font);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">✎ '+esc(preview)+'</button>';
   };
+  const statusCell=x=>{
+    const e=eff(x);
+    if(e==='Complete')
+      return'<span class="status-chip chip-done" title="Completed through the canonical Planogram End + Sign-off milestones. Reopening is not available in this release.">Done</span>';
+    const sel=PG_STATUS_OPTS.map(o=>'<option value="'+o+'"'+(o===e?' selected':'')+'>'+o+'</option>').join('');
+    const tone=e===PG_OVERLAY_NA?'color:var(--gray-500);background:var(--gray-50);'
+              :e===PG_OVERLAY_WIP?'color:#1d4ed8;background:#eff6ff;border-color:#bfdbfe;':'';
+    return'<select class="sched-select" style="font-size:10.5px;padding:2px 4px;'+tone+'"'
+      +' onchange="pgSetStatus(\''+x.project_id+'\',\''+escJsAttr(x.so)+'\',this.value)">'+sel+'</select>';
+  };
   const rows=visible.map(x=>{
     const key=x.project_id+'|'+x.so;
     const pinned=isPinned(x);
     return`<tr draggable="true" data-pgkey="${escJsAttr(key)}" ondragstart="pgDragStart(event,'${escJsAttr(key)}')" ondragover="event.preventDefault()" ondrop="pgDrop(event,'${escJsAttr(key)}')"
-      style="${x.done?'opacity:.55;':''}${pinned?'background:#fffbeb;':''}">
+      style="${x.done?'opacity:.55;':''}${eff(x)===PG_OVERLAY_NA?'opacity:.6;background:var(--gray-50);':(pinned?'background:#fffbeb;':'')}">
       <td style="text-align:center;color:var(--gray-400);font-family:var(--mono);font-size:11px">⠿ ${pos[key]}</td>
       <td style="font-size:11.5px">${esc(x.project)}${pinned?'<span title="Manually prioritised — this SO holds a pinned queue position" style="margin-left:6px;font-size:9.5px;font-weight:700;color:#92400e;background:#fde68a;border-radius:9px;padding:1px 7px">MANUAL</span>':''}</td>
       <td style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--red)">${esc(x.so)}</td>
@@ -7716,15 +7800,17 @@ function pgRenderQueue(){
       <td class="date-cell">${d(x.end)}</td>
       <td class="date-cell">${d(x.signoff)}</td>
       <td class="date-cell" style="font-weight:700">${d(x.ship)}</td>
-      <td style="text-align:center">${x.done?'<span class="status-chip chip-done">Done</span>':'<span class="status-chip chip-atrisk">Outstanding</span>'}</td>
+      <td style="text-align:center">${statusCell(x)}</td>
       <td style="text-align:left">${noteCell(x)}</td>
     </tr>`;}).join('');
   const empty=`<tr><td colspan="10" style="text-align:center;padding:26px;font-size:12.5px;color:var(--success)">All planogram work is complete ✓</td></tr>`;
   return`<div style="padding:0 0 6px">
     <div style="display:flex;gap:16px;align-items:baseline;padding:8px 14px;font-size:12px;color:var(--gray-600);flex-wrap:wrap">
       <span style="font-size:13px"><strong style="color:var(--red);font-size:16px">${outstanding}</strong> Outstanding</span>
+      ${wipCount?`<span style="color:#1d4ed8"><strong>${wipCount}</strong> In Progress</span>`:''}
       ${pinnedCount?`<span style="color:#92400e"><strong>${pinnedCount}</strong> manually prioritised</span>`:''}
       ${doneCount?`<button onclick="pgToggleDone()" title="Show or hide SOs whose Planogram work is complete — display only, nothing is written or deleted" style="font-size:11px;font-weight:600;padding:4px 11px;border-radius:var(--radius);border:1px solid var(--gray-300);background:${pgShowDone?'var(--gray-100)':'var(--white)'};color:var(--gray-600);cursor:pointer;font-family:var(--font)">${pgShowDone?'Hide':'Show'} completed (${doneCount})</button>`:''}
+      ${naCount?`<button onclick="pgToggleNA()" title="Show or hide SOs marked N/A — no planogram required. Display only: their milestones, dates, notes and priority are all still stored." style="font-size:11px;font-weight:600;padding:4px 11px;border-radius:var(--radius);border:1px solid var(--gray-300);background:${pgShowNA?'var(--gray-100)':'var(--white)'};color:var(--gray-600);cursor:pointer;font-family:var(--font)">${pgShowNA?'Hide':'Show'} N/A (${naCount})</button>`:''}
       <span style="margin-left:auto;font-size:10.5px;color:var(--gray-400)">${q.length} SO${q.length===1?'':'s'} in the queue · soonest ship date first · drag ⠿ to reprioritise (order only — never changes dates)</span>
     </div>
     <div style="overflow:auto;max-height:calc(100vh - 250px);min-height:280px">
@@ -7771,6 +7857,12 @@ function vinylProjectRows(p){
   if(!p)return[];
   return vinylSchedule.filter(v=>v.project_id===p.id&&!v.is_standalone);
 }
+// 'N/A' on projects.vinyl_print_status means Savin does not print for this
+// project. It is an APPLICABILITY OVERLAY: vinyl_print_day is preserved, no
+// vinyl_schedule row or milestone is touched, and clearing it back to NULL
+// returns the project to exactly the bucket it came from.
+const VINYL_NA='N/A';
+function vinylIsNA(p){return String(p&&p.vinyl_print_status||'')===VINYL_NA;}
 function vinylProjectApplicable(p){
   if(!p)return false;
   if(p.status==='software-active')return false;          // same exclusion renderVinyl uses
@@ -7805,6 +7897,7 @@ function vinylPrintProjects(){
       vinylDate:min(soKeys.map(so=>resolveMsDateForSO(p.id,'vinyl',so))),
       shipDate:min(soKeys.map(so=>resolveMsDateForSO(p.id,'shipping',so))),
       printDay:p.vinyl_print_day||null,
+      na:vinylIsNA(p),
     });
   });
   return out;
@@ -7817,16 +7910,18 @@ function vinylPrintPlanning(){
   const byShip=(a,b)=>String(a.shipDate||'9999-12-31').localeCompare(String(b.shipDate||'9999-12-31'))
     ||String(a.vinylDate||'9999-12-31').localeCompare(String(b.vinylDate||'9999-12-31'))
     ||String(a.name).localeCompare(String(b.name));
-  const unassigned=all.filter(x=>!x.printDay).sort(byShip);
+  const na=all.filter(x=>x.na).sort(byShip);
+  const active=all.filter(x=>!x.na);
+  const unassigned=active.filter(x=>!x.printDay).sort(byShip);
   const map=new Map();
-  all.filter(x=>x.printDay).forEach(x=>{
+  active.filter(x=>x.printDay).forEach(x=>{
     const b=map.get(x.printDay)||{date:x.printDay,projects:[]};
     b.projects.push(x); map.set(x.printDay,b);
   });
   const days=[...map.values()]
     .map(b=>({date:b.date,projects:b.projects.sort(byShip)}))
     .sort((a,b)=>String(a.date).localeCompare(String(b.date)));
-  return{unassigned,days,total:all.length};
+  return{unassigned,days,na,total:active.length,naCount:na.length,allCount:all.length};
 }
 // The ONLY writer. Exactly one projects row, exactly one column.
 async function vinylSetPrintDay(projectId,value){
@@ -7840,6 +7935,23 @@ async function vinylSetPrintDay(projectId,value){
   renderVinyl();
 }
 function vinylClearPrintDay(projectId){return vinylSetPrintDay(projectId,null);}
+let vinylShowNA=false;
+function vinylToggleNA(){vinylShowNA=!vinylShowNA;renderVinyl();}
+// The ONLY writer of vinyl_print_status. One projects row, one column.
+// vinyl_print_day is deliberately left exactly as it was, so a restore puts
+// the project back in its original Print Day bucket.
+async function vinylSetNA(projectId,na){
+  const p=projects.find(x=>x.id===projectId);
+  if(!p)return;
+  if(na&&!confirm('Remove '+(p.name||'this project')+' from Vinyl Print Planning as N/A?\n\nThis means Savin does not need to print anything for it. Nothing is deleted — its print day, vinyl rows and milestone dates are all kept, and you can restore it from “Show N/A”.'))return;
+  const val=na?VINYL_NA:null;
+  const{error}=await sb.from('projects').update({vinyl_print_status:val}).eq('id',projectId);
+  if(error){showToast('⚠ Could not save: '+error.message);return;}
+  p.vinyl_print_status=val;                 // vinyl_print_day untouched
+  showToast(na?((p.name||'Project')+' marked N/A — removed from print planning ✓')
+              :((p.name||'Project')+' restored to print planning ✓'));
+  renderVinyl();
+}
 
 function vinylPrintRow(pr,assigned){
   const ctx=[pr.client,pr.formFactor].filter(Boolean).map(t=>esc(t)).join('  ·  ');
@@ -7856,6 +7968,7 @@ function vinylPrintRow(pr,assigned){
         onchange="vinylSetPrintDay('${pr.project_id}',this.value)"
         title="${assigned?'Change the assigned print day — moves this project to another day':'Assign a print day'}">
       ${assigned?`<button onclick="vinylClearPrintDay('${pr.project_id}')" title="Clear the print day — returns to Unassigned" style="background:none;border:none;cursor:pointer;color:var(--gray-300);font-size:15px;margin-left:2px">✕</button>`:''}
+      <button onclick="vinylSetNA('${pr.project_id}',true)" title="No vinyl printing required for this project — removes it from planning without deleting anything" style="margin-left:6px;font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--gray-200);background:var(--white);color:var(--gray-500);cursor:pointer;font-family:var(--font)">Mark N/A</button>
     </td>
   </tr>`;
 }
@@ -7871,13 +7984,30 @@ function vinylPrintBucket(title,sub,list,accent,assigned){
     </tbody></table>
   </div>`;
 }
+function vinylNARow(pr){
+  const ctx=[pr.client,pr.formFactor].filter(Boolean).map(t=>esc(t)).join('  \u00b7  ');
+  return`<tr data-printproj="${pr.project_id}" data-na="1" style="opacity:.75">
+    <td style="padding:5px 8px;font-size:12.5px;font-weight:500;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(pr.name)}${pr.soCount>1?`<span style="font-size:10px;color:var(--gray-400);margin-left:6px">${pr.soCount} SOs</span>`:''}</td>
+    <td style="padding:5px 8px;font-size:11.5px;color:var(--gray-600);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ctx||'\u2014'}</td>
+    <td style="padding:5px 8px;font-size:11.5px;color:var(--gray-600);white-space:nowrap">${esc(pr.pm||'\u2014')}</td>
+    <td class="date-cell" style="padding:5px 8px;font-size:11.5px;white-space:nowrap">${pr.vinylDate?fmt(pr.vinylDate):'\u2014'}</td>
+    <td class="date-cell" style="padding:5px 8px;font-size:11.5px;white-space:nowrap">${pr.shipDate?fmt(pr.shipDate):'\u2014'}</td>
+    <td style="padding:4px 8px;white-space:nowrap">
+      <span style="font-size:10px;font-weight:700;color:var(--gray-500);background:var(--gray-100);border-radius:9px;padding:2px 8px">N/A</span>
+      ${pr.printDay?`<span title="Its print day is still stored \u2014 restoring returns it to this bucket" style="margin-left:7px;font-size:10.5px;color:var(--gray-400)">kept: ${fmt(pr.printDay)}</span>`:''}
+      <button onclick="vinylSetNA('${pr.project_id}',false)" title="Return this project to Vinyl Print Planning" style="margin-left:8px;font-size:10px;padding:3px 9px;border-radius:4px;border:1px solid var(--blue);background:var(--white);color:var(--blue);cursor:pointer;font-family:var(--font);font-weight:600">Restore</button>
+    </td>
+  </tr>`;
+}
 function renderVinylPrintPlanning(){
-  const{unassigned,days,total}=vinylPrintPlanning();
-  if(!total)return'<div style="padding:14px 16px;font-size:12px;color:var(--gray-500)">No project currently has vinyl work.</div>';
+  const{unassigned,days,na,total,naCount}=vinylPrintPlanning();
+  if(!total&&!naCount)return'<div style="padding:14px 16px;font-size:12px;color:var(--gray-500)">No project currently has vinyl work.</div>';
   const t0=isoD(today());
-  const head=`<div style="padding:2px 16px 8px;font-size:11px;color:var(--gray-500)">
-    ${total} project${total===1?'':'s'} with vinyl work · one line per project, however many SOs it has ·
-    print day is assigned by a PM — never inferred from a milestone</div>`;
+  const head=`<div style="display:flex;align-items:baseline;gap:12px;padding:2px 16px 8px;font-size:11px;color:var(--gray-500);flex-wrap:wrap">
+    <span>${total} project${total===1?'':'s'} with vinyl work · one line per project, however many SOs it has ·
+    print day is assigned by a PM — never inferred from a milestone</span>
+    ${naCount?`<button onclick="vinylToggleNA()" title="Show or hide projects marked N/A — display only. Their print day and vinyl rows are all still stored." style="margin-left:auto;font-size:11px;font-weight:600;padding:4px 11px;border-radius:var(--radius);border:1px solid var(--gray-300);background:${vinylShowNA?'var(--gray-100)':'var(--white)'};color:var(--gray-600);cursor:pointer;font-family:var(--font)">${vinylShowNA?'Hide':'Show'} N/A (${naCount})</button>`:''}
+  </div>`;
   const un=unassigned.length
     ? vinylPrintBucket('UNASSIGNED','ordered by soonest ship date',unassigned,
         {border:'#f0c36d',bg:'#fffaf0',fg:'#92600a'},false)
@@ -7889,7 +8019,15 @@ function renderVinylPrintPlanning(){
       isToday?{border:'var(--red)',bg:'var(--red-light)',fg:'var(--red)'}
              :{border:'var(--gray-200)',bg:'var(--gray-50)',fg:'var(--gray-500)'},true);
   }).join('');
-  return`<div style="padding:4px 0 10px">${head}${un}${assigned}</div>`;
+  const naBlock=(vinylShowNA&&na.length)?`<div style="margin:0 14px 12px;border:1px solid var(--gray-200);border-radius:var(--radius);overflow:hidden">
+    <div style="display:flex;align-items:baseline;gap:10px;padding:8px 13px;background:var(--gray-50);border-bottom:1px solid var(--gray-200)">
+      <span style="font-size:10px;font-weight:700;letter-spacing:.1em;color:var(--gray-500)">N/A — NO PRINTING REQUIRED</span>
+      <span style="font-size:11px;color:var(--gray-400)">nothing deleted · Restore returns each project to its original bucket</span>
+      <span style="margin-left:auto;font-size:11px;color:var(--gray-500)">${na.length} project${na.length===1?'':'s'}</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse"><tbody>${na.map(vinylNARow).join('')}</tbody></table>
+  </div>`:'';
+  return`<div style="padding:4px 0 10px">${head}${un}${assigned}${naBlock}</div>`;
 }
 
 // ── RETAINED VINYL HELPERS (no longer the Print Day source) ───────
