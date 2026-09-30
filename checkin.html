@@ -1574,6 +1574,7 @@ const DEPT_CONFIG={
 // understood so the queue works before any data migration. Planogram-ish rows
 // under other keys are deliberately not claimed.
 const PG_START='planogram-start', PG_END='planogram-end', PG_SIGNOFF='planogram-signoff';
+const PG_NA='N/A';   // planogram_schedule.status overlay, mirrors Ops Hub
 const PG_KEYS=[PG_START,PG_END,PG_SIGNOFF];
 const PG_LEGACY_LABELS={
   'planogram start':PG_START,'planogram start - tbc':PG_START,
@@ -1618,6 +1619,12 @@ function pgQueueRows(){
     sos.forEach(so=>{
       if(!PG_KEYS.some(r=>!!pgMsFor(p.id,so,r)))return;
       const row=(planogramSchedule||[]).find(r=>r.project_id===p.id&&pgNorm(r.so)===pgNorm(so));
+      // N/A means no planogram is required for this SO, so it must not reach
+      // the team's working queue. SAME lookup Ops Hub uses (project_id + SO).
+      // This is a read-only exclusion: N/A is NOT completion, no milestone_done
+      // row is created, and nothing is deleted. PMs review and restore N/A in
+      // Ops Hub, which is where the recovery control lives.
+      if(String((row&&row.status)||'').trim()===PG_NA)return;
       out.push({pid:p.id,project:p.name,so,pm:p.pm||'',
         start:(pgMsFor(p.id,so,PG_START)||{}).date||null,
         end:(pgMsFor(p.id,so,PG_END)||{}).date||null,
